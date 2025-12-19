@@ -1,6 +1,8 @@
-<img width="3543" height=<img width="3543" height="1025" alt="查询器X-Banner_看图王" src="https://github.com/user-attachments/assets/cf9ba0ef-cbc1-42a7-ba9f-5b0919c4f2fa" />
-"1025" alt="查询器X-Banner_看图王" src="https://github.com/user-attachments/assets/749a3d82-7435-4086-b04c-d795c500b682" />
+
+<img width="3543" height="1025" alt="查询器X-Banner_看图王" src="https://github.com/user-attachments/assets/39782dbc-4389-4852-99fa-df164e69d337" />
+
 # NetInfoCheckerX 网络综合查询器X
+
 Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) By Yumeyo
 ![查询器X图标_03](https://github.com/user-attachments/assets/c5ed66de-ff2a-48cb-94ac-7a5a9b40cbbd)
 
