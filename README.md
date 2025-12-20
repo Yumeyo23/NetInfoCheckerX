@@ -18,7 +18,7 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 - 感谢陪伴awa
 
 ## 灵感/致谢
-- NAT类型测试灵感源自于[NatTypeTester](https://github.com/HMSBridge/NatTypeTester)(未使用其代码)，并加入了大量的优化功能：例如**显示debug信息、设置端口模式/起手、列出可用网卡+指定IP测试**  ~~(其实我也忍不了一个纯NAT测试要100MB)~~
+- NAT类型测试灵感源自于[NatTypeTester](https://github.com/HMBSbige/NatTypeTester)(未使用其代码)，并加入了大量的优化功能：例如**显示debug信息、设置端口模式/起手、列出可用网卡+指定IP测试**  ~~(其实我也忍不了一个纯NAT测试要100MB)~~
 - 本机配置检测，为了开发方便+数据准确，全部使用**图吧工具箱**公开的硬件检测SDK (包括WMI版和C++预览版都有使用)。
 - iPerf工具来自于最新的[iperf3-win-builds](https://github.com/ar51an/iperf3-win-builds/releases)，受制于技术，只做了设置GUI用于拼接启动代码。
 - 感谢程序里使用到的所有API提供商，因为数量太多不一一列举，可进入程序查看
