@@ -26,7 +26,7 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 - 感谢所有AI教我写程序!!!
 
 ## To do list 
-  Updated 25.12.21
+  Updated 25.12.25
 - [x] 国内出口IP, 国外出口/走代理IP  **//25.11.19开工，持续转移中，待完工**
 - [x] 本机硬件检测    **//25.11.20完工**
 - [x] IPERF测速工具GUI     **//25.11.21完工**
@@ -44,11 +44,11 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 - [x] 自由查询  **//25.12.20完工**
 - [x] TCP/UDP/ICMP 超级Ping(自定义网卡)  **//25.12.20完工**
 - [x] 手动查IP/MAC  **//25.12.21完工**
+- [x] DNS劫持测试   **//25.12.24完工**
 - [ ] 多出口测试精简版（名站+三大+教育+测漏）
 - [ ] 多出口测试完整版（名站+三大+教育+测漏+双栈+UDP）
 - [ ] UDP/ICMP Ping 延迟测试(CS完美平台/全球网测节点)
-- [ ] 悬浮信息时间显示
-- [ ] 定时刷新查询
+- [x] 悬浮信息时间显示  **//25.12.21开工，待完工**
 - [ ] ~~最大连接数测试~~
 - [ ] ~~UPnP打洞板~~
 
