@@ -6,11 +6,21 @@
 Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) By Yumeyo
 ![查询器X图标_03](https://github.com/user-attachments/assets/c5ed66de-ff2a-48cb-94ac-7a5a9b40cbbd)
 
+> [!CAUTION]
+> 本软件主要为中国用户设计. 非中国用户可能无法获得最佳体验.
+> 
+> This program is mainly designed for Chinese users. Non-China users may not have the best experience.
+
 ## 视频介绍
 https://www.bilibili.com/video/BV1cyibBkEbJ/
 
-## 注意/Caution
-- 本程序主要为中国用户设计/This program is mainly designed for Chinese users.
+## 下载
+- **因个人习惯，GitHub页面更新不是很及时，最新版软件可+QQ群：1013442261下载**
+- 因代码丑陋，初期不乐意开源，请[访问release](https://github.com/Yumeyo23/NetInfoCheckerX/release)下载最新版
+- 软件完全绿色，发布均为WINRAR自解压文件，既可双击临时运行，也可解压后固定目录运行！
+- 长期使用建议解压后运行！
+  
+## 注意
 - 本程序是 [**网络综合查询器**](https://github.com/Yumeyo23/NetInfoChecker)(易语言版，简称**旧版查询器**) 的**C#重制版**，简称 **查询器X** 。
 - 本程序是**专业向工具**，非**专业工具**，所有功能均以个人日常需求开发。
 - 作者**非计算机/网络相关专业，无编程背景一切皆为兴趣**，只了解易语言，**为重制查询器才开始了解C#，大部分均为AI代替完成**(当然设计思路是自己的，也有自己完成的部分, 人力/AI比例可能三七?二八?)。故代码丑陋，初期不乐意开源，还请见谅。想喷的伙计轻点儿(x。欢迎大佬帮助开发/优化，有需要大佬联系可以提供源码
