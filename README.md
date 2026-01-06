@@ -39,12 +39,12 @@ https://www.bilibili.com/video/BV1cyibBkEbJ/
 - 感谢所有AI教我写程序!!!
 
 ## To do list 
-  Updated 26.1.5
+  Updated 26.1.6
 - [x] 国内出口IP, 国外出口/走代理IP  **//25.11.19开工，持续转移中，待完工**
 - [x] 本机硬件检测    **//25.11.20完工**
 - [x] IPERF测速工具GUI     **//25.11.21完工**
 - [x] RFC3489/5780NAT测试     **//25.11.22完工**
-- [x] TCP/UDP Tracert(自定义网卡)   **//25.11.22完工**
+- [x] TCP/UDP/ICMP Tracert(自定义网卡)   **//25.11.22完工**
 - [x] 本机所有网卡, 可快速复制IPV6/打开默认网关 **//25.11.28完工**
 - [x] 快速Ping/Tracert/Nslookup剪贴板  **//25.11.29完工**
 - [x] 一键/Renew [ipcfg/release/renew/flushdns] **//25.11.29完工**
@@ -58,7 +58,7 @@ https://www.bilibili.com/video/BV1cyibBkEbJ/
 - [x] TCP/UDP/ICMP 超级Ping(自定义网卡)  **//25.12.20完工**
 - [x] 手动查IP/MAC  **//25.12.21完工**
 - [x] DNS劫持测试   **//25.12.24完工**
-- [x] UDP/ICMP Ping 延迟测试(CS完美平台/全球网测节点) **//26.1.5完工**
+- [x] Ping延迟测试(CS完美平台/全球网测节点) **//26.1.5完工**
 - [x] 悬浮信息时间显示  **//25.12.21开工，待完工**
 - [ ] 多出口测试精简版（名站+三大+教育+测漏）
 - [ ] 多出口测试完整版（名站+三大+教育+测漏+双栈+UDP）
