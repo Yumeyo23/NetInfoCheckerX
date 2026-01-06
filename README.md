@@ -16,7 +16,7 @@ https://www.bilibili.com/video/BV1cyibBkEbJ/
 
 ## 下载
 - **因个人习惯，GitHub页面更新不是很及时，最新版软件可+QQ群：1013442261下载**
-- 因代码丑陋，初期不乐意开源，请[访问release](https://github.com/Yumeyo23/NetInfoCheckerX/release)下载最新版
+- 因代码丑陋，初期不乐意开源，请[访问release](https://github.com/Yumeyo23/NetInfoCheckerX/releases)下载最新版.
 - 软件完全绿色，发布均为WINRAR自解压文件，既可双击临时运行，也可解压后固定目录运行！
 - 长期使用建议解压后运行！
   
