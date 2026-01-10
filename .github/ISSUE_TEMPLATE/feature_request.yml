@@ -1,0 +1,37 @@
+name: ✨ 功能建议
+description: 你的意见或建议，我都会看
+title: "[Feature] "
+labels:
+  - enhancement
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **反馈时请保留本模板内容**
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: 建议内容
+      placeholder: 请描述你的想法或希望新增/改进的功能
+    validations:
+      required: true
+
+  - type: textarea
+    id: reason
+    attributes:
+      label: 理由
+      placeholder: 为什么需要这个功能？能解决什么问题？
+    validations:
+      required: true
+
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: 是否愿意贡献代码以完善你的建议
+      options:
+        - 当然愿意
+        - 我更擅长发现问题
+    validations:
+      required: true
