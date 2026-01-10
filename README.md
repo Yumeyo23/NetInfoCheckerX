@@ -6,6 +6,10 @@
 Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) By Yumeyo
 ![功能预览260110](https://github.com/user-attachments/assets/80d92f70-0621-4414-8dde-c0d4c91c70f6)
 
+《网络综合查询器X》是由與夢Yumeyo原创开发、基于易语言版《网络综合查询器》重制、以“小而美”为设计理念的全能向网络工具箱，适合网络爱好者常备日常使用。
+
+软件核心功能为查询/记录/修改本机IP、多出口测试(简洁版/Dashboard)、NAT类型测试、TCP/UDP/ICMP全协议Ping+/Trace+、最大连接数测试、DNS劫持测试、UPnP控制台、IPERF内网测速、本机配置检测、延迟(到骨干网/CS2)测试、一键/Renew、IPv6有效期查询、手动查询IP/MAC地址、快速跳转控制面板、速查剪贴板、悬浮显示信息等。
+
 > [!CAUTION]
 > 本软件主要为中国用户设计. 非中国用户可能无法获得最佳体验.
 > 
@@ -65,11 +69,11 @@ https://www.bilibili.com/video/BV1cyibBkEbJ/
 - [x] Ping延迟测试(全球网测节点/CS完美平台) **//26.1.5完工**
 - [x] 悬浮信息时间显示  **//25.12.21开工，待完工**
 - [x] 最大连接数测试  **//26.1.7完工**
+- [x] UPnP控制台  **//26.1.11完工**
 - [ ] 多出口测试精简版（名站+三大+教育+测漏）
 - [ ] 多出口测试完整版（精简版功能+双栈+UDP+主流延迟）
-- [ ] ~~UPnP打洞板~~
 
-## NOT DO list
+## NOT TO DO list
 - 内网扫描（已有标准答案，个人无需再做）
   1. 很多个人开发的同类软件，默认只能扫ipv4/24，虽然/24最常用，但确实显得比较鸡肋，万一碰到大段或小段还是不能扫. 大多数人做也只是icmp ping，最多加个arp，更进一步就没有了. 也鸡肋.
   2. 该需求已有[Network Scanner](https://www.softperfect.com/products/networkscanner/)这种标杆软件，体积也只有10MB左右，可以扫/8以上的大段+ipv6，可以扫端口、arp、tcp/udp等. **这是有现成的满分答案，我没必要再做**.
