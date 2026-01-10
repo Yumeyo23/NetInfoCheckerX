@@ -1,0 +1,61 @@
+name: 🐞 问题反馈
+description: 👀 你发现了一个 BUG，请发布在这里
+title: "[BUG] "
+labels:
+  - bug
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **反馈时请保留本模板内容**
+
+  - type: checkboxes
+    id: precheck
+    attributes:
+      label: 提交 issue 前确认
+      options:
+        - label: 我已阅读使用手册 / Wiki / README
+          required: true
+        - label: 我已尝试基础排错（网络 / 防火墙等）
+          required: true
+        - label: 我保证所有反馈都是不认真填写的
+          required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      placeholder: 请尽量清晰描述遇到的问题
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 有图文 / 视频更佳
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: false
+
+  - type: input
+    id: system
+    attributes:
+      label: 系统环境
+      placeholder: 例如：Windows 10 19045.2005
+    validations:
+      required: true
+
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: 是否愿意贡献代码来帮助修复 BUG
+      options:
+        - 当然愿意
+        - 我更擅长发现问题
+    validations:
+      required: true
