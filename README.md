@@ -11,9 +11,11 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 软件核心功能为查询/记录/修改本机IP、多出口测试(简洁版/Dashboard)、NAT类型测试、TCP/UDP/ICMP全协议Ping+/Trace+、最大连接数测试、DNS劫持测试、UPnP控制台、IPERF内网测速、本机配置检测、延迟(到骨干网/CS2)测试、一键/Renew、IPv6有效期查询、手动查询IP/MAC地址、快速跳转控制面板、速查剪贴板、悬浮显示信息等。
 
 > [!CAUTION]
-> 本软件主要为中国用户设计. 非中国用户可能无法获得最佳体验.
+> **本软件主要为中国大陆的中文用户设计. 非中文/中国大陆用户可能无法获得最佳体验, 甚至无法使用.**
 > 
-> This program is mainly designed for Chinese users. Non-China users may not have the best experience.
+> **This software is designed for Chinese-speaking users in mainland China.**
+>
+> **Non-Chinese/mainland China users may not have the best experience, or may even be unable to use.**
 
 > [!NOTE]
 > 1. 本程序是 [**网络综合查询器**](https://github.com/Yumeyo23/NetInfoChecker)(易语言版，简称**旧版查询器**) 的**C#重制版**，简称 **查询器X** .
@@ -70,6 +72,8 @@ https://www.bilibili.com/video/BV1cyibBkEbJ/
 - [x] 悬浮信息时间显示  **//25.12.21开工，待完工**
 - [x] 最大连接数测试  **//26.1.7完工**
 - [x] UPnP控制台  **//26.1.11完工**
+- [x] 子网掩码计算器  **//26.1.30完工**
+- [ ] 单IP端口扫描
 - [ ] 多出口测试精简版（名站+三大+教育+测漏）
 - [ ] 多出口测试完整版（精简版功能+双栈+UDP+主流延迟）
 
