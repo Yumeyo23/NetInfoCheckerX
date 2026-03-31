@@ -13,6 +13,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
+//  DNS真选
+
 namespace NetInfoCheckerX
 {
     public partial class DNSSelect : Form
