@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Text;
 using System.Windows.Forms;
-
+ 
 namespace NetInfoCheckerX
 {
     public partial class IPv6Time : Form
