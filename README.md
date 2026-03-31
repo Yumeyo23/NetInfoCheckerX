@@ -8,7 +8,7 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 
 《网络综合查询器X》是由與夢Yumeyo原创开发、基于易语言版《网络综合查询器》重制、以“小而美”为设计理念的全能向网络工具箱，适合网络爱好者常备日常使用。
 
-软件核心功能为查询/记录/修改本机IP、多出口测试(简洁版/Dashboard)、NAT类型测试、TCP/UDP/ICMP全协议Ping+/Trace+、最大连接数测试、DNS劫持测试、UPnP控制台、IPERF内网测速、本机配置检测、延迟(到骨干网/CS2)测试、一键/Renew、IPv6有效期查询、手动查询IP/MAC地址、快速跳转控制面板、速查剪贴板、悬浮显示信息等。
+软件核心功能为查询/记录/修改本机IP、多出口测试(简洁版/Dashboard)、NAT类型测试、TCP/UDP/ICMP全协议Ping+/Trace+、最大连接数测试、DNS劫持测试、DNS解析测速、UPnP控制台、IPERF内网测速、本机配置检测、延迟(到骨干网/CS2)测试、一键/Renew、IPv6有效期查询、手动查询IP/MAC地址、快速跳转控制面板、速查剪贴板、悬浮显示信息等。
 
 > [!CAUTION]
 > **本软件主要为中国大陆的中文用户设计. 非中文/中国大陆用户可能无法获得最佳体验, 甚至无法使用.**
@@ -18,25 +18,42 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 > **Non-Chinese/mainland China users may not have the best experience, or may even be unable to use.**
 
 > [!NOTE]
+>
 > 1. 本程序是 [**网络综合查询器**](https://github.com/Yumeyo23/NetInfoChecker)(易语言版，简称**旧版查询器**) 的**C#重制版**，简称 **查询器X** .
->    
-> 2. 本程序正在开发中，暂未正式公测. 介绍、实际功能等可能随时改变.
+>2. 本程序正在开发中，暂未正式公测. 介绍、实际功能等可能随时改变.
 
-## 视频介绍
+> [!IMPORTANT]
+>
+> 本项目为**部分开源**。作者**不会**从本项目主动获取**任何**利益和用户隐私等不当信息，作者衷心地向所有API、服务器等提供商表示感谢，程序中已列出用到的所有API。
+>
+> 为防API轻易滥用及保护软件更新动力，本项目采用部分开源：**公开绝大多数测试的核心方法供交流学习，UI 等高原创部分暂时保持不开源**。
+
+## 视频介绍/Wiki
+
 https://www.bilibili.com/video/BV1cyibBkEbJ/
+
+Wiki持续更新中...可在[Wiki](https://github.com/Yumeyo23/NetInfoCheckerX/wiki)查看
 
 ## 下载
 - **因个人习惯，GitHub页面更新不是很及时，最新版软件可+QQ群：1013442261下载**
-- 因代码丑陋，初期不乐意开源，请[访问release](https://github.com/Yumeyo23/NetInfoCheckerX/releases)下载最新版.
-- 软件完全绿色，发布均为WINRAR自解压文件，既可双击临时运行，也可解压后固定目录运行！
-- 长期使用建议解压后运行！
-  
+- GitHub请在[release](https://github.com/Yumeyo23/NetInfoCheckerX/releases)下载最新版.
+- **软件完全绿色，但用到了一些外部依赖（后面会一一列出），故release时为WINRAR自解压文件**
+- **既可双击临时运行，也可解压后固定目录运行**。长期使用建议解压后运行
+> [!NOTE]
+>
+> 由于用到了外部依赖，**部分依赖存在报毒问题**，建议关闭或者信任后使用，
+>
+> 发布程序使用[ConfuserEx](https://github.com/mkaring/ConfuserEx)做基本保护。
+>
+> 如对本程序安全问题存在任何疑惑，可自行决定是否使用本项目。
+
 ## 注意
 - 本程序是**专业向工具**，非**专业工具**，所有功能均以个人日常需求开发。
-- 作者**非计算机/网络相关专业，无编程背景一切皆为兴趣**，只了解易语言，**为重制查询器才开始了解C#，大部分均为AI代替完成**(当然设计思路是自己的，也有自己完成的部分, 人力/AI比例可能三七?二八?). **故代码丑陋，初期不乐意开源，还请见谅**. ~~想喷的伙计轻点儿(x~~. 欢迎大佬帮助开发/优化，有需要大佬联系，可以提供源码.
+- 作者**非计算机/网络相关专业，无编程背景一切皆为兴趣**，只了解易语言，**为重制查询器才开始了解C#，大部分均为AI代替完成**，vibe coding还在发力中（当然设计思路是自己的，也有相当自己完成的部分）。 
+- 故代码丑陋，~~想喷的伙计轻点儿(x~~。 初期不乐意开源，还请见谅**。欢迎大佬帮助优化~
 - 本程序架构**C# NET Framework 4.7.2 WinForm窗口程序**，且作者**无任何升/换框架/跨平台欲望**.
 - 理由：1. 我菜；
-    2. 生活中多数电脑都是Windows，NET4.7.2体积小巧、兼容性好，无需依赖即可运行，更便携，打包后10MB体积完成后面的一坨功能，~~不像NatTypeTester那样100MB只能测NAT一件事(虽然也不是那位作者想这样的)~~
+    2. 生活中多数电脑都是Windows，NET4.7.2体积小巧、兼容性好，无需依赖即可运行，更便携，打包后10几MB体积完成后面的一坨功能，~~不像NatTypeTester那样100MB只能测NAT一件事(虽然也不是那位作者想这样的)~~
     3. 手上只有手机，多数时候只需最常用的找AP、多出口、NAT测试就可以了，直接使用[查询器多出口在线版](https://yumeyo23.github.io/NetInfoChecker/checker-web.html)等网站/软件，**没有电脑的大多数情况下**需要的功能都可以解决.
 - 感谢陪伴awa
 
@@ -44,10 +61,28 @@ https://www.bilibili.com/video/BV1cyibBkEbJ/
 - NAT类型测试灵感源自于[NatTypeTester](https://github.com/HMBSbige/NatTypeTester)(未使用其代码)，并加入了大量的优化功能：例如**显示debug信息、设置端口模式/起手、列出可用网卡+指定IP测试** ~~(其实我也忍不了一个纯NAT测试要100MB)~~
 - 本机配置检测，为了开发方便+数据准确，全部使用[图吧工具箱](https://www.tbtool.cn/sdk/index.html)公开的硬件检测SDK (包括WMI版和C++预览版都有使用).
 - iPerf工具来自于最新的[iperf3-win-builds](https://github.com/ar51an/iperf3-win-builds/releases)，受制于技术，只做了设置GUI用于拼接启动代码.
-- 感谢程序里使用到的所有API提供商，因为数量太多不一一列举，可进入程序查看
+- 感谢程序里使用到的所有API提供商，因为数量太多在此不一一列举，可进入程序查看
 - 感谢[IEEE官方MAC地址表](http://standards-oui.ieee.org/oui/oui.csv)，[WireShark提供的MAC地址表](https://www.wireshark.org/download/automated/data/manuf.gz)
 - 感谢所有AI教我写程序!!!
 - 如有未尽之处，深表歉意，衷心感谢.
+
+## 依赖列表
+
+release的程序完整包使用到了以下依赖及NuGet，在此致谢：
+
+| 名字                                                         | 用途                                                         | 备注                                                         |
+| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| [图吧工具箱硬件检测引擎](https://www.tbtool.cn/sdk/index.html) | 本机配置检测(推荐、备用)                                     | 直接使用图吧工具箱提供的专业API，配置检测更准，开发更快。<br />(推荐)使用的是C++版，直接使用<br />(备用)使用的是WMI版，编译了图吧官方提供例程使用 |
+| [iperf3-win-builds](https://github.com/ar51an/iperf3-win-builds/releases) | iPerf3测速工具                                               | 未修改                                                       |
+| [IEEE官方MAC地址表](http://standards-oui.ieee.org/oui/oui.csv)<br />[WireShark提供的MAC地址表](https://www.wireshark.org/download/automated/data/manuf.gz) | 手动查询MAC地址                                              | 未修改                                                       |
+| [Curl for Windows](https://curl.se/windows/)                 | 备用, 访问部分API使用                                        | 未修改，带证书                                               |
+| [Open.Nat](https://www.nuget.org/packages/Open.NAT/2.1.0?_src=template) | UPnP控制台                                                   | NuGet直接使用                                                |
+| [IPAddressControl](https://www.nuget.org/packages/IPAddressControl/1.2.4446.28646?_src=template) | 程序内所有IPv4编辑框                                         | 同上                                                         |
+| [IP2Region](https://www.nuget.org/packages/IP2Region.Net/3.0.2?_src=template) | 程序内置的IP地理位置数据库(主窗口、手动查询IP、Trace+使用)   | 同上，其还带有一些附属NuGet包此处省略                        |
+| [DnsClient](https://www.nuget.org/packages/DnsClient/1.8.0?_src=template) | DNS劫持测试                                                  | 同上                                                         |
+| [obfuscar](https://www.nuget.org/packages/Obfuscar)          | 备用混淆器, 发布版目前使用[ConfuserEx](https://github.com/mkaring/ConfuserEx) | 同上                                                         |
+
+
 
 ## To do list
 
@@ -107,10 +142,14 @@ https://www.bilibili.com/video/BV1cyibBkEbJ/
 
 - [ ] 多出口测试完整版（精简版功能+双栈+UDP+主流延迟）
 
+  
+
 ## NOT TO DO list
+
 - 内网扫描（已有标准答案，个人无需再做）
   1. 很多个人开发的同类软件，默认只能扫ipv4/24，虽然/24最常用，但确实显得比较鸡肋，万一碰到大段或小段还是不能扫. 大多数人做也只是icmp ping，最多加个arp，更进一步就没有了. 也鸡肋.
   2. 该需求已有[Network Scanner](https://www.softperfect.com/products/networkscanner/)这种标杆软件，体积也只有10MB左右，可以扫/8以上的大段+ipv6，可以扫端口、arp、tcp/udp等. **这是有现成的满分答案，我没必要再做**.
+
 
 ## NetInfoChecker (E.ver)  To Do List (完工)
 
