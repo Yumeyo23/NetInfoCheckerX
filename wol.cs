@@ -11,7 +11,7 @@ using System.Runtime.InteropServices; // 用于调用Windows API (读写ini)
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-
+ 
 namespace NetInfoCheckerX
 {
     public partial class wol : Form
