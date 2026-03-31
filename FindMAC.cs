@@ -9,6 +9,8 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
+// 手动查询mac地址类
+
 namespace NetInfoCheckerX
 {
     public partial class FindMAC : Form
