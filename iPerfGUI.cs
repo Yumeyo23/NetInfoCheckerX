@@ -7,7 +7,7 @@ using System.Runtime.InteropServices; // 为了调用内存清理 API
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-
+ 
 namespace NetInfoCheckerX
 {
     public partial class iPerfGUI : Form
