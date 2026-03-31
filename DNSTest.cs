@@ -10,6 +10,8 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using DnsClient;
 
+//DNS劫持测试
+
 namespace NetInfoCheckerX
 {
     public partial class DNSTest : Form
