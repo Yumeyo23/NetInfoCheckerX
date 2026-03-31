@@ -10,6 +10,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
+//手动查询ip类
+
 namespace NetInfoCheckerX
 {
     public partial class FindIP : Form
