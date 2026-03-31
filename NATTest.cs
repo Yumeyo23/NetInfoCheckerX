@@ -9,7 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-
+ 
 namespace NetInfoCheckerX
 {
     public partial class NATTest : Form
