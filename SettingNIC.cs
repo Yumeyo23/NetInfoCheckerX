@@ -1,4 +1,4 @@
-﻿using System;
+。﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics; // 用于启动进程
 using System.Drawing;
@@ -12,7 +12,7 @@ using System.Text;        // 用于拼接字符串
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
-
+ 
 namespace NetInfoCheckerX
 {
     public partial class SettingNIC : Form
