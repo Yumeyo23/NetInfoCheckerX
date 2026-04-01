@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -11,7 +11,7 @@ using System.Text.RegularExpressions; // 必须有这个，才能用正则表达
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
- 
+
 namespace NetInfoCheckerX
 {
     public partial class PingPP : Form
@@ -104,7 +104,7 @@ namespace NetInfoCheckerX
                         var localEp = (IPEndPoint)socket.LocalEndPoint;
                         if (localEp != null && (localEp.Address.Equals(IPAddress.Any) || localEp.Address.Equals(IPAddress.IPv6Any)))
                         {
-                            IPAddress outbound = GetOutboundLocalAddress(targetAddr, port);
+                            string outbound = GetActualLocalIp(targetIp); // 换成这行喵！
                             if (outbound != null)
                             {
                                 // 更新界面（如果当前下拉选中 Any，则替换为实际使用的 IP）
@@ -326,6 +326,7 @@ namespace NetInfoCheckerX
             return fullQuery;
         }
 
+        //TCP Ping方法
         private async Task ExecuteTcpPing(string targetIp, int port, int timeout, CancellationToken token)
         {
             //预先解析好IP地址
@@ -373,12 +374,17 @@ namespace NetInfoCheckerX
 
                     // 更新 UI 逻辑
                     string actualIp = ((IPEndPoint)socket.LocalEndPoint).Address.ToString();
-                    //UpdateRealLocalIp(socket.LocalEndPoint);
                     PrintTestSettings(actualIp);
 
                     Color rowColor = GetRttColor(rtt);
                     AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                    AppendColorText($"TCP成功: {targetIp}:{port} ={rtt:F1}ms", rowColor, true);
+
+                    // ✨ 梦酱看这里：判断如果是 IPv6，就给 targetIp 套上中括号
+                    string displayTarget = ipAddr.AddressFamily == AddressFamily.InterNetworkV6
+                        ? $"[{targetIp}]:{port}"
+                        : $"{targetIp}:{port}";
+
+                    AppendColorText($"TCP成功: {displayTarget} ={rtt:F1}ms", rowColor, true);
                 }
                 else
                 {
@@ -763,8 +769,6 @@ namespace NetInfoCheckerX
             {
                 AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
                 AppendColorText("正在停止上次测试", ColorTranslator.FromHtml("#a8a5ff"), true);
-
-                // 更彻底地取消
                 _cts?.Cancel();
                 await Task.Delay(10);
                 _cts?.Cancel();
@@ -1176,6 +1180,7 @@ namespace NetInfoCheckerX
                 lossCount++;
                 AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
                 AppendColorText($"ICMP错误: 本机网卡IP({localEndPoint.Address})与目标IP({ipAddr})地址族不匹配", Color.Red, true);
+
                 UpdateStats();
                 return;
             }
@@ -1201,7 +1206,7 @@ namespace NetInfoCheckerX
                         var localEp = (IPEndPoint)raw.LocalEndPoint;
                         if (localEp != null && localEp.Address.Equals(IPAddress.Any))
                         {
-                            IPAddress outbound = GetOutboundLocalAddress(ipAddr, 0);
+                            string outbound = GetActualLocalIp(targetIp);
                             if (outbound != null)
                             {
                                 // 更新界面
@@ -1343,9 +1348,10 @@ namespace NetInfoCheckerX
             if (addrFamily == AddressFamily.InterNetworkV6)
             {
                 Socket raw6 = null;
+                string finalLocalIp = "::"; // 🌸 梦酱看这里：提前定义一个变量，用来存放最终确定的本地IP
+
                 try
                 {
-                    // 检查本地端点是否与目标地址族匹配
                     if (localEndPoint.AddressFamily != AddressFamily.InterNetworkV6)
                     {
                         lossCount++;
@@ -1356,25 +1362,25 @@ namespace NetInfoCheckerX
                     }
 
                     raw6 = new Socket(AddressFamily.InterNetworkV6, SocketType.Raw, ProtocolType.IcmpV6);
-
-                    // 绑定到选择的本地端点
                     raw6.Bind(localEndPoint);
-
-                    // 设置接收超时
                     raw6.ReceiveTimeout = timeout;
 
-                    // 准备发送数据
                     _globalIcmpSequence++;
                     byte icmpType = 128; // Echo Request
                     byte icmpCode = 0;
 
-                    // 获取实际本地地址用于校验和计算
                     IPAddress srcForChecksum = localEndPoint.Address;
+
+                    // --- 探测逻辑开始 ---
                     if (srcForChecksum.Equals(IPAddress.IPv6Any))
                     {
-                        // 探测实际将被用作出站地址
-                        IPAddress outbound = GetOutboundLocalAddress(ipAddr, 0);
-                        if (outbound == null)
+                        finalLocalIp = GetActualLocalIp(targetIp); // 获取实际 IP
+                        if (!string.IsNullOrEmpty(finalLocalIp) && finalLocalIp != "::")
+                        {
+                            srcForChecksum = IPAddress.Parse(finalLocalIp);
+                            PrintTestSettings(finalLocalIp);
+                        }
+                        else
                         {
                             lossCount++;
                             AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
@@ -1382,11 +1388,13 @@ namespace NetInfoCheckerX
                             UpdateStats();
                             return;
                         }
-                        srcForChecksum = outbound;
-                        // 更新UI显示真实本地IP
-                        //UpdateRealLocalIp(new IPEndPoint(outbound, 0));
                     }
-
+                    else
+                    {
+                        finalLocalIp = srcForChecksum.ToString();
+                        PrintTestSettings(finalLocalIp);
+                    }
+                    // --- 探测逻辑结束 ---
                     // 构造ICMPv6包
                     byte[] icmpPacketNoChecksum = BuildIcmpv6PacketWithoutChecksum(icmpType, icmpCode, identifier, _globalIcmpSequence, payload);
                     byte[] icmpWithChecksum = BuildIcmpv6WithChecksum(srcForChecksum, ipAddr, icmpPacketNoChecksum);
@@ -1438,13 +1446,9 @@ namespace NetInfoCheckerX
                                     successCount++;
                                     UpdateDelay(rtt);
 
-                                    string actualIp = ((IPEndPoint)receiveEP).Address.ToString();
-
-                                    PrintTestSettings(actualIp);
-
                                     Color rowColor = GetRttColor(rtt);
                                     AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                                    AppendColorText($"ICMPv6成功: {actualIp} ={rtt:F1}ms", rowColor, true);
+                                    AppendColorText($"ICMPv6成功: {targetIp} ={rtt:F1}ms", rowColor, true);
                                 }
                                 else
                                 {
@@ -1841,27 +1845,26 @@ namespace NetInfoCheckerX
             // 4. 画底部的分割线
             AppendColorText("    ===========================================================", ColorTranslator.FromHtml("#a8a5ff"), true);
         }
-
-        //  辅助: 探测系统实际的出站本地地址（不改变已有绑定） 
-        private IPAddress GetOutboundLocalAddress(IPAddress destination, int destinationPort)
+        // 【全能版】出口 IP 探测器：统一处理 IPv4 和 IPv6
+        private string GetActualLocalIp(string targetIp)
         {
+            if (string.IsNullOrEmpty(targetIp)) return targetIp.Contains(":") ? "::" : "0.0.0.0";
             try
             {
-                using (Socket s = new Socket(destination.AddressFamily, SocketType.Dgram, ProtocolType.Udp))
+                bool isIpv6 = targetIp.Contains(":");
+                AddressFamily family = isIpv6 ? AddressFamily.InterNetworkV6 : AddressFamily.InterNetwork;
+                using (var socket = new Socket(family, SocketType.Dgram, ProtocolType.Udp))
                 {
-                    // 连接到目标地址（系统会选择合适的本地接口和地址）
-                    s.Connect(new IPEndPoint(destination, destinationPort == 0 ? 33434 : destinationPort));
-                    if (s.LocalEndPoint is IPEndPoint local)
+                    socket.Connect(IPAddress.Parse(targetIp), 1);
+                    if (socket.LocalEndPoint is IPEndPoint localEndPoint)
                     {
-                        return local.Address;
+                        string ip = localEndPoint.Address.ToString();
+                        return ip.Contains("%") ? ip.Split('%')[0] : ip; // 去掉 IPv6 的作用域 ID
                     }
                 }
             }
-            catch
-            {
-
-            }
-            return null;
+            catch { }
+            return targetIp.Contains(":") ? "::" : "0.0.0.0";
         }
 
         //识别当前网卡后打印的方法
