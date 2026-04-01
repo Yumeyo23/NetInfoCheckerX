@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -12,7 +12,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
- 
+
 namespace NetInfoCheckerX
 {
     public partial class PortScan : Form
@@ -358,7 +358,7 @@ namespace NetInfoCheckerX
             // --- 6. 打印梦酱要求的抬头格式 ---
             richResult.AppendText($"[扫描目标] {target} 的 {txtPort.Text.Trim()} 端口\n");
             richResult.AppendText($"[使用网卡] {finalLocalInfo}\n");
-            richResult.AppendText($"[扫描设置] 线程 {threadCount} / 超时 {timeout}\n");
+            richResult.AppendText($"[扫描设置] 线程 {threadCount} / 超时 {timeout}ms\n");
             richResult.AppendText($"[开始时间] {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n");
             richResult.AppendText("[TCP端口] ");
             richResult.ScrollToCaret();
