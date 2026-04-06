@@ -4,7 +4,8 @@
 # 网络综合查询器X / NetInfoCheckerX 
 
 Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) By Yumeyo
-![功能预览260110](https://github.com/user-attachments/assets/80d92f70-0621-4414-8dde-c0d4c91c70f6)
+
+<img width="3000" height="1875" alt="功能预览260406" src="https://github.com/user-attachments/assets/3a7d3019-be1f-43a3-8baa-afed93bd87fd" />
 
 《网络综合查询器X》是由與夢Yumeyo原创开发、基于易语言版《网络综合查询器》重制、以“小而美”为设计理念的全能向网络工具箱，适合网络爱好者常备日常使用。
 
