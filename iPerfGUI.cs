@@ -1,13 +1,13 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
-using System.Runtime.InteropServices; // 为了调用内存清理 API
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
- 
+
 namespace NetInfoCheckerX
 {
     public partial class iPerfGUI : Form
@@ -215,6 +215,8 @@ namespace NetInfoCheckerX
                     btn.BackColor = btnDarkBack;
                     btn.FlatStyle = FlatStyle.Flat;
                     btn.FlatAppearance.BorderColor = Color.DimGray;
+                    // 悬停时变梦酱紫
+                    btn.FlatAppearance.MouseOverBackColor = ColorTranslator.FromHtml("#8e8cd8");
                 }
             }
         }
