@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
@@ -13,7 +13,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 
 //===================================================================
-//                  最大连接数测试类
+//                  最大连接数测试 类
 //===================================================================
 namespace NetInfoCheckerX
 {
@@ -107,6 +107,8 @@ namespace NetInfoCheckerX
                         btn.BackColor = btnDarkBack;
                         btn.FlatStyle = FlatStyle.Flat;
                         btn.FlatAppearance.BorderColor = Color.DimGray;
+                        // 悬停时变梦酱紫
+                        btn.FlatAppearance.MouseOverBackColor = ColorTranslator.FromHtml("#8e8cd8");
                     }
                 }
             }
@@ -117,7 +119,7 @@ namespace NetInfoCheckerX
             _ = ApplyConnectionThemeAsync();
             var portStatus = GetSystemDynamicPortRange();
             InitNICList();
-            this.Text = $"最大连接数测试(TCP) ✧ NetInfoCheckerX (mP:{portStatus.num}({portStatus.start}))";
+            this.Text = $"最大连接数测试(TCP) ✧ NICX (mP:{portStatus.num}({portStatus.start}))";
             CloudControl.LoadConnectionServers(comboServer);
             CloudControl.ApplyDevTitle(this);
         }
@@ -407,7 +409,7 @@ namespace NetInfoCheckerX
                 {
                     SetUIState(true); // 恢复按钮和输入框
                     var portStatus = GetSystemDynamicPortRange();
-                    this.Text = $"最大连接数测试(TCP) ✧ NetInfoCheckerX (mP:{portStatus.num}({portStatus.start}))";
+                    this.Text = $"最大连接数测试(TCP) ✧ NICX (mP:{portStatus.num}({portStatus.start}))";
                     CloudControl.ApplyDevTitle(this);
                     // 记录停止信息
                     string stopLog = $"\r\n==========================\r\n" +
@@ -742,7 +744,7 @@ namespace NetInfoCheckerX
                 }
             }
             var portStatus = GetSystemDynamicPortRange();
-            this.Text = $"最大连接数测试(TCP) ✧ NetInfoCheckerX (mP:{portStatus.num}({portStatus.start}))";
+            this.Text = $"最大连接数测试(TCP) ✧ NICX (mP:{portStatus.num}({portStatus.start}))";
             CloudControl.ApplyDevTitle(this);
         }
 
