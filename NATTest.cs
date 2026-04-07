@@ -1,15 +1,15 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Net; // 添加：网络相关功能
+using System.Net;
 using System.Net.NetworkInformation;
-using System.Net.Sockets; // 添加：Socket通信相关
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
- 
+
 namespace NetInfoCheckerX
 {
     public partial class NATTest : Form
@@ -903,7 +903,6 @@ namespace NetInfoCheckerX
                 if (changedEp != null)
                 {
                     // 方法1：直接使用服务器返回的备用地址
-                    Log5780($"[Mapping-B] 方法1: 使用备用地址 {changedEp}");
                     resultB = await Task.Run(() => StunClient.Query(socket, changedEp, false, false), cancellationToken);
                     /*
                     // 如果方法1失败，尝试方法2：使用备用IP但保持原始端口
