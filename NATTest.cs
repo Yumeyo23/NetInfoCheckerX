@@ -186,6 +186,7 @@ namespace NetInfoCheckerX
                         btn.BackColor = btnDarkBack;
                         btn.FlatStyle = FlatStyle.Flat;
                         btn.FlatAppearance.BorderColor = Color.DimGray; // 给个暗色边框
+                        btn.FlatAppearance.MouseOverBackColor = ColorTranslator.FromHtml("#8e8cd8");
                     }
                 }
             }
