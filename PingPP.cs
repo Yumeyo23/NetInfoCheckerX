@@ -7,7 +7,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
-using System.Text.RegularExpressions; // 必须有这个，才能用正则表达式喵！
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -610,12 +610,6 @@ namespace NetInfoCheckerX
                 GetRttColor(0);
                 GetRttColor(100);
                 GetRttColor(300);
-
-                // 3. 预热文本追加方法（创建部分文本）
-                string testText = "预热文本";
-                var testColor = Color.Red;
-                // 注意：这里不能直接调用AppendColorText，因为需要在UI线程
-                // 但我们可以预热相关的字符串处理方法
 
                 // 4. 预热网络地址解析
                 IPAddress.Parse("127.0.0.1");
