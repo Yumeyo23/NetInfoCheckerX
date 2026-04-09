@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Drawing;
@@ -10,8 +10,8 @@ using System.Net.NetworkInformation;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using Open.Nat; // 梦酱的老朋友
- 
+using Open.Nat;
+
 namespace NetInfoCheckerX
 {
     public partial class UPnP : Form
@@ -396,6 +396,7 @@ namespace NetInfoCheckerX
                     );
                     await device.CreatePortMapAsync(newMap);
                     btnCreate.Text = "创建完毕";
+                    timer1.Start();
                     await RefreshListInternal();
                 }
             }
@@ -728,5 +729,9 @@ namespace NetInfoCheckerX
             }
         }
 
+        private void UPnP_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            timer1.Stop();
+        }
     }
 }
