@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -9,8 +9,6 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-
-//手动查询ip类
 
 namespace NetInfoCheckerX
 {
@@ -236,6 +234,10 @@ namespace NetInfoCheckerX
 
         private async void btnOK_Click(object sender, EventArgs e)
         {
+            if (!CloudControl.CheckClickRate((Control)sender, this.toolTip1))
+            {
+                return;
+            }
             // 防止重复点击导致的并发问题
             if (btnOK.Enabled == false)
                 return;
