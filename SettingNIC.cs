@@ -125,7 +125,7 @@ namespace NetInfoCheckerX
             foreach (var c in yumeyoLabels) { if (c != null) c.ForeColor = yumeyoColor; }
 
             // 4. 输入控件处理 (TextBox, ComboBox, IPAddressControl)
-            Control[] editControls = { ipIPV4, ipMask, ipGateway, ipDNS1, ipDNS2, txtHops, comboNIC };
+            Control[] editControls = { ipIPV4, ipMask, ipGateway, ipDNS1, ipDNS2, txtHops, comboNIC, txtMAC };
             foreach (var c in editControls)
             {
                 if (c != null)
@@ -171,7 +171,7 @@ namespace NetInfoCheckerX
             }
 
             // 6. 选择框处理 (透明背景防止遮挡)
-            Control[] checkBoxes = { checkDHCP, checkDNS, checkHops, checkChangeIPV6State, checkIPV6State };
+            Control[] checkBoxes = { checkDHCP, checkDNS, checkHops, checkChangeIPV6State, checkIPV6State, checkMAC };
             foreach (var cb in checkBoxes)
             {
                 if (cb != null)
@@ -200,7 +200,7 @@ namespace NetInfoCheckerX
         {
             // 定义一个右侧留白的边距（单位是像素）
             // 梦酱可以根据视觉效果调整这个数字，建议 15 左右
-            int paddingRight = 15;
+            int paddingRight = 12;
 
             // 把梦酱那五个 IP 控件放进数组里
             Control[] ipControls = { ipIPV4, ipMask, ipGateway, ipDNS1, ipDNS2 };
@@ -331,6 +331,23 @@ namespace NetInfoCheckerX
             checkDNS.Checked = dnsAuto;
             ipDNS1.Enabled = ipDNS2.Enabled = !dnsAuto;
 
+            // ===== MAC 地址读取 =====
+            checkMAC.Checked = false;
+            txtMAC.Enabled = false;
+            // 在 LoadNicInfo 里的 MAC 部分
+            string currentMac = nic.GetPhysicalAddress().ToString(); // 拿到的是 001122334455
+            if (currentMac.Length == 12)
+            {
+                // 格式化为 00:11:22:33:44:55
+                txtMAC.Text = string.Join(":", Enumerable.Range(0, 6)
+                    .Select(i => currentMac.Substring(i * 2, 2)));
+            }
+            else
+            {
+                txtMAC.Text = currentMac;
+            }
+
+
             if (!dnsAuto)
             {
                 ipDNS1.Text = manualDns.Length > 0 ? manualDns[0] : "0.0.0.0";
@@ -371,6 +388,7 @@ namespace NetInfoCheckerX
                     }
                 }
             }
+
             catch (Exception)
             {
                 txtHops.Text = "0";
@@ -417,7 +435,33 @@ namespace NetInfoCheckerX
             return true; // 默认给个自动吧~
         }
 
+        // 夢酱，这个函数是用来在注册表茫茫大海中找到这张网卡的“身份证”位置的
+        private string GetRegistryPath(string nicId)
+        {
+            // 网卡类在注册表中的固定 GUID
+            string baseKey = @"SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}";
+            using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(baseKey))
+            {
+                if (rk == null) return null;
 
+                foreach (string subKeyName in rk.GetSubKeyNames())
+                {
+                    using (RegistryKey sk = rk.OpenSubKey(subKeyName))
+                    {
+                        if (sk != null)
+                        {
+                            // 检查 NetCfgInstanceId 是否匹配当前选中的网卡 ID
+                            object val = sk.GetValue("NetCfgInstanceId");
+                            if (val != null && val.ToString().Equals(nicId, StringComparison.OrdinalIgnoreCase))
+                            {
+                                return baseKey + "\\" + subKeyName;
+                            }
+                        }
+                    }
+                }
+            }
+            return null;
+        }
         private void btnRefreshList_Click(object sender, EventArgs e)
         {
             RefreshNICList();
@@ -557,15 +601,39 @@ namespace NetInfoCheckerX
                 cmdBuilder.Append($"powershell -Command \"{stateCmd}-NetAdapterBinding -Name '{nicName}' -ComponentID ms_tcpip6\" & ");
             }
 
+            // --- 5. 修改 MAC 地址 ---
+            if (checkMAC.Checked)
+            {
+                string regPath = GetRegistryPath(nic.Id);
+                if (!string.IsNullOrEmpty(regPath))
+                {
+                    string newMac = txtMAC.Text.Trim().Replace("-", "").Replace(":", "");
+
+                    if (string.IsNullOrEmpty(newMac))
+                    {
+                        cmdBuilder.Append($"reg delete \"HKEY_LOCAL_MACHINE\\{regPath}\" /v \"NetworkAddress\" /f & ");
+                    }
+                    else
+                    {
+                        cmdBuilder.Append($"reg add \"HKEY_LOCAL_MACHINE\\{regPath}\" /v \"NetworkAddress\" /t REG_SZ /d {newMac} /f & ");
+                    }
+
+                    // 【优化】对于 Win10/11，用 PowerShell 重启网卡通常比 netsh 更稳哦！
+                    cmdBuilder.Append($"powershell -Command \"Restart-NetAdapter -Name '{nicName}'\" & ");
+                }
+            }
+
+            // ⭐夢酱注意！这一行一定要放在所有 Append 之后！
             string finalCmd = cmdBuilder.ToString().TrimEnd(' ', '&');
 
-            // 异步执行，UI 不会卡住！
+            // 异步执行
             bool success = await ExecuteAdminCommandsAsync(finalCmd);
+
 
             //if (success)
             {
                 MessageBox.Show("修改成功!", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-
+                await Task.Delay(100);
                 // --- 5. 模拟点击 Form1 的刷新按钮 ---
                 // 尝试在所有打开的窗口中寻找名为 "Form1" 的那个
                 var mainForm = Application.OpenForms["Form1"];
@@ -578,10 +646,73 @@ namespace NetInfoCheckerX
                     btnRefresh?.PerformClick();
                 }
                 btnRefreshList.PerformClick();
+
+                // 重新获取一下网卡对象，确保拿到的是最新状态
+                var updatedNic = NetworkInterface.GetAllNetworkInterfaces()
+                                    .FirstOrDefault(n => n.Id == nic.Id);
+
+                if (updatedNic != null)
+                {
+                    LoadNicInfo(updatedNic); // 重新把最新的 IP、DNS、MAC 填进编辑框
+                }
             }
 
             btnOK.Enabled = true;
             btnOK.Text = "应用修改";
+        }
+
+        private void checkMAC_CheckedChanged(object sender, EventArgs e)
+        {
+            txtMAC.Enabled = checkMAC.Checked;
+        }
+
+        //让txtMAC只接受16进制字符
+        private void txtMAC_KeyPress(object sender, KeyPressEventArgs e)
+        {
+            // 定义允许的字符：0-9, a-f, A-F 以及 Backspace(退格键，用于删除)
+            char c = e.KeyChar;
+            bool isHex = (c >= '0' && c <= '9') ||
+                         (c >= 'a' && c <= 'f') ||
+                         (c >= 'A' && c <= 'F') ||
+                         c == (char)Keys.Back;
+
+            if (!isHex)
+            {
+                e.Handled = true; // 告诉系统：这个按键我已经处理过了（丢弃掉），不要显示出来
+            }
+        }
+
+        // 让输入的字母自动变成大写
+        private void txtMAC_TextChanged(object sender, EventArgs e)
+        {
+            // 1. 暂时解除事件关联，防止修改 Text 时再次触发死循环
+            txtMAC.TextChanged -= txtMAC_TextChanged;
+
+            // 2. 记录当前光标位置
+            int cursorPosition = txtMAC.SelectionStart;
+            // 3. 拿到原始字符（转大写并去掉所有非十六进制符号）
+            string rawText = txtMAC.Text.ToUpper().Replace(":", "");
+
+            // 4. 每2位加一个冒号
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < rawText.Length; i++)
+            {
+                sb.Append(rawText[i]);
+                // 如果不是最后一位，且正好是第2, 4, 6, 8, 10位，就加冒号
+                if ((i + 1) % 2 == 0 && (i + 1) < rawText.Length && sb.Length < 17)
+                {
+                    sb.Append(":");
+                }
+            }
+
+            txtMAC.Text = sb.ToString();
+
+            // 5. 恢复光标位置（这里要处理因为插入冒号导致的位置偏移）
+            // 简单处理：直接设到末尾，或者梦酱想精益求精可以算一下偏移量
+            txtMAC.SelectionStart = txtMAC.Text.Length;
+
+            // 6. 重新挂载事件
+            txtMAC.TextChanged += txtMAC_TextChanged;
         }
     }
 }
