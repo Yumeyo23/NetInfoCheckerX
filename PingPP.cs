@@ -1060,6 +1060,7 @@ namespace NetInfoCheckerX
         }
 
         //原生ICMP PING
+        //原生ICMP PING（增加超时后验证）
         private async Task ExecuteNativeIcmpPing(string targetIp, int timeout, CancellationToken token)
         {
             // 准备数据包大小
@@ -1074,11 +1075,7 @@ namespace NetInfoCheckerX
                     string timeStr = DateTime.Now.ToString("HH:mm:ss");
                     int currentTotal = successCount + lossCount + 1;
 
-                    // 调用系统原生异步 Ping
-                    // 这里我们不指定 PingOptions，让系统决定 TTL 等参数
                     Task<PingReply> pingTask = pingSender.SendPingAsync(targetIp, timeout, buffer);
-
-                    // 等待结果、超时或用户取消
                     var completedTask = await Task.WhenAny(pingTask, Task.Delay(timeout, token));
 
                     if (completedTask == pingTask)
@@ -1090,29 +1087,35 @@ namespace NetInfoCheckerX
                             double rtt = reply.RoundtripTime;
                             if (rtt < 0.1) rtt = 0.1;
 
-                            successCount++;
-                            UpdateDelay(rtt);
-
-                            // 打印设置（仅第一次打印）
-                            PrintTestSettings("系统默认 (ICMP兼容模式)");
-
-                            Color rowColor = GetRttColor(rtt);
-                            AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                            string ttlInfo = "";
-                            // 如果是 IPv4 地址，我们才显示 TTL，IPv6 就保持简洁喵~
-                            if (reply.Address.AddressFamily == AddressFamily.InterNetwork)
+                            // ✨ 关键修复：如果实际延迟超过设定的超时，视为失败
+                            if (rtt > timeout)
                             {
-                                ttlInfo = $" TTL={reply.Options?.Ttl}";
-                            }
-                            if (rtt == 0.1)
-                            {
-                                AppendColorText($"ICMP成功: {reply.Address} <1ms{ttlInfo}", rowColor, true);
+                                lossCount++;
+                                AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                                AppendColorText($"ICMP失败: 实际延迟{rtt:F1}ms > 超时{timeout}ms", Color.Red, true);
                             }
                             else
                             {
-                                AppendColorText($"ICMP成功: {reply.Address} ={rtt:F1}ms{ttlInfo}", rowColor, true);
-                            }
+                                successCount++;
+                                UpdateDelay(rtt);
+                                PrintTestSettings("系统默认 (ICMP兼容模式)");
 
+                                Color rowColor = GetRttColor(rtt);
+                                AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                                string ttlInfo = "";
+                                if (reply.Address.AddressFamily == AddressFamily.InterNetwork)
+                                {
+                                    ttlInfo = $" TTL={reply.Options?.Ttl}";
+                                }
+                                if (rtt == 0.1)
+                                {
+                                    AppendColorText($"ICMP成功: {reply.Address} <1ms{ttlInfo}", rowColor, true);
+                                }
+                                else
+                                {
+                                    AppendColorText($"ICMP成功: {reply.Address} ={rtt:F1}ms{ttlInfo}", rowColor, true);
+                                }
+                            }
                         }
                         else
                         {
@@ -1123,7 +1126,6 @@ namespace NetInfoCheckerX
                     }
                     else
                     {
-                        // 超时
                         lossCount++;
                         AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
                         AppendColorText($"ICMP失败: 请求超时({timeout}ms)", Color.Red, true);
@@ -1144,165 +1146,132 @@ namespace NetInfoCheckerX
                 }
             }
         }
-
         // Socket ICMP Ping方法
         private async Task ExecuteIcmpPing(string targetIp, int timeout, CancellationToken token)
         {
-            // 1. 准备设置（和原来一致）
+            // 1. 准备设置
             int bufferSize = int.TryParse(txtPackage.Text, out int b) ? b : 32;
             byte[] payload = new byte[bufferSize];
-            new Random().NextBytes(payload); // 填充随机数据
+            new Random().NextBytes(payload);
             ushort identifier = (ushort)(Process.GetCurrentProcess().Id & 0xFFFF);
-            // 每次发送前，让序号加 1
-            // unchecked 是为了防止加到 65535 溢出时报错，让它自动滚回 0
-            unchecked
-            {
-                _globalIcmpSequence++;
-            }
+            unchecked { _globalIcmpSequence++; }
 
             IPAddress ipAddr = IPAddress.Parse(targetIp);
             var addrFamily = ipAddr.AddressFamily;
-
-            // 获取用户选择的本地端点
             IPEndPoint localEndPoint = GetLocalEndPoint();
 
-            // 检查地址族是否匹配
+            // 地址族匹配检查
             if ((addrFamily == AddressFamily.InterNetwork && localEndPoint.Address.Equals(IPAddress.IPv6Any)) ||
                 (addrFamily == AddressFamily.InterNetworkV6 && localEndPoint.Address.Equals(IPAddress.Any)))
             {
-                // 地址族不匹配，直接输出错误并返回
                 lossCount++;
                 AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
                 AppendColorText($"ICMP错误: 本机网卡IP({localEndPoint.Address})与目标IP({ipAddr})地址族不匹配", Color.Red, true);
-
                 UpdateStats();
                 return;
             }
 
-            // IPv4 使用 raw-socket 实现
+            // ==================== IPv4 分支 ====================
             if (addrFamily == AddressFamily.InterNetwork)
             {
                 Socket raw = null;
                 try
                 {
-                    // 构造 raw socket
                     raw = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.Icmp);
-
-                    // 绑定到用户选定的本地出口
                     raw.Bind(localEndPoint);
+                    // 不设置 ReceiveTimeout，完全由外部超时控制
 
-                    // 设置接收超时作为最后防线
-                    raw.ReceiveTimeout = timeout;
-
-                    // IPv4的实际网卡识别
+                    // 自动识别出口 IP（用于显示）
                     try
                     {
                         var localEp = (IPEndPoint)raw.LocalEndPoint;
                         if (localEp != null && localEp.Address.Equals(IPAddress.Any))
                         {
                             string outbound = GetActualLocalIp(targetIp);
-                            if (outbound != null)
-                            {
-                                // 更新界面
-                                //UpdateRealLocalIp(new IPEndPoint(outbound, 0));
-                                PrintTestSettings(outbound.ToString());
-                            }
+                            if (outbound != null) PrintTestSettings(outbound);
                         }
                     }
                     catch { }
 
-                    // 准备接收缓冲区与 EndPoint
+                    // 构造并发送 ICMP 包
+                    byte[] icmpPacket = BuildIcmpEchoPacket(8, 0, identifier, _globalIcmpSequence, payload);
+                    raw.SendTo(icmpPacket, new IPEndPoint(ipAddr, 0));
+
+                    string timeStr = DateTime.Now.ToString("HH:mm:ss");
+                    int currentTotal = successCount + lossCount + 1;
+                    Stopwatch sw = Stopwatch.StartNew();
+
                     byte[] recvBuffer = new byte[4096];
                     EndPoint receiveEP = new IPEndPoint(IPAddress.Any, 0);
 
-                    // 发送并等待回包
-                    string timeStr = DateTime.Now.ToString("HH:mm:ss");
-                    var sw = new Stopwatch();
+                    // 异步接收循环（直到超时或取消）
+                    bool receivedMatch = false;
+                    double rtt = 0;
+                    int ttl = 0;
+                    IPAddress replyAddress = null;
 
-                    // 构造 ICMP 包（每次 sequence++）
-                    _globalIcmpSequence++;
-                    byte[] icmpPacket = BuildIcmpEchoPacket(8 /*type*/, 0 /*code*/, identifier, _globalIcmpSequence, payload);
-
-                    // 使用异步接收
-                    var receiveTask = Task.Factory.FromAsync(
-                        (callback, state) => raw.BeginReceiveFrom(recvBuffer, 0, recvBuffer.Length, SocketFlags.None, ref receiveEP, callback, state),
-                        (ar) => raw.EndReceiveFrom(ar, ref receiveEP),
-                        null);
-
-                    sw.Start();
-                    // 发送时目标端口为0（raw socket），SendTo 需要目标 EndPoint
-                    raw.SendTo(icmpPacket, new IPEndPoint(ipAddr, 0));
-
-                    // 等待接收或超时或用户取消
-                    var completed = await Task.WhenAny(receiveTask, Task.Delay(timeout, token));
-                    int currentTotal = successCount + lossCount + 1;
-
-                    if (completed == receiveTask)
+                    while (!token.IsCancellationRequested && sw.ElapsedMilliseconds < timeout)
                     {
-                        int received = receiveTask.Result; // 字节数
-                        sw.Stop();
-                        double rtt = sw.Elapsed.TotalMilliseconds;
-                        if (rtt < 0.1) rtt = 0.1;
+                        // 计算剩余超时时间（确保总超时精确）
+                        int remaining = (int)(timeout - sw.ElapsedMilliseconds);
+                        if (remaining <= 0) break;
 
-                        // 解析返回包
-                        if (received >= 20 + 8) // IP header(最小20) + ICMP header(8)
+                        // 异步接收，超时 = min(剩余时间, 200ms) 避免死循环
+                        int recvTimeout = Math.Min(remaining, 200);
+                        var receiveTask = Task.Factory.FromAsync(
+                            (callback, state) => raw.BeginReceiveFrom(recvBuffer, 0, recvBuffer.Length, SocketFlags.None, ref receiveEP, callback, state),
+                            (ar) => raw.EndReceiveFrom(ar, ref receiveEP),
+                            null);
+                        var completed = await Task.WhenAny(receiveTask, Task.Delay(recvTimeout, token));
+                        if (completed == receiveTask)
                         {
+                            int received = await receiveTask;
                             int ipHeaderLen = (recvBuffer[0] & 0x0F) * 4;
                             if (received >= ipHeaderLen + 8)
                             {
                                 int icmpOffset = ipHeaderLen;
                                 byte icmpType = recvBuffer[icmpOffset];
-                                byte icmpCode = recvBuffer[icmpOffset + 1];
-
-                                // 解析标识符/seq（网络序）
                                 ushort respId = (ushort)((recvBuffer[icmpOffset + 4] << 8) | recvBuffer[icmpOffset + 5]);
                                 ushort respSeq = (ushort)((recvBuffer[icmpOffset + 6] << 8) | recvBuffer[icmpOffset + 7]);
 
-                                // 仅当是 Echo Reply（type==0）且 id/seq 匹配我们发出的包时视为成功
                                 if (icmpType == 0 && respId == identifier && respSeq == _globalIcmpSequence)
                                 {
-                                    successCount++;
-                                    UpdateDelay(rtt);
-
-                                    // 获取实际本地 IP
-                                    string actualIp = ((IPEndPoint)raw.LocalEndPoint).Address.ToString();
-
-                                    PrintTestSettings(actualIp);
-
-                                    // 尝试从 IP 头位置读取 TTL（IP header 第9个字节）
-                                    int ttl = 0;
-                                    if (received >= 9) ttl = recvBuffer[8];
-
-                                    string limitInfo = ttl > 0 ? $"TTL={ttl}" : "";
-
-                                    Color rowColor = GetRttColor(rtt);
-                                    AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                                    AppendColorText($"ICMP成功: {((IPEndPoint)receiveEP).Address} ={rtt:F1}ms {limitInfo}", rowColor, true);
+                                    sw.Stop();
+                                    rtt = sw.Elapsed.TotalMilliseconds; // 高精度
+                                    ttl = recvBuffer[8];
+                                    replyAddress = ((IPEndPoint)receiveEP).Address;
+                                    receivedMatch = true;
+                                    break;
                                 }
-                                else
-                                {
-                                    lossCount++;
-                                    AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                                    AppendColorText($"ICMP失败: 非预期回包 type={recvBuffer[icmpOffset]} code={recvBuffer[icmpOffset + 1]}", Color.Red, true);
-                                }
-                            }
-                            else
-                            {
-                                lossCount++;
-                                AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                                AppendColorText($"ICMP失败: 回包太短 ({received} bytes)", Color.Red, true);
+                                // 不匹配则继续循环
                             }
                         }
-                        else
+                        // 超时则继续循环（总超时控制在外层）
+                    }
+
+                    if (receivedMatch)
+                    {
+                        // ✨ 关键修复：如果实际延迟超过设定的超时，视为失败
+                        if (rtt > timeout)
                         {
                             lossCount++;
                             AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                            AppendColorText($"ICMP失败: 未返回有效数据", Color.Red, true);
+                            AppendColorText($"ICMP失败: 请求超时({timeout}ms)", Color.Red, true);
+                        }
+                        else
+                        {
+                            successCount++;
+                            UpdateDelay(rtt);
+                            string actualIp = ((IPEndPoint)raw.LocalEndPoint).Address.ToString();
+                            PrintTestSettings(actualIp);
+                            string limitInfo = ttl > 0 ? $"TTL={ttl}" : "";
+                            Color rowColor = GetRttColor(rtt);
+                            AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                            AppendColorText($"ICMP成功: {replyAddress} ={rtt:F1}ms {limitInfo}", rowColor, true);
                         }
                     }
-                    else
+                    else if (!token.IsCancellationRequested)
                     {
-                        // Task.Delay 先到或用户取消
                         lossCount++;
                         AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
                         AppendColorText($"ICMP失败: 请求超时({timeout}ms)", Color.Red, true);
@@ -1310,7 +1279,6 @@ namespace NetInfoCheckerX
                 }
                 catch (SocketException sex)
                 {
-                    // 删除回退机制，直接输出错误
                     if (!token.IsCancellationRequested)
                     {
                         lossCount++;
@@ -1329,21 +1297,18 @@ namespace NetInfoCheckerX
                 }
                 finally
                 {
-                    if (raw != null)
-                    {
-                        try { raw.Close(); raw.Dispose(); } catch { }
-                    }
+                    raw?.Close();
+                    raw?.Dispose();
                     UpdateStats();
                 }
                 return;
             }
 
-            // IPv6: 使用 raw socket 尝试发送 ICMPv6
+            // ==================== IPv6 分支 ====================
             if (addrFamily == AddressFamily.InterNetworkV6)
             {
                 Socket raw6 = null;
-                string finalLocalIp = "::"; // 🌸 梦酱看这里：提前定义一个变量，用来存放最终确定的本地IP
-
+                string finalLocalIp = "::";
                 try
                 {
                     if (localEndPoint.AddressFamily != AddressFamily.InterNetworkV6)
@@ -1357,18 +1322,13 @@ namespace NetInfoCheckerX
 
                     raw6 = new Socket(AddressFamily.InterNetworkV6, SocketType.Raw, ProtocolType.IcmpV6);
                     raw6.Bind(localEndPoint);
-                    raw6.ReceiveTimeout = timeout;
+                    // 不设置 ReceiveTimeout
 
                     _globalIcmpSequence++;
-                    byte icmpType = 128; // Echo Request
-                    byte icmpCode = 0;
-
                     IPAddress srcForChecksum = localEndPoint.Address;
-
-                    // --- 探测逻辑开始 ---
                     if (srcForChecksum.Equals(IPAddress.IPv6Any))
                     {
-                        finalLocalIp = GetActualLocalIp(targetIp); // 获取实际 IP
+                        finalLocalIp = GetActualLocalIp(targetIp);
                         if (!string.IsNullOrEmpty(finalLocalIp) && finalLocalIp != "::")
                         {
                             srcForChecksum = IPAddress.Parse(finalLocalIp);
@@ -1388,84 +1348,69 @@ namespace NetInfoCheckerX
                         finalLocalIp = srcForChecksum.ToString();
                         PrintTestSettings(finalLocalIp);
                     }
-                    // --- 探测逻辑结束 ---
-                    // 构造ICMPv6包
-                    byte[] icmpPacketNoChecksum = BuildIcmpv6PacketWithoutChecksum(icmpType, icmpCode, identifier, _globalIcmpSequence, payload);
+
+                    byte[] icmpPacketNoChecksum = BuildIcmpv6PacketWithoutChecksum(128, 0, identifier, _globalIcmpSequence, payload);
                     byte[] icmpWithChecksum = BuildIcmpv6WithChecksum(srcForChecksum, ipAddr, icmpPacketNoChecksum);
+                    raw6.SendTo(icmpWithChecksum, new IPEndPoint(ipAddr, 0));
+
+                    string timeStr = DateTime.Now.ToString("HH:mm:ss");
+                    int currentTotal = successCount + lossCount + 1;
+                    Stopwatch sw = Stopwatch.StartNew();
 
                     byte[] recvBuffer = new byte[4096];
                     EndPoint receiveEP = new IPEndPoint(IPAddress.IPv6Any, 0);
+                    bool receivedMatch = false;
+                    double rtt = 0;
 
-                    string timeStr = DateTime.Now.ToString("HH:mm:ss");
-                    var sw = new Stopwatch();
-
-                    // 预设接收任务
-                    var receiveTask = Task.Factory.FromAsync(
-                        (callback, state) => raw6.BeginReceiveFrom(recvBuffer, 0, recvBuffer.Length, SocketFlags.None, ref receiveEP, callback, state),
-                        (ar) => raw6.EndReceiveFrom(ar, ref receiveEP),
-                        null);
-
-                    sw.Start();
-                    raw6.SendTo(icmpWithChecksum, new IPEndPoint(ipAddr, 0));
-
-                    var completed = await Task.WhenAny(receiveTask, Task.Delay(timeout, token));
-                    int currentTotal = successCount + lossCount + 1;
-
-                    if (completed == receiveTask)
+                    while (!token.IsCancellationRequested && sw.ElapsedMilliseconds < timeout)
                     {
-                        int received = receiveTask.Result;
-                        sw.Stop();
-                        double rtt = sw.Elapsed.TotalMilliseconds;
-                        if (rtt < 0.1) rtt = 0.1;
-
-                        // 解析回包
-                        if (received >= 8) // 最小ICMPv6头部长度
+                        int remaining = (int)(timeout - sw.ElapsedMilliseconds);
+                        if (remaining <= 0) break;
+                        int recvTimeout = Math.Min(remaining, 200);
+                        var receiveTask = Task.Factory.FromAsync(
+                            (callback, state) => raw6.BeginReceiveFrom(recvBuffer, 0, recvBuffer.Length, SocketFlags.None, ref receiveEP, callback, state),
+                            (ar) => raw6.EndReceiveFrom(ar, ref receiveEP),
+                            null);
+                        var completed = await Task.WhenAny(receiveTask, Task.Delay(recvTimeout, token));
+                        if (completed == receiveTask)
                         {
-                            // 判断是否包含IPv6头部
-                            int icmpOffset = 0;
-                            if (received > 40 && (recvBuffer[0] >> 4) == 6) // 如果有IPv6头部
-                            {
-                                icmpOffset = 40; // IPv6头部固定40字节
-                            }
-
+                            int received = await receiveTask;
+                            int icmpOffset = (received > 40 && (recvBuffer[0] >> 4) == 6) ? 40 : 0;
                             if (received >= icmpOffset + 8)
                             {
                                 byte respType = recvBuffer[icmpOffset];
-                                byte respCode = recvBuffer[icmpOffset + 1];
                                 ushort respId = (ushort)((recvBuffer[icmpOffset + 4] << 8) | recvBuffer[icmpOffset + 5]);
                                 ushort respSeq = (ushort)((recvBuffer[icmpOffset + 6] << 8) | recvBuffer[icmpOffset + 7]);
 
                                 if (respType == 129 && respId == identifier && respSeq == _globalIcmpSequence)
                                 {
-                                    successCount++;
-                                    UpdateDelay(rtt);
-
-                                    Color rowColor = GetRttColor(rtt);
-                                    AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                                    AppendColorText($"ICMPv6成功: {targetIp} ={rtt:F1}ms", rowColor, true);
+                                    sw.Stop();
+                                    rtt = sw.Elapsed.TotalMilliseconds; // 高精度
+                                    receivedMatch = true;
+                                    break;
                                 }
-                                else
-                                {
-                                    lossCount++;
-                                    AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                                    AppendColorText($"ICMPv6失败: 非预期回包 type={respType} code={respCode}", Color.Red, true);
-                                }
-                            }
-                            else
-                            {
-                                lossCount++;
-                                AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                                AppendColorText($"ICMPv6失败: 回包太短 ({received} bytes)", Color.Red, true);
                             }
                         }
-                        else
+                    }
+
+                    if (receivedMatch)
+                    {
+                        if (rtt > timeout)
                         {
                             lossCount++;
                             AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                            AppendColorText($"ICMPv6失败: 未返回有效数据", Color.Red, true);
+                            AppendColorText($"ICMPv6失败: 请求超时({timeout}ms)", Color.Red, true);
+                        }
+                        else
+                        {
+                            successCount++;
+                            UpdateDelay(rtt);
+                            Color rowColor = GetRttColor(rtt);
+                            AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                            AppendColorText($"ICMPv6成功: {targetIp} ={rtt:F1}ms", rowColor, true);
                         }
                     }
-                    else
+                    else if (!token.IsCancellationRequested)
                     {
                         lossCount++;
                         AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
@@ -1474,7 +1419,6 @@ namespace NetInfoCheckerX
                 }
                 catch (SocketException sex)
                 {
-                    // 删除回退机制，直接输出错误
                     if (!token.IsCancellationRequested)
                     {
                         lossCount++;
@@ -1493,19 +1437,19 @@ namespace NetInfoCheckerX
                 }
                 finally
                 {
-                    try { raw6?.Close(); raw6?.Dispose(); } catch { }
+                    raw6?.Close();
+                    raw6?.Dispose();
                     UpdateStats();
                 }
                 return;
             }
 
-            // 如果既不是IPv4也不是IPv6，直接记录失败
+            // 未知地址族
             lossCount++;
             AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
             AppendColorText($"ICMP错误: 未知地址族 {addrFamily}", Color.Red, true);
             UpdateStats();
         }
-
 
         // 辅助方法：构造 ICMP Echo 包 & 计算校验和 
         private static byte[] BuildIcmpEchoPacket(byte type, byte code, ushort identifier, ushort sequence, byte[] payload)
@@ -1908,15 +1852,15 @@ namespace NetInfoCheckerX
             //-------------------------------------------
 
             string protocolName = radioICMP.Checked ? "ICMP" : (radioTCP.Checked ? "TCP" : "UDP");
-            int timeout = int.TryParse(txtMaxDelay.Text, out int t) ? t : 2000;
+            int timeout = int.TryParse(txtMaxDelay.Text, out int t) ? t : 500;
             int port = int.TryParse(txtPort.Text, out int p) ? p : 80;
             int bufferSize = int.TryParse(txtPackage.Text, out int b) ? b : 32;
 
             string settingsLine = $"[测试设置] 网卡 {displayName} / 协议 {protocolName}";
 
-            if (radioICMP.Checked) settingsLine += $" / 超时 {timeout} / 字节 {bufferSize}";
-            else if (radioTCP.Checked) settingsLine += $" / 端口 {port} / 超时 {timeout}";
-            else settingsLine += $" / 端口 {port} / 超时 {timeout}"; // UDP 逻辑
+            if (radioICMP.Checked) settingsLine += $" / 超时 {timeout}ms / 字节 {bufferSize}";
+            else if (radioTCP.Checked) settingsLine += $" / 端口 {port} / 超时 {timeout}ms";
+            else settingsLine += $" / 端口 {port} / 超时 {timeout}ms"; // UDP 逻辑
 
             AppendColorText(settingsLine + "\n", Color.LightPink, true);
         }
