@@ -9,7 +9,7 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 
 《网络综合查询器X》是由與夢Yumeyo原创开发、基于易语言版《网络综合查询器》重制、以“小而美”为设计理念的全能向网络工具箱，适合网络爱好者常备日常使用。
 
-软件核心功能为查询/记录/修改本机IP、多出口测试(简洁版/Dashboard)、NAT类型测试、TCP/UDP/ICMP全协议Ping+/Trace+、最大连接数测试、DNS劫持测试、DNS解析测速、UPnP控制台、IPERF内网测速、本机配置检测、延迟(到骨干网/CS2)测试、一键/Renew、IPv6有效期查询、手动查询IP/MAC地址、快速跳转控制面板、速查剪贴板、悬浮显示信息等。
+软件核心功能为查询/记录/修改本机IP、多出口测试(简洁版/Dashboard)、NAT类型测试、TCP/UDP/ICMP全协议Ping+/Trace+、最大连接数测试、DNS劫持测试、DNS解析测速、UPnP控制台、IPERF内网测速、一键搭建LibreSpeed服务器、本机配置检测、延迟(到骨干网/CS2)测试、一键/Renew、IPv6有效期查询、手动查询IP/MAC地址、快速跳转控制面板、速查剪贴板、悬浮显示信息等。
 
 > [!CAUTION]
 > **本软件主要为中国大陆的中文用户设计. 非中文/中国大陆用户可能无法获得最佳体验, 甚至无法使用.**
@@ -68,22 +68,21 @@ Wiki持续更新中...可在[Wiki](https://github.com/Yumeyo23/NetInfoCheckerX/w
 - 如有未尽之处，深表歉意，衷心感谢.
 
 ## 依赖列表
-
 release的程序完整包使用到了以下依赖及NuGet，在此致谢：
 
 | 名字                                                         | 用途                                                         | 备注                                                         |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | [图吧工具箱硬件检测引擎](https://www.tbtool.cn/sdk/index.html) | 本机配置检测(推荐、备用)                                     | 直接使用图吧工具箱提供的专业API，配置检测更准，开发更快。<br />(推荐)使用的是C++版，直接使用<br />(备用)使用的是WMI版，编译了图吧官方提供例程使用 |
 | [iperf3-win-builds](https://github.com/ar51an/iperf3-win-builds/releases) | iPerf3测速工具                                               | 未修改                                                       |
+| [librespeed](https://github.com/librespeed/speedtest)        | LibreSpeed开服器                                             | 精简绝大部分组件(缩小体积)、修改UI/块大小(符合软件需要)      |
 | [IEEE官方MAC地址表](http://standards-oui.ieee.org/oui/oui.csv)<br />[WireShark提供的MAC地址表](https://www.wireshark.org/download/automated/data/manuf.gz) | 手动查询MAC地址                                              | 未修改                                                       |
 | [Curl for Windows](https://curl.se/windows/)                 | 备用, 访问部分API使用                                        | 未修改，带证书                                               |
 | [Open.Nat](https://www.nuget.org/packages/Open.NAT/2.1.0?_src=template) | UPnP控制台                                                   | NuGet直接使用                                                |
-| [IPAddressControl](https://www.nuget.org/packages/IPAddressControl/1.2.4446.28646?_src=template) | 程序内所有IPv4编辑框                                         | 同上                                                         |
-| [IP2Region](https://www.nuget.org/packages/IP2Region.Net/3.0.2?_src=template) | 程序内置的IP地理位置数据库(主窗口、手动查询IP、Trace+使用)   | 同上，其还带有一些附属NuGet包此处省略                        |
-| [DnsClient](https://www.nuget.org/packages/DnsClient/1.8.0?_src=template) | DNS劫持测试                                                  | 同上                                                         |
+| [EmbedIO](https://www.nuget.org/packages/EmbedIO)            | LibreSpeed开服用                                             | 同上，其附属NuGet包此处省略                                  |
+| [IPAddressControl](https://www.nuget.org/packages/IPAddressControl/) | 程序内所有IPv4编辑框                                         | 同上                                                         |
+| [IP2Region](https://www.nuget.org/packages/IP2Region.Net/)   | 程序内置的IP地理位置数据库(主窗口、手动查询IP、Trace+使用)   | 同上，其附属NuGet包此处省略                                  |
+| [DnsClient](https://www.nuget.org/packages/DnsClient/)       | DNS劫持测试                                                  | 同上                                                         |
 | [obfuscar](https://www.nuget.org/packages/Obfuscar)          | 备用混淆器, 发布版目前使用[ConfuserEx](https://github.com/mkaring/ConfuserEx) | 同上                                                         |
-
-
 
 ## To do list
 
@@ -92,6 +91,8 @@ release的程序完整包使用到了以下依赖及NuGet，在此致谢：
 - [x] 本机硬件检测    **//25.11.20完工**
 
 - [x] IPERF测速工具GUI     **//25.11.21完工**
+
+- [x] LibreSpeed服务器     **//26.4.27完工**
 
 - [x] RFC3489/5780NAT测试     **//25.11.22完工**
 
