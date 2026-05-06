@@ -72,7 +72,7 @@ release的程序完整包使用到了以下依赖及NuGet，在此致谢：
 
 | 名字                                                         | 用途                                                         | 备注                                                         |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| [图吧工具箱硬件检测引擎](https://www.tbtool.cn/sdk/index.html) | 本机配置检测(推荐、备用)                                     | 直接使用图吧工具箱提供的专业API，配置检测更准，开发更快。<br />(推荐)使用的是C++版，直接使用<br />(备用)使用的是WMI版，编译了图吧官方提供例程使用 |
+| [图吧工具箱硬件检测引擎](https://www.tbtool.cn/sdk/index.html) | 本机配置检测(推荐、备用)                                     | 直接使用图吧工具箱提供的专业API，配置检测更准，开发更快。<br />(推荐)使用的是C++版，直接使用<br />~~(备用)使用的是WMI版，编译了图吧官方提供例程使用~~ **WMI版本已不再使用，改为自有实现** |
 | [iperf3-win-builds](https://github.com/ar51an/iperf3-win-builds/releases) | iPerf3测速工具                                               | 未修改                                                       |
 | [librespeed](https://github.com/librespeed/speedtest)        | LibreSpeed开服器                                             | 精简绝大部分组件(缩小体积)、修改UI/块大小(符合软件需要)      |
 | [IEEE官方MAC地址表](http://standards-oui.ieee.org/oui/oui.csv)<br />[WireShark提供的MAC地址表](https://www.wireshark.org/download/automated/data/manuf.gz) | 手动查询MAC地址                                              | 未修改                                                       |
