@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
- 
+
 namespace NetInfoCheckerX
 {
     public partial class HWInfoCPP : Form
@@ -140,13 +140,20 @@ namespace NetInfoCheckerX
             lblPCName.Text = Environment.MachineName;
             lblExeName.Text = Global.exeName + " " + Global.Version;
 
-            //系统安装时间                               
-            var os = new ManagementObjectSearcher(
-                "SELECT InstallDate FROM Win32_OperatingSystem").Get()
-                .Cast<ManagementObject>().First();
-            var installDate = ManagementDateTimeConverter
-                .ToDateTime(os["InstallDate"].ToString());
-            lblSysInsTime.Text = "系统安装: " + installDate.ToString("yyyy-MM-dd HH:mm:ss");
+            //系统安装时间
+            try
+            {
+                var os = new ManagementObjectSearcher(
+                    "SELECT InstallDate FROM Win32_OperatingSystem").Get()
+                    .Cast<ManagementObject>().First();
+                var installDate = ManagementDateTimeConverter
+                    .ToDateTime(os["InstallDate"].ToString());
+                lblSysInsTime.Text = "系统安装: " + installDate.ToString("yyyy-MM-dd HH:mm:ss");
+            }
+            catch
+            {
+                lblSysInsTime.Text = "系统安装: 无法获取(WMI服务未开启)";
+            }
 
             //已运行时长
             long ms = Environment.TickCount;
