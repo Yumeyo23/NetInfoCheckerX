@@ -1,12 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
-using System.Security.Authentication;
 using System.Threading;
 using System.Threading.Tasks;
- 
+
 namespace NetInfoCheckerX
 {
     public enum NatType
@@ -27,6 +26,7 @@ namespace NetInfoCheckerX
         public IPEndPoint PublicEndPoint { get; set; }  // 我的外网地址
         public IPEndPoint LocalEndPoint { get; set; }   // 我的内网地址
         public IPEndPoint ChangedEndPoint { get; set; } // 服务器告诉我的备用地址
+        public IPEndPoint ResponseEndPoint { get; set; } // 实际响应来源地址
     }
 
     public class StunClient
@@ -43,6 +43,18 @@ namespace NetInfoCheckerX
         private const int AttributeChangedAddress = 0x0005; // 关键：服务器的备用地址
         private const int AttributeXorMappedAddress = 0x0020;
         private const int AttributeOtherAddress = 0x802C; // RFC5780: OTHER-ADDRESS
+
+        private static byte[] BuildLegacyTransactionId(byte[] tx12)
+        {
+            if (tx12 == null || tx12.Length != 12) return null;
+            byte[] tx16 = new byte[16];
+            tx16[0] = 0x21;
+            tx16[1] = 0x12;
+            tx16[2] = 0xA4;
+            tx16[3] = 0x42;
+            Buffer.BlockCopy(tx12, 0, tx16, 4, 12);
+            return tx16;
+        }
 
         public static StunResult Query(Socket socket, IPEndPoint serverEndpoint, bool changeIp, bool changePort)
         {
@@ -91,19 +103,35 @@ namespace NetInfoCheckerX
 
                 // --- 2. 接收响应 ---
                 byte[] receiveBuffer = new byte[1024];
-                socket.ReceiveTimeout = 3000; // 3秒超时
+                DateTime deadline = DateTime.UtcNow.AddMilliseconds(3000);
 
-                // 【修复：根据 Socket 的地址族动态选择 Any IP】
-                EndPoint senderRemote = (socket.AddressFamily == AddressFamily.InterNetworkV6)
-                    ? new IPEndPoint(IPAddress.IPv6Any, 0) // V6 Any Address
-                    : new IPEndPoint(IPAddress.Any, 0);    // V4 Any Address
+                // 同一个 Socket 会收到历史包：必须循环直到拿到“事务ID匹配”的响应
+                while (DateTime.UtcNow < deadline)
+                {
+                    int remainingMs = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                    if (remainingMs <= 0) break;
+                    socket.ReceiveTimeout = remainingMs;
 
-                int len = socket.ReceiveFrom(receiveBuffer, ref senderRemote);
-                // 调试：记录响应来源
-                Console.WriteLine($"[STUN] 收到来自 {senderRemote} 的响应，长度: {len}");
+                    EndPoint senderRemote = (socket.AddressFamily == AddressFamily.InterNetworkV6)
+                        ? new IPEndPoint(IPAddress.IPv6Any, 0)
+                        : new IPEndPoint(IPAddress.Any, 0);
 
-                // --- 3. 解析所有属性 ---
-                return ParseResponse(receiveBuffer, len, transactionId);
+                    int len = socket.ReceiveFrom(receiveBuffer, ref senderRemote);
+                    Console.WriteLine($"[STUN] 收到来自 {senderRemote} 的响应，长度: {len}");
+
+                    StunResult result = ParseResponse(receiveBuffer, len, transactionId);
+                    if (result != null)
+                    {
+                        result.ResponseEndPoint = senderRemote as IPEndPoint;
+                        result.LocalEndPoint = socket.LocalEndPoint as IPEndPoint;
+                        return result;
+                    }
+
+                    Console.WriteLine("[STUN] 收到非本次事务响应，继续等待...");
+                }
+
+                Console.WriteLine($"[STUN] 请求超时(无匹配事务): {serverEndpoint}");
+                return null;
             }
             catch (SocketException sex) when (sex.SocketErrorCode == SocketError.TimedOut)
             {
@@ -117,6 +145,79 @@ namespace NetInfoCheckerX
             }
         }
 
+        // RFC3489 经典查询（无 Magic Cookie）
+        public static StunResult Query3489(Socket socket, IPEndPoint serverEndpoint, bool changeIp, bool changePort)
+        {
+            try
+            {
+                byte[] transactionId = Guid.NewGuid().ToByteArray(); // 16 bytes
+                List<byte> sendBuffer = new List<byte>();
+
+                sendBuffer.AddRange(new byte[] { 0x00, 0x01 }); // Binding Request
+                sendBuffer.AddRange(new byte[] { 0x00, 0x00 }); // Length placeholder
+                sendBuffer.AddRange(transactionId);              // RFC3489 transaction ID (16)
+
+                List<byte> attributes = new List<byte>();
+                if (changeIp || changePort)
+                {
+                    attributes.AddRange(new byte[] { 0x00, 0x03 });
+                    attributes.AddRange(new byte[] { 0x00, 0x04 });
+                    byte flag = 0;
+                    if (changeIp) flag |= 0x04;
+                    if (changePort) flag |= 0x02;
+                    attributes.AddRange(new byte[] { 0x00, 0x00, 0x00, flag });
+                }
+
+                ushort length = (ushort)attributes.Count;
+                byte[] lengthBytes = BitConverter.GetBytes(IPAddress.HostToNetworkOrder((short)length));
+                sendBuffer[2] = lengthBytes[0];
+                sendBuffer[3] = lengthBytes[1];
+                sendBuffer.AddRange(attributes);
+
+                socket.SendTo(sendBuffer.ToArray(), serverEndpoint);
+
+                byte[] receiveBuffer = new byte[1024];
+                DateTime deadline = DateTime.UtcNow.AddMilliseconds(3000);
+
+                while (DateTime.UtcNow < deadline)
+                {
+                    int remainingMs = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                    if (remainingMs <= 0) break;
+                    socket.ReceiveTimeout = remainingMs;
+
+                    EndPoint senderRemote = (socket.AddressFamily == AddressFamily.InterNetworkV6)
+                        ? new IPEndPoint(IPAddress.IPv6Any, 0)
+                        : new IPEndPoint(IPAddress.Any, 0);
+
+                    int len = socket.ReceiveFrom(receiveBuffer, ref senderRemote);
+                    Console.WriteLine($"[STUN-3489] 收到来自 {senderRemote} 的响应，长度: {len}");
+
+                    StunResult result = ParseRFC3489Response(receiveBuffer, len, transactionId);
+                    if (result != null)
+                    {
+                        result.ResponseEndPoint = senderRemote as IPEndPoint;
+                        result.LocalEndPoint = socket.LocalEndPoint as IPEndPoint;
+                        return result;
+                    }
+
+                    Console.WriteLine("[STUN-3489] 收到非本次事务响应，继续等待...");
+                }
+
+                Console.WriteLine($"[STUN-3489] 请求超时(无匹配事务): {serverEndpoint}");
+                return null;
+            }
+            catch (SocketException sex) when (sex.SocketErrorCode == SocketError.TimedOut)
+            {
+                Console.WriteLine($"[STUN-3489] 请求超时: {serverEndpoint}");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[STUN-3489] 请求异常: {ex.Message}");
+                return null;
+            }
+        }
+
         private static StunResult ParseResponse(byte[] data, int length, byte[] originalTransactionId)
         {
             if (length < 20)
@@ -126,15 +227,16 @@ namespace NetInfoCheckerX
             ushort messageType = (ushort)((data[0] << 8) | data[1]);
             if (messageType != BindingResponse)
             {
-                // 可能是RFC3489格式的响应，没有Magic Cookie
-                // 在这种情况下，事务ID从第4字节开始
-                return ParseRFC3489Response(data, length);
+                return null;
             }
 
             // 验证Magic Cookie
             uint magicCookie = (uint)((data[4] << 24) | (data[5] << 16) | (data[6] << 8) | data[7]);
             if (magicCookie != 0x2112A442)
-                return null;
+            {
+                // 兼容 RFC3489（无 Magic Cookie）响应
+                return ParseRFC3489Response(data, length, BuildLegacyTransactionId(originalTransactionId));
+            }
 
             // 验证事务ID (比较12字节)
             for (int i = 8; i < 20; i++)
@@ -258,10 +360,24 @@ namespace NetInfoCheckerX
         }
 
         // 解析RFC3489格式的响应（没有Magic Cookie）
-        private static StunResult ParseRFC3489Response(byte[] data, int length)
+        private static StunResult ParseRFC3489Response(byte[] data, int length, byte[] expectedTransactionId16 = null)
         {
             if (length < 20)
                 return null;
+
+            ushort messageType = (ushort)((data[0] << 8) | data[1]);
+            if (messageType != BindingResponse)
+                return null;
+
+            // RFC3489: 4字节头 + 16字节事务ID
+            if (expectedTransactionId16 != null && expectedTransactionId16.Length == 16)
+            {
+                for (int i = 0; i < 16; i++)
+                {
+                    if (data[4 + i] != expectedTransactionId16[i])
+                        return null;
+                }
+            }
 
             StunResult result = new StunResult();
             int offset = 20;
@@ -338,6 +454,7 @@ namespace NetInfoCheckerX
             }
         }
 
+
         /// <summary>
         /// 通用的 STUN 查询方法，根据协议类型选择实现
         /// </summary>
@@ -378,30 +495,16 @@ namespace NetInfoCheckerX
 
             try
             {
-                // 创建 TCP 客户端
-                tcpClient = new TcpClient(serverEndpoint.AddressFamily);
-
-                // === 修复点1：先绑定本地端点，再连接 ===
+                tcpClient = localEndPoint != null
+                    ? new TcpClient(localEndPoint)
+                    : new TcpClient(serverEndpoint.AddressFamily);
                 if (localEndPoint != null)
-                {
-                    try
-                    {
-                        tcpClient.Client.Bind(localEndPoint);
-                        Console.WriteLine($"[TCP] 已绑定到本地端点: {localEndPoint}");
-                    }
-                    catch (Exception bindEx)
-                    {
-                        Console.WriteLine($"[TCP] 绑定本地端点失败: {bindEx.Message}");
-                        // 绑定失败时不立即返回，尝试直接连接
-                    }
-                }
+                    Console.WriteLine($"[TCP] 已绑定到本地端点: {localEndPoint}");
 
                 tcpClient.SendTimeout = 4000;
                 tcpClient.ReceiveTimeout = 4000;
 
                 Console.WriteLine($"[TCP] 尝试连接到 {serverEndpoint}");
-
-                // 使用带超时的连接
                 var connectTask = tcpClient.ConnectAsync(serverEndpoint.Address, serverEndpoint.Port);
                 var timeoutTask = Task.Delay(4000);
                 var completedTask = await Task.WhenAny(connectTask, timeoutTask).ConfigureAwait(false);
@@ -409,16 +512,11 @@ namespace NetInfoCheckerX
                 if (completedTask == timeoutTask)
                 {
                     Console.WriteLine($"[TCP] 连接超时: {serverEndpoint}");
-                    // 取消连接尝试
                     tcpClient.Close();
                     return null;
                 }
 
-                // 检查连接结果
-                try
-                {
-                    await connectTask.ConfigureAwait(false);
-                }
+                try { await connectTask.ConfigureAwait(false); }
                 catch (Exception connectEx)
                 {
                     Console.WriteLine($"[TCP] 连接异常: {connectEx.Message}");
@@ -432,102 +530,77 @@ namespace NetInfoCheckerX
                 }
 
                 Console.WriteLine($"[TCP] 连接成功: {serverEndpoint}");
-
                 stream = tcpClient.GetStream();
 
-                // 生成事务ID
                 byte[] fullTransactionId = Guid.NewGuid().ToByteArray();
                 byte[] transactionId = new byte[12];
                 Array.Copy(fullTransactionId, 0, transactionId, 0, 12);
 
-                // 构建 STUN 请求消息
                 List<byte> sendBuffer = new List<byte>();
-
-                // STUN 消息头 (RFC5389格式)
-                sendBuffer.AddRange(new byte[] { 0x00, 0x01 }); // Binding Request
-                sendBuffer.AddRange(new byte[] { 0x00, 0x00 }); // Length - 先填0，后面计算
-
-                // Magic Cookie (RFC 5389)
+                sendBuffer.AddRange(new byte[] { 0x00, 0x01 });
+                sendBuffer.AddRange(new byte[] { 0x00, 0x00 });
                 sendBuffer.AddRange(new byte[] { 0x21, 0x12, 0xA4, 0x42 });
-                sendBuffer.AddRange(transactionId); // 12字节事务ID
+                sendBuffer.AddRange(transactionId);
 
                 List<byte> attributes = new List<byte>();
-
                 if (changeIp || changePort)
                 {
-                    // Change Request 属性 (RFC3489)
-                    attributes.AddRange(new byte[] { 0x00, 0x03 }); // Change Request
-                    attributes.AddRange(new byte[] { 0x00, 0x04 }); // Length = 4
+                    attributes.AddRange(new byte[] { 0x00, 0x03 });
+                    attributes.AddRange(new byte[] { 0x00, 0x04 });
                     byte flag = 0;
                     if (changeIp) flag |= 0x04;
                     if (changePort) flag |= 0x02;
                     attributes.AddRange(new byte[] { 0x00, 0x00, 0x00, flag });
                 }
 
-                // 更新长度字段
                 ushort length = (ushort)attributes.Count;
                 byte[] lengthBytes = BitConverter.GetBytes(IPAddress.HostToNetworkOrder((short)length));
                 sendBuffer[2] = lengthBytes[0];
                 sendBuffer[3] = lengthBytes[1];
-
                 sendBuffer.AddRange(attributes);
 
-                // 发送 STUN 请求
                 await stream.WriteAsync(sendBuffer.ToArray(), 0, sendBuffer.Count, cancellationToken).ConfigureAwait(false);
                 await stream.FlushAsync().ConfigureAwait(false);
 
-                // 接收响应
                 byte[] receiveBuffer = new byte[1024];
                 int totalReceived = 0;
                 int bytesRead;
 
-                // 先读取消息头 (20字节)
                 while (totalReceived < 20)
                 {
                     bytesRead = await stream.ReadAsync(receiveBuffer, totalReceived, 20 - totalReceived, cancellationToken).ConfigureAwait(false);
-                    if (bytesRead == 0)
-                    {
-                        Console.WriteLine($"[TCP] 连接已关闭，未收到完整响应头");
-                        return null;
-                    }
+                    if (bytesRead == 0) return null;
                     totalReceived += bytesRead;
                 }
 
-                // 从消息头中获取消息长度
                 ushort messageLength = (ushort)((receiveBuffer[2] << 8) | receiveBuffer[3]);
                 int totalMessageLength = 20 + messageLength;
 
-                // 读取剩余的消息内容
                 while (totalReceived < totalMessageLength)
                 {
                     int bytesToRead = Math.Min(totalMessageLength - totalReceived, receiveBuffer.Length - totalReceived);
                     bytesRead = await stream.ReadAsync(receiveBuffer, totalReceived, bytesToRead, cancellationToken).ConfigureAwait(false);
-                    if (bytesRead == 0)
-                    {
-                        Console.WriteLine($"[TCP] 连接已关闭，未收到完整响应体");
-                        return null;
-                    }
+                    if (bytesRead == 0) return null;
                     totalReceived += bytesRead;
                 }
 
-                Console.WriteLine($"[TCP] 收到完整响应，长度: {totalReceived}");
-
-                // 解析响应
                 var result = ParseResponse(receiveBuffer, totalReceived, transactionId);
-                if (result == null)
+                if (result != null)
                 {
-                    Console.WriteLine($"[TCP] 响应解析失败");
+                    result.ResponseEndPoint = serverEndpoint;
+                    result.LocalEndPoint = tcpClient.Client.LocalEndPoint as IPEndPoint;
                 }
                 return result;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[TCP] 异常: {ex.GetType().Name} - {ex.Message}");
+                Console.WriteLine($"[TCP] 异常: {ex.Message}");
                 return null;
             }
             finally
             {
                 stream?.Close();
+                try { tcpClient?.Client?.Close(0); } catch { }
                 tcpClient?.Close();
             }
         }
@@ -535,40 +608,30 @@ namespace NetInfoCheckerX
         /// <summary>
         /// TLS 协议的 STUN 查询方法
         /// </summary>
-        public static async Task<StunResult> QueryTlsAsync(IPEndPoint serverEndpoint, bool changeIp, bool changePort, IPEndPoint localEndPoint = null, CancellationToken cancellationToken = default)
+        public static async Task<StunResult> QueryTlsAsync(
+            IPEndPoint serverEndpoint,
+            bool changeIp,
+            bool changePort,
+            IPEndPoint localEndPoint = null,
+            CancellationToken cancellationToken = default,
+            string tlsServerName = null)
         {
             TcpClient tcpClient = null;
             SslStream sslStream = null;
 
             try
             {
-                // 创建 TCP 客户端
-                tcpClient = new TcpClient(serverEndpoint.AddressFamily);
-
-                Console.WriteLine($"[TLS] 尝试连接到 {serverEndpoint}，本地端点: {localEndPoint}");
-
-                // 先绑定本地端点，再连接
+                tcpClient = localEndPoint != null
+                    ? new TcpClient(localEndPoint)
+                    : new TcpClient(serverEndpoint.AddressFamily);
                 if (localEndPoint != null)
-                {
-                    try
-                    {
-                        tcpClient.Client.Bind(localEndPoint);
-                        Console.WriteLine($"[TLS] 已绑定到本地端点: {localEndPoint}");
-                    }
-                    catch (Exception bindEx)
-                    {
-                        Console.WriteLine($"[TLS] 绑定本地端点失败: {bindEx.Message}");
-                        // 绑定失败时不立即返回，尝试直接连接
-                    }
-                }
+                    Console.WriteLine($"[TLS] 已绑定到本地端点: {localEndPoint}");
 
-                // TLS 连接需要更多时间
-                tcpClient.SendTimeout = 4000;    // 发送超时 4秒
-                tcpClient.ReceiveTimeout = 4000; // 接收超时 4秒
+                tcpClient.SendTimeout = 4000;
+                tcpClient.ReceiveTimeout = 4000;
 
-                // 使用带超时的连接
                 var connectTask = tcpClient.ConnectAsync(serverEndpoint.Address, serverEndpoint.Port);
-                var timeoutTask = Task.Delay(4000); // 连接超时 4秒
+                var timeoutTask = Task.Delay(4000);
                 var completedTask = await Task.WhenAny(connectTask, timeoutTask).ConfigureAwait(false);
 
                 if (completedTask == timeoutTask)
@@ -578,11 +641,7 @@ namespace NetInfoCheckerX
                     return null;
                 }
 
-                // 检查连接结果
-                try
-                {
-                    await connectTask.ConfigureAwait(false);
-                }
+                try { await connectTask.ConfigureAwait(false); }
                 catch (Exception connectEx)
                 {
                     Console.WriteLine($"[TLS] 连接异常: {connectEx.Message}");
@@ -597,30 +656,16 @@ namespace NetInfoCheckerX
 
                 Console.WriteLine($"[TLS] TCP连接成功: {serverEndpoint}");
 
-                // 创建 SSL 流
                 sslStream = new SslStream(tcpClient.GetStream(), false,
-                    (sender, certificate, chain, sslPolicyErrors) =>
-                    {
-                        // 接受所有证书 - 用于测试环境
-                        Console.WriteLine($"[TLS] 证书验证: {certificate?.Subject}, 错误: {sslPolicyErrors}");
-                        return true;
-                    });
+                    (sender, certificate, chain, sslPolicyErrors) => true);
 
-                // TLS 握手 - 使用兼容性方法
                 try
                 {
-                    Console.WriteLine($"[TLS] 开始TLS握手...");
-
-                    // 兼容性修复：使用旧的 AuthenticateAsClientAsync 重载
-                    await sslStream.AuthenticateAsClientAsync(serverEndpoint.Address.ToString()).ConfigureAwait(false);
-
+                    string sni = string.IsNullOrWhiteSpace(tlsServerName)
+                        ? serverEndpoint.Address.ToString()
+                        : tlsServerName;
+                    await sslStream.AuthenticateAsClientAsync(sni).ConfigureAwait(false);
                     Console.WriteLine($"[TLS] TLS握手成功");
-                    Console.WriteLine($"[TLS] SSL协议: {sslStream.SslProtocol}, 是否加密: {sslStream.IsEncrypted}, 是否认证: {sslStream.IsAuthenticated}");
-                }
-                catch (AuthenticationException authEx)
-                {
-                    Console.WriteLine($"[TLS] TLS认证失败: {authEx.Message}");
-                    return null;
                 }
                 catch (Exception authEx)
                 {
@@ -628,139 +673,78 @@ namespace NetInfoCheckerX
                     return null;
                 }
 
-                // 生成事务ID
                 byte[] fullTransactionId = Guid.NewGuid().ToByteArray();
                 byte[] transactionId = new byte[12];
                 Array.Copy(fullTransactionId, 0, transactionId, 0, 12);
 
-                // 构建 STUN 请求消息
                 List<byte> sendBuffer = new List<byte>();
-
-                // STUN 消息头 (RFC5389格式)
-                sendBuffer.AddRange(new byte[] { 0x00, 0x01 }); // Binding Request
-                sendBuffer.AddRange(new byte[] { 0x00, 0x00 }); // Length - 先填0，后面计算
-
-                // Magic Cookie (RFC 5389)
+                sendBuffer.AddRange(new byte[] { 0x00, 0x01 });
+                sendBuffer.AddRange(new byte[] { 0x00, 0x00 });
                 sendBuffer.AddRange(new byte[] { 0x21, 0x12, 0xA4, 0x42 });
-                sendBuffer.AddRange(transactionId); // 12字节事务ID
+                sendBuffer.AddRange(transactionId);
 
                 List<byte> attributes = new List<byte>();
-
                 if (changeIp || changePort)
                 {
-                    // Change Request 属性 (RFC3489)
-                    attributes.AddRange(new byte[] { 0x00, 0x03 }); // Change Request
-                    attributes.AddRange(new byte[] { 0x00, 0x04 }); // Length = 4
+                    attributes.AddRange(new byte[] { 0x00, 0x03 });
+                    attributes.AddRange(new byte[] { 0x00, 0x04 });
                     byte flag = 0;
                     if (changeIp) flag |= 0x04;
                     if (changePort) flag |= 0x02;
                     attributes.AddRange(new byte[] { 0x00, 0x00, 0x00, flag });
                 }
 
-                // 更新长度字段
                 ushort length = (ushort)attributes.Count;
                 byte[] lengthBytes = BitConverter.GetBytes(IPAddress.HostToNetworkOrder((short)length));
                 sendBuffer[2] = lengthBytes[0];
                 sendBuffer[3] = lengthBytes[1];
-
                 sendBuffer.AddRange(attributes);
 
-                // 发送 STUN 请求
-                Console.WriteLine($"[TLS] 发送STUN请求，长度: {sendBuffer.Count}");
                 await sslStream.WriteAsync(sendBuffer.ToArray(), 0, sendBuffer.Count, cancellationToken).ConfigureAwait(false);
                 await sslStream.FlushAsync().ConfigureAwait(false);
 
-                // 接收响应
                 byte[] receiveBuffer = new byte[1024];
                 int totalReceived = 0;
                 int bytesRead;
 
-                // 先读取消息头 (20字节)
-                Console.WriteLine($"[TLS] 等待响应头...");
-                DateTime headerTimeout = DateTime.Now.AddSeconds(10);
                 while (totalReceived < 20)
                 {
-                    if (DateTime.Now > headerTimeout)
-                    {
-                        Console.WriteLine($"[TLS] 读取响应头超时");
-                        return null;
-                    }
-
                     bytesRead = await sslStream.ReadAsync(receiveBuffer, totalReceived, 20 - totalReceived, cancellationToken).ConfigureAwait(false);
-                    if (bytesRead == 0)
-                    {
-                        Console.WriteLine($"[TLS] 连接已关闭，未收到完整响应头");
-                        return null;
-                    }
+                    if (bytesRead == 0) return null;
                     totalReceived += bytesRead;
                 }
 
-                // 从消息头中获取消息长度
                 ushort messageLength = (ushort)((receiveBuffer[2] << 8) | receiveBuffer[3]);
                 int totalMessageLength = 20 + messageLength;
 
-                Console.WriteLine($"[TLS] 消息总长度: {totalMessageLength} (头部: 20, 内容: {messageLength})");
-
-                // 读取剩余的消息内容
-                DateTime bodyTimeout = DateTime.Now.AddSeconds(10);
                 while (totalReceived < totalMessageLength)
                 {
-                    if (DateTime.Now > bodyTimeout)
-                    {
-                        Console.WriteLine($"[TLS] 读取响应体超时");
-                        return null;
-                    }
-
                     int bytesToRead = Math.Min(totalMessageLength - totalReceived, receiveBuffer.Length - totalReceived);
                     bytesRead = await sslStream.ReadAsync(receiveBuffer, totalReceived, bytesToRead, cancellationToken).ConfigureAwait(false);
-                    if (bytesRead == 0)
-                    {
-                        Console.WriteLine($"[TLS] 连接已关闭，未收到完整响应体");
-                        return null;
-                    }
+                    if (bytesRead == 0) return null;
                     totalReceived += bytesRead;
                 }
 
-                Console.WriteLine($"[TLS] 收到完整响应，长度: {totalReceived}");
-
-                // 解析响应
                 var result = ParseResponse(receiveBuffer, totalReceived, transactionId);
-                if (result == null)
+                if (result != null)
                 {
-                    Console.WriteLine($"[TLS] 响应解析失败");
-                }
-                else
-                {
-                    Console.WriteLine($"[TLS] 响应解析成功: PublicEndPoint={result.PublicEndPoint}, ChangedEndPoint={result.ChangedEndPoint}");
+                    result.ResponseEndPoint = serverEndpoint;
+                    result.LocalEndPoint = tcpClient.Client.LocalEndPoint as IPEndPoint;
                 }
                 return result;
             }
-            catch (OperationCanceledException)
-            {
-                Console.WriteLine($"[TLS] 操作被取消");
-                return null;
-            }
             catch (Exception ex)
             {
-                Console.WriteLine($"[TLS] 异常: {ex.GetType().Name} - {ex.Message}");
+                Console.WriteLine($"[TLS] 异常: {ex.Message}");
                 return null;
             }
             finally
             {
-                try
-                {
-                    sslStream?.Close();
-                    sslStream?.Dispose();
-                }
-                catch { }
-
-                try
-                {
-                    tcpClient?.Close();
-                    tcpClient?.Dispose();
-                }
-                catch { }
+                sslStream?.Close();
+                try { tcpClient?.Client?.Close(0); } catch { }
+                tcpClient?.Close();
             }
         }
     }
+
 }
