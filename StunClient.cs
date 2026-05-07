@@ -56,7 +56,7 @@ namespace NetInfoCheckerX
             return tx16;
         }
 
-        public static StunResult Query(Socket socket, IPEndPoint serverEndpoint, bool changeIp, bool changePort)
+        public static StunResult Query(Socket socket, IPEndPoint serverEndpoint, bool changeIp, bool changePort, int timeoutMs = 3000)
         {
             try
             {
@@ -66,7 +66,7 @@ namespace NetInfoCheckerX
                 byte[] transactionId = new byte[12];
                 Array.Copy(fullTransactionId, 0, transactionId, 0, 12);
                 // 调试：记录发送的目标
-                Console.WriteLine($"[STUN] 发送请求到 {serverEndpoint}，changeIp={changeIp}, changePort={changePort}");
+                Console.WriteLine($"[STUN] 发送请求到 {serverEndpoint}，changeIp={changeIp}, changePort={changePort}, timeout={timeoutMs}ms");
 
                 List<byte> sendBuffer = new List<byte>();
 
@@ -103,7 +103,7 @@ namespace NetInfoCheckerX
 
                 // --- 2. 接收响应 ---
                 byte[] receiveBuffer = new byte[1024];
-                DateTime deadline = DateTime.UtcNow.AddMilliseconds(3000);
+                DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
 
                 // 同一个 Socket 会收到历史包：必须循环直到拿到“事务ID匹配”的响应
                 while (DateTime.UtcNow < deadline)
@@ -146,7 +146,7 @@ namespace NetInfoCheckerX
         }
 
         // RFC3489 经典查询（无 Magic Cookie）
-        public static StunResult Query3489(Socket socket, IPEndPoint serverEndpoint, bool changeIp, bool changePort)
+        public static StunResult Query3489(Socket socket, IPEndPoint serverEndpoint, bool changeIp, bool changePort, int timeoutMs = 3000)
         {
             try
             {
@@ -177,7 +177,7 @@ namespace NetInfoCheckerX
                 socket.SendTo(sendBuffer.ToArray(), serverEndpoint);
 
                 byte[] receiveBuffer = new byte[1024];
-                DateTime deadline = DateTime.UtcNow.AddMilliseconds(3000);
+                DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
 
                 while (DateTime.UtcNow < deadline)
                 {
