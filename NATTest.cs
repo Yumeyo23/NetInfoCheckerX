@@ -839,11 +839,10 @@ namespace NetInfoCheckerX
                 // Mapping Test I (标准 Binding Request)
                 // ============================================================
                 Log5780(">>> [UDP] Mapping Test I: Binding Request", "Mapping Test I");
-                socket.ReceiveTimeout = 3000;
-                Log5780($"[UDP] 接收超时更改为 3000ms");
+                Log5780($"[UDP] 接收超时: 3000ms");
 
                 Log5780($"[UDP] 请求地址: {serverEp1}");
-                var resultA = await Task.Run(() => StunClient.Query(socket, serverEp1, false, false), cancellationToken);
+                var resultA = await Task.Run(() => StunClient.Query(socket, serverEp1, false, false, 3000), cancellationToken);
 
                 if (resultA?.PublicEndPoint != null)
                 {
@@ -871,9 +870,7 @@ namespace NetInfoCheckerX
                 txt5780Binding.ForeColor = Color.LimeGreen;
                 Log5780($"[UDP] Binding 成功，外部地址 {resultA.PublicEndPoint.ToString()}");
 
-                bool isDirectMapping = resultA.LocalEndPoint != null
-                    ? resultA.PublicEndPoint.Equals(resultA.LocalEndPoint)
-                    : resultA.PublicEndPoint.Address.Equals(finalBindIp);
+                bool isDirectMapping = resultA.PublicEndPoint.Equals(resultA.LocalEndPoint);
                 Log5780($"[UDP] 是否公网: {isDirectMapping}");
 
                 var changedEp = resultA.ChangedEndPoint;
@@ -904,10 +901,9 @@ namespace NetInfoCheckerX
                 // Filtering Test II (Change IP + Port)
                 // ============================================================
                 Log5780(">>> [UDP] Filtering Test II: Change IP & Port", "Filtering Test II");
-                socket.ReceiveTimeout = 2000;
-                Log5780($"[UDP] 接收超时调整为 2000ms");
+                Log5780($"[UDP] 接收超时: 2000ms");
 
-                var filteringII = await Task.Run(() => StunClient.Query(socket, serverEp1, true, true), cancellationToken);
+                var filteringII = await Task.Run(() => StunClient.Query(socket, serverEp1, true, true, 2000), cancellationToken);
                 Log5780($"[UDP] 请求地址: {serverEp1}");
                 if (filteringII?.ResponseEndPoint != null)
                     Log5780($"[UDP] 成功: 响应来源 {filteringII.ResponseEndPoint}");
@@ -920,10 +916,9 @@ namespace NetInfoCheckerX
                 // Filtering Test III (Change Port Only)
                 // ============================================================
                 Log5780(">>> [UDP] Filtering Test III: Change Port", "Filtering Test III");
-                socket.ReceiveTimeout = 2000;
-                Log5780($"[UDP] 接收超时调整为 2000ms");
+                Log5780($"[UDP] 接收超时: 2000ms");
 
-                var filteringIII = await Task.Run(() => StunClient.Query(socket, serverEp1, false, true), cancellationToken);
+                var filteringIII = await Task.Run(() => StunClient.Query(socket, serverEp1, false, true, 2000), cancellationToken);
                 Log5780($"[UDP] 请求地址: {serverEp1}");
                 if (filteringIII?.ResponseEndPoint != null)
                     Log5780($"[UDP] 成功: 响应来源 {filteringIII.ResponseEndPoint}");
@@ -954,27 +949,10 @@ namespace NetInfoCheckerX
                 // Mapping Test II: (otherIP, primaryPort)
                 // ============================================================
                 Log5780(">>> [UDP] Mapping Test II: otherIP + primaryPort", "Mapping Test II");
-                socket.ReceiveTimeout = 1500;
-                Log5780($"[UDP] 接收超时调整为 1500ms");
+                Log5780($"[UDP] 接收超时: 1500ms");
 
                 StunResult resultB;
-                /*
-                if (strictMode)
-                {
-                    Log5780($"[UDP] 严格模式: 使用新 Socket & 端口");
-                    using (var s2 = new Socket(testFamily, SocketType.Dgram, ProtocolType.Udp))
-                    {
-                        s2.Bind(new IPEndPoint(finalBindIp, 0));
-                        Log5780($"[UDP] 临时 Socket 绑定: {s2.LocalEndPoint}");
-                        resultB = await Task.Run(() => StunClient.Query(s2, changedEp, false, false), cancellationToken);
-                    }
-                }
-                else
-                {
-                */
-                //Log5780($"[UDP] 宽松模式: 复用原有 Socket");
-                resultB = await Task.Run(() => StunClient.Query(socket, mappingTest2Server, false, false), cancellationToken);
-                //}
+                resultB = await Task.Run(() => StunClient.Query(socket, mappingTest2Server, false, false, 1500), cancellationToken);
 
                 Log5780($"[UDP] 请求地址: {mappingTest2Server}");
                 if (resultB != null && resultB.PublicEndPoint != null)
@@ -994,10 +972,9 @@ namespace NetInfoCheckerX
                 // Mapping Test III: (otherIP, otherPort)
                 // ============================================================
                 Log5780(">>> [UDP] Mapping Test III: otherIP + otherPort", "Mapping Test III");
-                socket.ReceiveTimeout = 1000;
-                Log5780($"[UDP] 接收超时调整为 1000ms");
+                Log5780($"[UDP] 接收超时: 1000ms");
                 Log5780($"[UDP] 请求地址: {mappingTest3Server}");
-                var resultC = await Task.Run(() => StunClient.Query(socket, mappingTest3Server, false, false), cancellationToken);
+                var resultC = await Task.Run(() => StunClient.Query(socket, mappingTest3Server, false, false, 1000), cancellationToken);
 
                 if (resultC != null && resultC.PublicEndPoint != null)
                 {
@@ -1026,7 +1003,7 @@ namespace NetInfoCheckerX
 
 
 
-                Log5780($"最终检测结果: \n\nMapping={mappingType}, Filtering={filteringType}", "(完成)");
+                Log5780($"最终检测结果: \nMapping={mappingType}, \nFiltering={filteringType}", "(完成)");
                 CheckAndMarkIPChange5780();
 
                 Log5780($"=== UDP 测试结束 ===", "UDP完成");
@@ -1130,7 +1107,7 @@ namespace NetInfoCheckerX
                     txt5780Mapping.Text = "Unsupported Server";
                     txt5780Mapping.ForeColor = Color.DarkOrange;
                     txt5780Filtering.Text = "--";
-                    Log5780($"[TCP] 备用地址无效或服务器不支持，按 RFC5780 判定为 Unsupported Server。", "(完成)");
+                    Log5780($"[TCP] 备用地址无效或服务器不支持", "(完成)");
                     return;
                 }
 
@@ -1159,9 +1136,7 @@ namespace NetInfoCheckerX
                 }
 
                 // === 判定结果 ===
-                bool isDirect = resultA.LocalEndPoint != null
-                    ? resultA.PublicEndPoint.Equals(resultA.LocalEndPoint)
-                    : resultA.PublicEndPoint.Address.Equals(finalBindIp);
+                bool isDirect = resultA.PublicEndPoint.Equals(resultA.LocalEndPoint);
                 Log5780($"[TCP] 是否公网: {isDirect}");
                 string mappingType = CalculateMappingType(isDirect, resultA, resultB, resultC);
                 Log5780($"[TCP] 计算映射行为: {mappingType}");
@@ -1220,7 +1195,8 @@ namespace NetInfoCheckerX
 
             if (filteringII?.ResponseEndPoint != null)
             {
-                return filteringII.ResponseEndPoint.Equals(changedEp)
+                // 验证响应来自 alternate IP（不强制要求端口也匹配，因为部分 NAT 网关可能重写源端口）
+                return filteringII.ResponseEndPoint.Address.Equals(changedEp.Address)
                     ? "Endpoint-Independent"
                     : "Unsupported Server";
             }
@@ -1329,7 +1305,7 @@ namespace NetInfoCheckerX
                     txt5780Mapping.Text = "Unsupported Server";
                     txt5780Mapping.ForeColor = Color.DarkOrange;
                     txt5780Filtering.Text = "--";
-                    Log5780($"[TLS] 备用地址无效或服务器不支持，按 RFC5780 判定为 Unsupported Server。", "(完成)");
+                    Log5780($"[TLS] 备用地址无效或服务器不支持", "(完成)");
                     return;
                 }
 
@@ -1358,9 +1334,7 @@ namespace NetInfoCheckerX
                 }
 
                 // === 判定结果 ===
-                bool isDirect = resultA.LocalEndPoint != null
-                    ? resultA.PublicEndPoint.Equals(resultA.LocalEndPoint)
-                    : resultA.PublicEndPoint.Address.Equals(finalBindIp);
+                bool isDirect = resultA.PublicEndPoint.Equals(resultA.LocalEndPoint);
                 Log5780($"[TLS] 是否公网: {isDirect}");
                 string mappingType = CalculateMappingType(isDirect, resultA, resultB, resultC);
                 Log5780($"[TLS] 计算映射行为: {mappingType}");
@@ -1547,9 +1521,7 @@ namespace NetInfoCheckerX
 
                 Log($"Server Changed Address: {changedEp}");
 
-                bool isDirect = result1.LocalEndPoint != null
-                    ? result1.PublicEndPoint.Equals(result1.LocalEndPoint)
-                    : result1.PublicEndPoint.Address.Equals(finalBindIp);
+                bool isDirect = result1.PublicEndPoint.Equals(result1.LocalEndPoint);
 
                 // 如果备用地址端口与原始不同，记录这个信息
                 if (changedEp.Port != primaryRemoteEp.Port)
@@ -1571,14 +1543,12 @@ namespace NetInfoCheckerX
 
                 if (result2 != null)
                 {
-                    // 兼容 NatTypeTester: Test2 必须来自 changed 地址，否则视为不支持的服务器
-                    if (result2.ResponseEndPoint != null &&
-                        (result2.ResponseEndPoint.Address.Equals(primaryRemoteEp.Address) ||
-                         result2.ResponseEndPoint.Port == primaryRemoteEp.Port))
+                    // Test2 响应必须来自 changed 地址 (不同 IP 且不同端口)，否则视为不支持的服务器
+                    if (result2.ResponseEndPoint != null && !result2.ResponseEndPoint.Equals(changedEp))
                     {
                         txt3489Type.Text = "Unsupported Server";
                         txt3489Type.ForeColor = Color.DarkOrange;
-                        Log("Test 2 响应来源异常（未切换地址或端口），判定为 Unsupported Server。", "(完成)");
+                        Log($"Test 2 响应来源异常（期望 {changedEp}，实际 {result2.ResponseEndPoint}），判定为 Unsupported Server。", "(完成)");
                         return;
                     }
 
@@ -1622,10 +1592,13 @@ namespace NetInfoCheckerX
 
                 if (result1.ChangedEndPoint != null)
                 {
+                    // RFC 3489 Section 10.1: Test I#2 must send to alternate IP + primary port
+                    IPEndPoint testI2Server = new IPEndPoint(result1.ChangedEndPoint.Address, serverEp1.Port);
+                    Log($"Test 1#2 目标: {testI2Server} (alternateIP + primaryPort)");
                     var result3 = await Task.Run(() =>
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        return StunClient.Query3489(socket, result1.ChangedEndPoint, false, false);
+                        return StunClient.Query3489(socket, testI2Server, false, false);
                     }, cancellationToken);
 
                     if (result3 == null || result3.PublicEndPoint == null)
