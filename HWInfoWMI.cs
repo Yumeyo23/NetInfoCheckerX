@@ -24,6 +24,26 @@ namespace NetInfoCheckerX
         private const int SC_MOVE = 0xF010;
         private const int HTCAPTION = 0x0002;
 
+        // EnumDisplayDevices — 仅枚举当前已连接的显示器
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern bool EnumDisplayDevices(
+            string lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        private struct DISPLAY_DEVICE
+        {
+            public int cb;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string DeviceName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+            public string DeviceString;
+            public uint StateFlags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+            public string DeviceID;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+            public string DeviceKey;
+        }
+
         private void MyMouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Left)
@@ -79,7 +99,7 @@ namespace NetInfoCheckerX
         /// <summary>
         /// 获取系统信息
         /// </summary>
-        private (string caption, string build, string bitness, string osType) GetSystemInfo()
+        private (string caption, string build, string osType) GetSystemInfo()
         {
             try
             {
@@ -108,8 +128,6 @@ namespace NetInfoCheckerX
                     }
                     catch { }
                 }
-
-                string bitness = Environment.Is64BitOperatingSystem ? "64 位" : "32 位";
 
                 string osType = "未知";
                 try
@@ -162,11 +180,11 @@ namespace NetInfoCheckerX
                 }
                 catch { }
 
-                return (caption, build, bitness, osType);
+                return (caption, build, osType);
             }
             catch
             {
-                return ("获取失败", "获取失败", "获取失败", "获取失败");
+                return ("获取失败", "获取失败", "获取失败");
             }
         }
 
@@ -337,11 +355,11 @@ namespace NetInfoCheckerX
                 var edidMonitors = GetMonitorsFromRegistryEDID(seenHardwareIds);
                 result.AddRange(edidMonitors);
 
-                // 方案2: 如果注册表没找到，尝试 WMI DesktopMonitor
+                // 方案2: 如果注册表没找到，尝试 WMI DesktopMonitor（仅已连接）
                 if (result.Count == 0)
                 {
                     var monitors = new ManagementObjectSearcher(
-                        "SELECT Name, PNPDeviceID FROM Win32_DesktopMonitor")
+                        "SELECT Name, PNPDeviceID FROM Win32_DesktopMonitor WHERE Availability = 3")
                         .Get().Cast<ManagementObject>().ToList();
 
                     foreach (var mon in monitors)
@@ -369,11 +387,11 @@ namespace NetInfoCheckerX
                     }
                 }
 
-                // 方案3: Win32_PnPEntity (Monitor 类)
+                // 方案3: Win32_PnPEntity (Monitor 类, 仅已连接)
                 if (result.Count == 0)
                 {
                     var pnpMonitors = new ManagementObjectSearcher(
-                        @"SELECT Name, PNPDeviceID FROM Win32_PnPEntity WHERE PNPClass = 'Monitor'")
+                        @"SELECT Name, PNPDeviceID FROM Win32_PnPEntity WHERE PNPClass = 'Monitor' AND ConfigManagerErrorCode = 0")
                         .Get().Cast<ManagementObject>().ToList();
 
                     foreach (var mon in pnpMonitors)
@@ -540,14 +558,14 @@ namespace NetInfoCheckerX
         }
 
         /// <summary>
-        /// 获取声卡信息
+        /// 获取声卡信息 (仅 Status=OK 的设备)
         /// </summary>
         private List<string> GetSoundCardInfo()
         {
             try
             {
                 var soundcards = new ManagementObjectSearcher(
-                    "SELECT Name FROM Win32_SoundDevice")
+                    "SELECT Name FROM Win32_SoundDevice WHERE Status = 'OK'")
                     .Get().Cast<ManagementObject>().ToList();
 
                 var result = new List<string>();
@@ -640,7 +658,46 @@ namespace NetInfoCheckerX
         }
 
         /// <summary>
+        /// 使用 EnumDisplayDevices API 获取当前已连接显示器的硬件ID集合
+        /// 用于过滤注册表中残留的已断开显示器记录
+        /// DeviceID 格式: "MONITOR\BOE0A92\{GUID}\0001"，取第2段即硬件ID
+        /// </summary>
+        private HashSet<string> GetConnectedMonitorHardwareIds()
+        {
+            var connected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            try
+            {
+                DISPLAY_DEVICE adapter = new DISPLAY_DEVICE();
+                adapter.cb = Marshal.SizeOf(adapter);
+
+                for (uint i = 0; EnumDisplayDevices(null, i, ref adapter, 0); i++)
+                {
+                    DISPLAY_DEVICE monitor = new DISPLAY_DEVICE();
+                    monitor.cb = Marshal.SizeOf(monitor);
+
+                    for (uint j = 0; EnumDisplayDevices(adapter.DeviceName, j, ref monitor, 0); j++)
+                    {
+                        // monitor.DeviceID 格式: "MONITOR\BOE0A92\{4d36e96e-...}\0001"
+                        // 提取硬件ID (第2段)
+                        string hwId = ExtractHardwareId(monitor.DeviceID);
+                        if (!string.IsNullOrEmpty(hwId))
+                        {
+                            connected.Add(hwId);
+                        }
+                        monitor.cb = Marshal.SizeOf(monitor);
+                    }
+                    adapter.cb = Marshal.SizeOf(adapter);
+                }
+            }
+            catch { }
+
+            return connected;
+        }
+
+        /// <summary>
         /// 从注册表 DISPLAY 枚举读取 EDID 获取显示器信息
+        /// (仅返回当前已连接的显示器)
         /// </summary>
         private List<(string name, string mfrAndId, string size, string date)> GetMonitorsFromRegistryEDID(
             HashSet<string> seenHardwareIds)
@@ -649,6 +706,10 @@ namespace NetInfoCheckerX
 
             try
             {
+                // 获取当前已连接显示器的硬件ID集合，用于过滤残留记录
+                var connectedHwIds = GetConnectedMonitorHardwareIds();
+                bool hasConnectedList = connectedHwIds.Count > 0;
+
                 using (var displayKey = Registry.LocalMachine.OpenSubKey(
                     @"SYSTEM\CurrentControlSet\Enum\DISPLAY"))
                 {
@@ -659,6 +720,10 @@ namespace NetInfoCheckerX
                         // hwId 格式: "BOE0A92", "SAM0D20" 等
                         if (string.IsNullOrEmpty(hwId)) continue;
                         if (!seenHardwareIds.Add(hwId)) continue;
+
+                        // 如果 EnumDisplayDevices 返回了已连接列表，则只处理已连接的硬件ID
+                        if (hasConnectedList && !connectedHwIds.Contains(hwId))
+                            continue;
 
                         using (var hwKey = displayKey.OpenSubKey(hwId))
                         {
@@ -1118,8 +1183,8 @@ namespace NetInfoCheckerX
 
                 // === 1. 系统信息 ===
                 {
-                    var (caption, build, bitness, osType) = GetSystemInfo();
-                    sb.AppendLine($"系统:\t{caption} [{build}/{bitness}/{osType}]");
+                    var (caption, build, osType) = GetSystemInfo();
+                    sb.AppendLine($"系统:\t{caption} [{build}/{osType}]");
                 }
 
                 // === 2. CPU信息 ===
