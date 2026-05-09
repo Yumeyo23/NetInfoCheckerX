@@ -509,6 +509,30 @@ namespace NetInfoCheckerX
             Task.Run(() => PingPPLoadAll());
         }
 
+        // 自动刷新网卡：当系统网卡变化导致选中网卡不存在时，刷新列表并恢复默认
+        private void EnsureSelectedNICValid()
+        {
+            string selectedText = comboLocalEnd.Text;
+            if (string.IsNullOrEmpty(selectedText)) return;
+            if (selectedText.Contains("Any") || selectedText.Contains("系统默认") ||
+                selectedText.Contains("ICMP兼容模式") || selectedText.StartsWith("0.0.0.0") ||
+                selectedText.StartsWith("::")) return;
+
+            PingPPLoadAll();
+
+            bool found = false;
+            foreach (var item in comboLocalEnd.Items)
+            {
+                if (item.ToString() == selectedText)
+                {
+                    comboLocalEnd.SelectedItem = item;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found && comboLocalEnd.Items.Count > 0) comboLocalEnd.SelectedIndex = 0;
+        }
+
         private void PingPPLoadAll()
         {
             comboLocalEnd.Items.Clear();
@@ -758,6 +782,9 @@ namespace NetInfoCheckerX
 
         private async void btnStart_Click(object sender, EventArgs e)
         {
+            // 自动刷新网卡（若当前选中的网卡已不存在）
+            EnsureSelectedNICValid();
+
             // 修改停止按钮逻辑
             if (isRunning)
             {
