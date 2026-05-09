@@ -337,6 +337,8 @@ namespace NetInfoCheckerX
 
         private async void btnRefresh_Click(object sender, EventArgs e)
         {
+            EnsureSelectedNICValid();
+
             // ✨ 任务 2：防止重复点击
             try
             {
@@ -369,6 +371,8 @@ namespace NetInfoCheckerX
         // 创建按钮
         private async void btnCreate_Click(object sender, EventArgs e)
         {
+            EnsureSelectedNICValid();
+
             // 梦酱要求的描述规范检查
             string pattern = @"^[a-zA-Z0-9\x20-\x7e]+$";
             if (string.IsNullOrWhiteSpace(txtName.Text) || !System.Text.RegularExpressions.Regex.IsMatch(txtName.Text, pattern))
@@ -600,6 +604,27 @@ namespace NetInfoCheckerX
             ResetTimer();
             comboTime.SelectedIndex = 0;
             dataGridView1.Rows.Add("-", "请【刷新网卡】后，", "选择欲查看UPnP映射的网卡，", "再点击【获取映射】", "喵", "-", "-");
+        }
+
+        // 自动刷新网卡：当系统网卡变化导致选中网卡不存在时，刷新列表并恢复默认
+        private void EnsureSelectedNICValid()
+        {
+            string selectedText = comboNIC.Text;
+            if (string.IsNullOrEmpty(selectedText)) return;
+
+            InitIpLists();
+
+            bool found = false;
+            foreach (var item in comboNIC.Items)
+            {
+                if (item.ToString() == selectedText)
+                {
+                    comboNIC.SelectedItem = item;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found && comboNIC.Items.Count > 0) comboNIC.SelectedIndex = 0;
         }
 
         private void InitIpLists()
