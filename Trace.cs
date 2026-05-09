@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -14,7 +14,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using IP2Region.Net.XDB;   // 需要 NuGet 包：IP2Region.Net
- 
+
 
 namespace NetInfoCheckerX
 {
@@ -205,6 +205,63 @@ namespace NetInfoCheckerX
                 catch { }
             });
         }
+        // 自动刷新网卡：当系统网卡变化导致选中网卡不存在时，刷新列表并恢复默认
+        private void EnsureSelectedNICValid()
+        {
+            string selectedText = comboLocalEnd.Text;
+            if (string.IsNullOrEmpty(selectedText)) return;
+            if (selectedText.Contains("Any") || selectedText.Contains("系统默认") ||
+                selectedText.Contains("ICMP兼容模式") || selectedText.StartsWith("0.0.0.0") ||
+                selectedText.StartsWith("::")) return;
+
+            // 刷新网卡列表（仅IPv4，与原有过滤逻辑一致）
+            comboLocalEnd.Items.Clear();
+            comboLocalEnd.Items.Add("0.0.0.0 (Any)");
+            comboLocalEnd.Items.Add("系统默认 (ICMP兼容模式)");
+            try
+            {
+                foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus != OperationalStatus.Up) continue;
+                    string desc = ni.Description.ToLower();
+                    if (desc.Contains("vmware") || desc.Contains("virtual") || desc.Contains("vbox") || desc.Contains("hyper-v") || desc.Contains("wsl") || desc.Contains("pseudo") || desc.Contains("tap") || desc.Contains("tun") || desc.Contains("loopback") || desc.Contains("vpn") || desc.Contains("teredo"))
+                        continue;
+
+                    var ipProps = ni.GetIPProperties();
+                    bool isPhysical = (ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet ||
+                                       ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211);
+                    bool hasGateway = ipProps.GatewayAddresses.Count > 0;
+                    if (!isPhysical && !hasGateway) continue;
+
+                    foreach (UnicastIPAddressInformation ipInfo in ipProps.UnicastAddresses)
+                    {
+                        IPAddress ip = ipInfo.Address;
+                        if (ip.AddressFamily != AddressFamily.InterNetwork) continue;
+                        if (IPAddress.IsLoopback(ip)) continue;
+                        byte[] bytes = ip.GetAddressBytes();
+                        if (bytes[0] == 169 && bytes[1] == 254) continue;
+
+                        string displayName = string.Format("{0} ({1})", ip.ToString(), ni.Name);
+                        comboLocalEnd.Items.Add(displayName);
+                    }
+                }
+            }
+            catch { }
+
+            // 尝试恢复原选中项
+            bool found = false;
+            foreach (var item in comboLocalEnd.Items)
+            {
+                if (item.ToString() == selectedText)
+                {
+                    comboLocalEnd.SelectedItem = item;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found && comboLocalEnd.Items.Count > 0) comboLocalEnd.SelectedIndex = 0;
+        }
+
         private async void Trace_Load(object sender, EventArgs e)
         {
             // 1. 先做那些“秒开”的基础 UI 初始化
@@ -567,6 +624,9 @@ namespace NetInfoCheckerX
 
         private async void btnStartTrace_Click(object sender, EventArgs e)
         {
+            // 自动刷新网卡（若当前选中的网卡已不存在）
+            EnsureSelectedNICValid();
+
             if (isRunning)
             {
                 if (cts != null) cts.Cancel();
