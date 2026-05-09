@@ -124,6 +124,31 @@ namespace NetInfoCheckerX
             CloudControl.ApplyDevTitle(this);
         }
 
+        // 自动刷新网卡：当系统网卡变化导致选中网卡不存在时，刷新列表并恢复默认
+        private void EnsureSelectedNICValid()
+        {
+            string selectedText = "";
+            this.Invoke(new Action(() => { selectedText = comboNIC.Text; }));
+            if (string.IsNullOrEmpty(selectedText)) return;
+            if (selectedText.Contains("Any") || selectedText.StartsWith("0.0.0.0") || selectedText.StartsWith("::")) return;
+
+            InitNICList();
+
+            bool found = false;
+            foreach (var item in comboNIC.Items)
+            {
+                dynamic dynItem = item;
+                string itemText = dynItem.Text ?? "";
+                if (itemText == selectedText)
+                {
+                    comboNIC.SelectedItem = item;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found && comboNIC.Items.Count > 0) comboNIC.SelectedIndex = 0;
+        }
+
         private void InitNICList()
         {
             comboNIC.Items.Clear();
@@ -252,7 +277,10 @@ namespace NetInfoCheckerX
         }
         private async void btnStart_Click(object sender, EventArgs e)
         {
-            // 1. 如果正在测试，点击就是“停止”
+            // 自动刷新网卡（若当前选中的网卡已不存在）
+            EnsureSelectedNICValid();
+
+            // 1. 如果正在测试，点击就是”停止”
             if (isTesting)
             {
                 StopTest("用户手动停止");
