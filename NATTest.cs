@@ -460,6 +460,24 @@ namespace NetInfoCheckerX
             // 下面保持原有的随机/递增逻辑，但使用分开的变量
             if (!checkPortRandom.Checked && lastPortRecord != 0)
             {
+                // 连续固定模式：检查是否与另一测试的端口冲突
+                int otherLastPort = is5780 ? _lastPort3489 : _lastPort5780;
+                if (lastPortRecord == otherLastPort && otherLastPort != 0)
+                {
+                    logger($"[端口] 连续固定模式检测到端口冲突({lastPortRecord})，按设置生成新端口");
+                    int resolvedPort;
+                    if (checkPortMode.Checked)
+                        resolvedPort = new Random().Next(minPort, maxPort + 1);
+                    else
+                    {
+                        resolvedPort = lastPortRecord + 1;
+                        if (resolvedPort > maxPort) resolvedPort = minPort;
+                    }
+                    if (is5780) _lastPort5780 = resolvedPort;
+                    else _lastPort3489 = resolvedPort;
+                    logger($"[端口] 冲突解决，新固定端口: {resolvedPort}");
+                    return resolvedPort;
+                }
                 logger($"[端口] 连续固定模式，复用端口: {lastPortRecord}");
                 return lastPortRecord;
             }
@@ -486,11 +504,60 @@ namespace NetInfoCheckerX
                 logger($"[端口] 递增模式端口: {newPort}");
             }
 
+            // 连续固定模式首次生成：检查是否与另一测试的端口冲突
+            if (!checkPortRandom.Checked)
+            {
+                int otherLastPort = is5780 ? _lastPort3489 : _lastPort5780;
+                if (newPort == otherLastPort && otherLastPort != 0)
+                {
+                    logger($"[端口] 连续固定模式检测到端口冲突({newPort})，按设置生成新端口");
+                    if (checkPortMode.Checked)
+                    {
+                        int attempts = 0;
+                        do
+                        {
+                            newPort = new Random().Next(minPort, maxPort + 1);
+                            attempts++;
+                        } while (newPort == otherLastPort && attempts < 100);
+                    }
+                    else
+                    {
+                        newPort = otherLastPort + 1;
+                        if (newPort > maxPort) newPort = minPort;
+                    }
+                    logger($"[端口] 冲突解决，新固定端口: {newPort}");
+                }
+            }
+
             // 保存回对应的变量
             if (is5780) _lastPort5780 = newPort;
             else _lastPort3489 = newPort;
 
             return newPort;
+        }
+
+        // 自动刷新网卡：当系统网卡变化导致选中网卡不存在时，刷新列表并恢复默认
+        private void EnsureSelectedNICValid(bool is5780)
+        {
+            ComboBox combo = is5780 ? combo5780LocalEnd : combo3489LocalEnd;
+            string selectedText = combo.Text;
+            if (string.IsNullOrEmpty(selectedText)) return;
+            if (selectedText.Contains("Any") || selectedText.StartsWith("0.0.0.0") || selectedText.StartsWith("::")) return;
+            string selectedIP = selectedText.Split(' ')[0];
+
+            LoadLocalIPs();
+
+            bool found = false;
+            foreach (var item in combo.Items)
+            {
+                if (item.ToString() == selectedText)
+                {
+                    combo.SelectedItem = item;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found && combo.Items.Count > 0) combo.SelectedIndex = 0;
         }
 
         // 本机网卡IP列表
@@ -631,6 +698,7 @@ namespace NetInfoCheckerX
                 cancellationToken.ThrowIfCancellationRequested();
 
                 // 解析本地IP选择 (修复版)
+                EnsureSelectedNICValid(true);
                 string inputRaw = combo5780LocalEnd.Text.Trim();
 
                 // 1. 剥离掉 IP 后的描述或空格 (例如 "192.168.1.1 (描述)")
@@ -1435,6 +1503,7 @@ namespace NetInfoCheckerX
                 cancellationToken.ThrowIfCancellationRequested();
 
                 // 3. 智能 IP 和 端口计算逻辑
+                EnsureSelectedNICValid(false);
                 string inputRaw = combo3489LocalEnd.Text.Trim();
                 string ipPartString = inputRaw;
                 if (inputRaw.Contains(":"))
