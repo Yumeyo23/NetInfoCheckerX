@@ -26,6 +26,28 @@ namespace NetInfoCheckerX
         {
             InitializeComponent();
         }
+        // 自动刷新网卡：当系统网卡变化导致选中网卡不存在时，刷新列表并恢复默认
+        private void EnsureSelectedNICValid()
+        {
+            string selectedText = comboLocalEnd.Text;
+            if (string.IsNullOrEmpty(selectedText)) return;
+            if (selectedText.Contains("Any") || selectedText.StartsWith("0.0.0.0") || selectedText.StartsWith("::")) return;
+
+            InitNetworkInterfaces();
+
+            bool found = false;
+            foreach (var item in comboLocalEnd.Items)
+            {
+                if (item.ToString() == selectedText)
+                {
+                    comboLocalEnd.SelectedItem = item;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found && comboLocalEnd.Items.Count > 0) comboLocalEnd.SelectedIndex = 0;
+        }
+
         //获取本机网卡的方法
         private void InitNetworkInterfaces()
         {
@@ -292,6 +314,9 @@ namespace NetInfoCheckerX
         //开始按钮方法
         private async void btnOK_Click(object sender, EventArgs e)
         {
+            // 自动刷新网卡（若当前选中的网卡已不存在）
+            EnsureSelectedNICValid();
+
             // --- 1. 状态切换逻辑 ---
             if (_isScanning) { _cts?.Cancel(); return; }
 
