@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
@@ -12,8 +12,6 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-
-//  DNS真选
 
 namespace NetInfoCheckerX
 {
@@ -67,6 +65,28 @@ namespace NetInfoCheckerX
             this.MinimumSize = this.Size;
             timer2.Start();
             Task.Run(() => DNSSelectLoadALL());
+        }
+
+        // 自动刷新网卡：当系统网卡变化导致选中网卡不存在时，刷新列表并恢复默认
+        private void EnsureSelectedNICValid()
+        {
+            string selectedText = comboLocalEnd.Text;
+            if (string.IsNullOrEmpty(selectedText)) return;
+            if (selectedText.Contains("Any") || selectedText.StartsWith("0.0.0.0") || selectedText.StartsWith("::")) return;
+
+            DNSSelectLoadALL();
+
+            bool found = false;
+            foreach (var item in comboLocalEnd.Items)
+            {
+                if (item.ToString() == selectedText)
+                {
+                    comboLocalEnd.SelectedItem = item;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found && comboLocalEnd.Items.Count > 0) comboLocalEnd.SelectedIndex = 0;
         }
 
         private void DNSSelectLoadALL()
@@ -144,6 +164,9 @@ namespace NetInfoCheckerX
         {
             if (!isTesting)
             {
+                // 自动刷新网卡（若当前选中的网卡已不存在）
+                EnsureSelectedNICValid();
+
                 // --- 1. 获取基础参数 ---
                 string tld = comboTLD.Text;
                 if (string.IsNullOrEmpty(tld)) { MessageBox.Show("夢酱，记得填入根域名哦！"); return; }
