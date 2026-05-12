@@ -439,7 +439,7 @@ namespace NetInfoCheckerX
                     AppendColorText("        ❤若指定网卡时频繁意外丢包, 影响判断, 请选\"ICMP兼容模式\"网卡, ", Color.Yellow, true);
                     AppendColorText("          以使用原生Ping更稳定, 但无法识别/指定网卡 (精度1ms)", Color.Yellow, true);
                     AppendColorText("        ❤还有问题，可尝试以管理员运行查询器X后再测❤ ", Color.LightPink, true);
-                    AppendColorText("          ICMP 为无端口测试，最大单包大小为 1472 字节\n", Color.White, true);
+                    AppendColorText("    ICMP 无端口测试，不支持分片, 最大包受本机MTU影响(MTU-28=最大包)\n", Color.White, true);
                     AppendColorText("    ❤ 延迟颜色对照表", Color.LightSkyBlue, true);
                     AppendColorMap(); // 调用色卡生成
                     txtPort.Text = "0";
