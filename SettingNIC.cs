@@ -235,6 +235,16 @@ namespace NetInfoCheckerX
             _ = ApplyNICThemeAsync();
             AutoScaleIPControlsWidth();
             RefreshNICList();
+
+            // 监听主窗体主题切换
+            var mainForm = Application.OpenForms["Form1"];
+            if (mainForm != null)
+            {
+                mainForm.Activated += (s2, e2) =>
+                {
+                    _ = ApplyNICThemeAsync();
+                };
+            }
         }
 
         private void RefreshNICList()
@@ -462,9 +472,71 @@ namespace NetInfoCheckerX
             }
             return null;
         }
-        private void btnRefreshList_Click(object sender, EventArgs e)
+        private void AutoFillSubnetAndGateway()
         {
+            if (checkDHCP.Checked) return;
+
+            string ipText = ipIPV4.Text?.Trim();
+            if (string.IsNullOrEmpty(ipText) || ipText == "0.0.0.0" || ipText == "...") return;
+
+            if (!System.Net.IPAddress.TryParse(ipText, out System.Net.IPAddress ipAddress)) return;
+
+            byte[] bytes = ipAddress.GetAddressBytes();
+            if (bytes.Length != 4) return;
+
+            string mask, gateway;
+
+            if (bytes[0] == 10)
+            {
+                mask = "255.0.0.0";
+                gateway = $"10.{bytes[1]}.{bytes[2]}.1";
+            }
+            else if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
+            {
+                mask = "255.255.0.0";
+                gateway = $"172.{bytes[1]}.0.1";
+            }
+            else if (bytes[0] == 192 && bytes[1] == 168)
+            {
+                mask = "255.255.255.0";
+                gateway = $"192.168.{bytes[2]}.1";
+            }
+            else if (bytes[0] == 169 && bytes[1] == 254)
+            {
+                mask = "255.255.0.0";
+                gateway = "0.0.0.0";
+            }
+            else
+            {
+                mask = "255.255.255.255";
+                gateway = "0.0.0.0";
+            }
+
+            ipMask.Text = mask;
+            ipGateway.Text = gateway;
+        }
+
+        private void ipIPV4_Leave(object sender, EventArgs e)
+        {
+            AutoFillSubnetAndGateway();
+        }
+
+        private async void btnRefreshList_Click(object sender, EventArgs e)
+        {
+            btnRefreshList.Enabled = false;
+            btnRefreshList.Text = "刷新中";
+
+            await Task.Delay(200);
+
             RefreshNICList();
+
+            if (comboNIC.SelectedItem is NetworkInterface nic)
+            {
+                LoadNicInfo(nic);
+            }
+
+            btnRefreshList.Enabled = true;
+            btnRefreshList.Text = "刷新";
         }
 
         private void checkDHCP_CheckedChanged(object sender, EventArgs e)
@@ -554,7 +626,38 @@ namespace NetInfoCheckerX
 
         private async void btnOK_Click(object sender, EventArgs e)
         {
-            if (!(comboNIC.SelectedItem is NetworkInterface nic)) return;
+            // 自动刷新网卡：若当前选中的网卡已不存在
+            if (!(comboNIC.SelectedItem is NetworkInterface nic))
+            {
+                RefreshNICList();
+                if (comboNIC.Items.Count > 0) comboNIC.SelectedIndex = 0;
+                if (!(comboNIC.SelectedItem is NetworkInterface refreshedNic)) return;
+                nic = refreshedNic;
+            }
+            else
+            {
+                // 检查该网卡是否仍然存在并处于Up状态
+                string selectedId = nic.Id;
+                bool stillExists = false;
+                try
+                {
+                    foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+                    {
+                        if (ni.Id == selectedId && ni.OperationalStatus == OperationalStatus.Up)
+                        {
+                            stillExists = true;
+                            break;
+                        }
+                    }
+                }
+                catch { }
+                if (!stillExists)
+                {
+                    RefreshNICList();
+                    if (!(comboNIC.SelectedItem is NetworkInterface refreshedNic)) return;
+                    nic = refreshedNic;
+                }
+            }
 
             // 禁用按钮，防止梦酱点太快导致重复执行
             btnOK.Enabled = false;
