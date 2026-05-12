@@ -56,7 +56,7 @@ namespace NetInfoCheckerX
             InitializeComponent();
         }
 
-        private void btnClientStart_Click(object sender, EventArgs e)
+private void btnClientStart_Click(object sender, EventArgs e)
         {
             // 确保使用绝对路径，防止 CMD 迷路
             string iperfPath = Path.Combine(Application.StartupPath, "iperf3.exe");
@@ -80,23 +80,49 @@ namespace NetInfoCheckerX
 
             string iperfArguments = arguments.ToString();
 
-            // 使用双重引号确保路径中即便有空格也能正常运行
-            string finalCmdArguments = $"/c \"\"{iperfPath}\" {iperfArguments} -f m & set /p=\">>> 测试完成，按回车键关闭\"\"";
+            // 收集本次运行的参数信息，用于在控制台开头显示
+            string direction = chkWay.Checked ? "下载" : "上传";
+            string protocol = chkTCP.Checked ? "TCP" : "UDP";
+            string threads = numThread.Value.ToString();
+            string limit = string.IsNullOrEmpty(txtLimit.Text.Trim()) ? "无" : txtLimit.Text.Trim();
+            string time = numTime.Value.ToString();
+            string serverIp = txtClientIP.Text.Trim();
+            string port = string.IsNullOrEmpty(txtClientPort.Text.Trim()) ? "5201" : txtClientPort.Text.Trim();
+
+            // 创建临时批处理脚本，在 iperf 输出前显示带颜色的参数摘要
+            string tempBat = Path.Combine(Path.GetTempPath(), $"nicx_iperf_{Environment.TickCount}.cmd");
+            string esc = "\x1b";  // ANSI ESC 字符，用于控制台着色（黄色 = 255,255,0）
+            string colorOn = $"{esc}[38;2;255;255;0m";
+            string colorOff = $"{esc}[0m";
+
+            StringBuilder bat = new StringBuilder();
+            bat.AppendLine("@echo off");
+            bat.AppendLine("chcp 65001 >nul 2>&1");
+            bat.AppendLine($"echo {colorOn}^>^>^>本次iperf运行参数：{colorOff}");
+            bat.AppendLine($"echo {colorOn}● 服务器[{serverIp}]  端口[{port}]{colorOff}");
+            bat.AppendLine($"echo {colorOn}方向[{direction}]  协议[{protocol}]  线程[{threads}]  限速[{limit}]Mbps  时长[{time}]秒{colorOff}");
+            bat.AppendLine($"echo {colorOn}……………………………………………………………………………………{colorOff}");
+            bat.AppendLine($"\"{iperfPath}\" {iperfArguments} -f m");
+            bat.AppendLine($"echo {colorOn}……………………………………………………………………………………{colorOff}");
+            bat.AppendLine($"echo {colorOn}^>^>^>测试完毕，按回车键关闭{colorOff}");
+            bat.AppendLine("set /p dummy=");
 
             try
             {
+                File.WriteAllText(tempBat, bat.ToString(), new UTF8Encoding(false));
+
                 ProcessStartInfo startInfo = new ProcessStartInfo
                 {
                     FileName = "cmd.exe",
-                    Arguments = finalCmdArguments,
-                    UseShellExecute = true, // 必须开启以显示黑窗口
-                    WorkingDirectory = Application.StartupPath // 锁定运行目录
+                    Arguments = $"/c \"{tempBat}\"",
+                    UseShellExecute = true,
+                    WorkingDirectory = Application.StartupPath
                 };
 
                 // 使用 using 确保 C# 这边的进程句柄被立即释放
                 using (Process.Start(startInfo)) { }
 
-                // 运行完立刻呼唤“清道夫”
+                // 运行完立刻呼唤"清道夫"
                 FlushMemory();
             }
             catch (Exception ex)
