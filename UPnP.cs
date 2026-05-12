@@ -19,11 +19,14 @@ namespace NetInfoCheckerX
         private int _refreshCountdown = 300;
         private NatDevice _device; // 缓存发现的路由器设备
         private readonly string[] requiredFiles;
+        private bool _suppressNameUpdate = true;
         // 在类成员变量里定义一个限速器
         private SemaphoreSlim _scanSemaphore = new SemaphoreSlim(100);
         // 用于删除确认的逻辑变量
         private bool _isConfirmingDelete = false;
         private DateTime _lastDelClickTime;
+        private bool _isConfirmingDeleteAll = false;
+        private DateTime _lastDelAllClickTime;
 
         // 导入系统底层 API 来读写 INI
         [System.Runtime.InteropServices.DllImport("kernel32")]
@@ -371,7 +374,15 @@ namespace NetInfoCheckerX
         // 创建按钮
         private async void btnCreate_Click(object sender, EventArgs e)
         {
+            // 最先保存客户端IP，因为后续 EnsureSelectedNICValid 会重置 comboCilentIP
+            string savedClientIP = comboCilentIP.Text;
+
             EnsureSelectedNICValid();
+
+            // EnsureSelectedNICValid 会重置 comboCilentIP，立即恢复用户选择
+            _suppressNameUpdate = true;
+            comboCilentIP.Text = savedClientIP;
+            _suppressNameUpdate = false;
 
             // 梦酱要求的描述规范检查
             string pattern = @"^[a-zA-Z0-9\x20-\x7e]+$";
@@ -392,7 +403,7 @@ namespace NetInfoCheckerX
                 {
                     Mapping newMap = new Mapping(
                         radioTCP.Checked ? Protocol.Tcp : Protocol.Udp,
-                        IPAddress.Parse(comboCilentIP.Text),
+                        IPAddress.Parse(savedClientIP),
                         int.Parse(txtClientPort.Text),
                         int.Parse(txtPublicPort.Text),
                         GetLifetimeInSeconds(comboTime.Text),
@@ -402,6 +413,11 @@ namespace NetInfoCheckerX
                     btnCreate.Text = "创建完毕";
                     timer1.Start();
                     await RefreshListInternal();
+
+                    // 刷新列表后恢复客户端IP
+                    _suppressNameUpdate = true;
+                    comboCilentIP.Text = savedClientIP;
+                    _suppressNameUpdate = false;
                 }
             }
             catch (Exception ex)
@@ -511,21 +527,47 @@ namespace NetInfoCheckerX
             }
         }
 
-        // 全量删除逻辑
+        // 全量删除逻辑（双击确认模式）
         private async void btnDelAll_Click(object sender, EventArgs e)
         {
-            var result = MessageBox.Show("删除当前所有映射，点击确定", "警告", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+            if (btnDelAll.Text == "删除中") return;
 
-            if (result != DialogResult.OK)
+            // 第一次点击：进入确认状态
+            if (!_isConfirmingDeleteAll || (DateTime.Now - _lastDelAllClickTime).TotalSeconds > 2)
             {
-                SystemSounds.Beep.Play(); // 用户取消或关闭窗口，发出提示音
+                _isConfirmingDeleteAll = true;
+                _lastDelAllClickTime = DateTime.Now;
+                btnDelAll.Text = "确认全删";
+                btnDelAll.BackColor = Color.Red;
+                btnDelAll.ForeColor = Color.Yellow;
+                btnDelAll.Font = new Font(btnDelAll.Font, FontStyle.Bold);
+
+                await Task.Run(async () =>
+                {
+                    await Task.Delay(2000);
+                    if (_isConfirmingDeleteAll)
+                    {
+                        this.BeginInvoke(new Action(() =>
+                        {
+                            if ((DateTime.Now - _lastDelAllClickTime).TotalSeconds >= 2)
+                            {
+                                _isConfirmingDeleteAll = false;
+                                RestoreDelAllButton();
+                            }
+                        }));
+                    }
+                });
                 return;
             }
 
+            // 第二次点击（2秒内）：执行删除
+            _isConfirmingDeleteAll = false;
+
             try
             {
-                btnDelAll.Enabled = false;
                 btnDelAll.Text = "删除中";
+                btnDelAll.ForeColor = Color.White;
+                ToggleControls(false, btnDelAll);
 
                 var device = await GetNatDevice();
                 if (device == null) return;
@@ -548,11 +590,23 @@ namespace NetInfoCheckerX
                 MessageBox.Show($"本次删除映射 {total} 条，成功 {success} 条，失败 {fail} 条", "清理完毕", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 await RefreshListInternal();
             }
+            catch (Exception ex)
+            {
+                MessageBox.Show("删除出错：" + ex.Message);
+            }
             finally
             {
-                btnDelAll.Enabled = true;
-                btnDelAll.Text = "删除全部";
+                ToggleControls(true);
+                RestoreDelAllButton();
             }
+        }
+
+        private void RestoreDelAllButton()
+        {
+            btnDelAll.Text = "删除全部";
+            btnDelAll.BackColor = Color.FromArgb(60, 60, 60);
+            btnDelAll.ForeColor = Color.White;
+            btnDelAll.Font = new Font(btnDelAll.Font, FontStyle.Bold);
         }
 
         #endregion
@@ -603,7 +657,31 @@ namespace NetInfoCheckerX
             InitIpLists();
             ResetTimer();
             comboTime.SelectedIndex = 0;
+
+            // 绑定映射描述自动生成事件
+            comboCilentIP.SelectedIndexChanged += (s, ea) => UpdateMappingName();
+            txtClientPort.TextChanged += (s, ea) => UpdateMappingName();
+            txtPublicPort.TextChanged += (s, ea) => UpdateMappingName();
+            radioTCP.CheckedChanged += (s, ea) => UpdateMappingName();
+            comboTime.SelectedIndexChanged += (s, ea) => UpdateMappingName();
+
+            _suppressNameUpdate = false;
+            UpdateMappingName();
+
             dataGridView1.Rows.Add("-", "请【刷新网卡】后，", "选择欲查看UPnP映射的网卡，", "再点击【获取映射】", "喵", "-", "-");
+        }
+
+        private void UpdateMappingName()
+        {
+            if (_suppressNameUpdate) return;
+
+            string ip = comboCilentIP.Text;
+            string intPort = txtClientPort.Text;
+            string extPort = txtPublicPort.Text;
+            string protocol = radioTCP.Checked ? "TCP" : "UDP";
+            string time = comboTime.Text;
+
+            txtName.Text = $"NICX_{ip}_{intPort}_{extPort}_{protocol}_{time}";
         }
 
         // 自动刷新网卡：当系统网卡变化导致选中网卡不存在时，刷新列表并恢复默认
@@ -629,6 +707,8 @@ namespace NetInfoCheckerX
 
         private void InitIpLists()
         {
+            _suppressNameUpdate = true;
+
             comboNIC.Items.Clear();
             comboCilentIP.Items.Clear();
             var interfaces = NetworkInterface.GetAllNetworkInterfaces()
@@ -647,6 +727,8 @@ namespace NetInfoCheckerX
                 }
             }
             if (comboNIC.Items.Count > 0) { comboNIC.SelectedIndex = 0; comboCilentIP.SelectedIndex = 0; }
+
+            _suppressNameUpdate = false;
         }
 
         private async void timer1_Tick(object sender, EventArgs e)
