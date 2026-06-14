@@ -27,6 +27,7 @@ namespace NetInfoCheckerX
         public IPEndPoint LocalEndPoint { get; set; }   // 我的内网地址
         public IPEndPoint ChangedEndPoint { get; set; } // 服务器告诉我的备用地址
         public IPEndPoint ResponseEndPoint { get; set; } // 实际响应来源地址
+        public string ErrorMessage { get; set; }        // 异常/错误信息（非超时类错误）
     }
 
     public class StunClient
@@ -105,7 +106,7 @@ namespace NetInfoCheckerX
                 byte[] receiveBuffer = new byte[1024];
                 DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
 
-                // 同一个 Socket 会收到历史包：必须循环直到拿到“事务ID匹配”的响应
+                // 同一个 Socket 会收到历史包：必须循环直到拿到"事务ID匹配"的响应
                 while (DateTime.UtcNow < deadline)
                 {
                     int remainingMs = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
@@ -138,10 +139,15 @@ namespace NetInfoCheckerX
                 Console.WriteLine($"[STUN] 请求超时: {serverEndpoint}");
                 return null; // 超时表示无响应
             }
+            catch (SocketException sex)
+            {
+                Console.WriteLine($"[STUN] Socket错误 [{sex.SocketErrorCode}]: {sex.Message} → {serverEndpoint}");
+                return new StunResult { ErrorMessage = sex.Message };
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"[STUN] 请求异常: {ex.Message}");
-                return null;
+                return new StunResult { ErrorMessage = ex.Message };
             }
         }
 
@@ -192,7 +198,24 @@ namespace NetInfoCheckerX
                     int len = socket.ReceiveFrom(receiveBuffer, ref senderRemote);
                     Console.WriteLine($"[STUN-3489] 收到来自 {senderRemote} 的响应，长度: {len}");
 
-                    StunResult result = ParseRFC3489Response(receiveBuffer, len, transactionId);
+                    StunResult result = null;
+                    if (len >= 20)
+                    {
+                        // 兼容 RFC5389 格式响应：现代 STUN 服务器可能以 RFC5389 格式回复 RFC3489 请求
+                        uint respCookie = (uint)((receiveBuffer[4] << 24) | (receiveBuffer[5] << 16) | (receiveBuffer[6] << 8) | receiveBuffer[7]);
+                        if (respCookie == 0x2112A442)
+                        {
+                            // RFC5389 格式响应：Magic Cookie 存在，比较 12 字节事务 ID
+                            byte[] txId12 = new byte[12];
+                            Buffer.BlockCopy(transactionId, 4, txId12, 0, 12);
+                            result = ParseResponse(receiveBuffer, len, txId12);
+                        }
+                        else
+                        {
+                            // RFC3489 格式响应：无 Magic Cookie，比较完整 16 字节事务 ID
+                            result = ParseRFC3489Response(receiveBuffer, len, transactionId);
+                        }
+                    }
                     if (result != null)
                     {
                         result.ResponseEndPoint = senderRemote as IPEndPoint;
@@ -211,10 +234,15 @@ namespace NetInfoCheckerX
                 Console.WriteLine($"[STUN-3489] 请求超时: {serverEndpoint}");
                 return null;
             }
+            catch (SocketException sex)
+            {
+                Console.WriteLine($"[STUN-3489] Socket错误 [{sex.SocketErrorCode}]: {sex.Message} → {serverEndpoint}");
+                return new StunResult { ErrorMessage = sex.Message };
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"[STUN-3489] 请求异常: {ex.Message}");
-                return null;
+                return new StunResult { ErrorMessage = ex.Message };
             }
         }
 
@@ -344,7 +372,9 @@ namespace NetInfoCheckerX
 
                     IPEndPoint ep = new IPEndPoint(ipAddress, port);
 
-                    if (attrType == AttributeMappedAddress || attrType == AttributeXorMappedAddress)
+                    if (attrType == AttributeXorMappedAddress)
+                        result.PublicEndPoint = ep;
+                    else if (attrType == AttributeMappedAddress && result.PublicEndPoint == null)
                         result.PublicEndPoint = ep;
                     else if (attrType == AttributeChangedAddress || attrType == AttributeOtherAddress)
                         result.ChangedEndPoint = ep;
@@ -592,10 +622,15 @@ namespace NetInfoCheckerX
                 }
                 return result;
             }
+            catch (SocketException sex)
+            {
+                Console.WriteLine($"[TCP] Socket错误 [{sex.SocketErrorCode}]: {sex.Message} → {serverEndpoint}");
+                return new StunResult { ErrorMessage = sex.Message };
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"[TCP] 异常: {ex.Message}");
-                return null;
+                return new StunResult { ErrorMessage = ex.Message };
             }
             finally
             {
@@ -733,10 +768,15 @@ namespace NetInfoCheckerX
                 }
                 return result;
             }
+            catch (SocketException sex)
+            {
+                Console.WriteLine($"[TLS] Socket错误 [{sex.SocketErrorCode}]: {sex.Message} → {serverEndpoint}");
+                return new StunResult { ErrorMessage = sex.Message };
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"[TLS] 异常: {ex.Message}");
-                return null;
+                return new StunResult { ErrorMessage = ex.Message };
             }
             finally
             {
