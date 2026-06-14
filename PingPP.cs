@@ -2,10 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Media;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -21,31 +24,91 @@ namespace NetInfoCheckerX
             InitializeComponent();
         }
 
-        // 定义统计用的变量
         double minDelay = 9999, maxDelay = 0, totalDelay = 0;
         int successCount = 0, lossCount = 0;
-        // 增加记录序号的变量
         int minCountIndex = 0, maxCountIndex = 0;
-        // 定义全局的ICMP序号，初始值为0
         private ushort _globalIcmpSequence = 0;
 
         private CancellationTokenSource _cts;
-        private bool isRunning = false; // 记录当前是不是正在测试
-        private bool isSettingsPrinted = false; // 增加一个开关，保证每次测试只打印一次
+        private bool isRunning = false;
+        private bool isSettingsPrinted = false;
+        private readonly Random _random = new Random();
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern int WritePrivateProfileString(string section, string key, string value, string filePath);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetPrivateProfileString(string section, string key, string defaultValue,
+            StringBuilder buffer, int size, string filePath);
+        private string IniPath => Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
+        private const string IniSection = "PingPP";
+
+        private void SaveSettings()
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(comboTarget.Text))
+                    WritePrivateProfileString(IniSection, "Target", comboTarget.Text, IniPath);
+                WritePrivateProfileString(IniSection, "MaxDelay", txtMaxDelay.Text, IniPath);
+                WritePrivateProfileString(IniSection, "Package", txtPackage.Text, IniPath);
+                WritePrivateProfileString(IniSection, "Port", txtPort.Text, IniPath);
+                string proto = radioICMP.Checked ? "ICMP" : (radioTCP.Checked ? "TCP" : "UDP");
+                WritePrivateProfileString(IniSection, "Protocol", proto, IniPath);
+            }
+            catch { }
+        }
+
+        private void LoadSettings()
+        {
+            try
+            {
+                var sb = new StringBuilder(256);
+                GetPrivateProfileString(IniSection, "Target", "", sb, sb.Capacity, IniPath);
+                string target = sb.ToString();
+                if (!string.IsNullOrEmpty(target) && comboTarget.Items.Count > 0)
+                {
+                    int idx = -1;
+                    for (int i = 0; i < comboTarget.Items.Count; i++)
+                        if (comboTarget.Items[i].ToString() == target) { idx = i; break; }
+                    if (idx >= 0) comboTarget.SelectedIndex = idx;
+                    else comboTarget.Text = target;
+                }
+                string val;
+                GetPrivateProfileString(IniSection, "MaxDelay", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtMaxDelay.Text = val;
+                GetPrivateProfileString(IniSection, "Package", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtPackage.Text = val;
+                GetPrivateProfileString(IniSection, "Port", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtPort.Text = val;
+                GetPrivateProfileString(IniSection, "Protocol", "", sb, sb.Capacity, IniPath);
+                string proto = sb.ToString();
+                if (proto == "TCP") radioTCP.Checked = true;
+                else if (proto == "UDP") radioUDP.Checked = true;
+                else if (proto == "ICMP") radioICMP.Checked = true;
+            }
+            catch { }
+        }
+
+        private void FillRandomBytes(byte[] buffer)
+        {
+            lock (_random)
+            {
+                _random.NextBytes(buffer);
+            }
+        }
 
         private void UpdateDelay(double rtt)
         {
-            int currentTotal = successCount + lossCount; // 获取当前是第几次
+            int currentTotal = successCount + lossCount;
 
             if (rtt < minDelay)
             {
                 minDelay = rtt;
-                minCountIndex = currentTotal; // 记下最小值的序号
+                minCountIndex = currentTotal;
             }
             if (rtt > maxDelay)
             {
                 maxDelay = rtt;
-                maxCountIndex = currentTotal; // 记下最大值的序号
+                maxCountIndex = currentTotal;
             }
             totalDelay += rtt;
         }
@@ -54,21 +117,18 @@ namespace NetInfoCheckerX
         {
             minDelay = 9999; maxDelay = 0; totalDelay = 0;
             successCount = 0; lossCount = 0;
-            minCountIndex = 0; maxCountIndex = 0; // 重置序号
-            isSettingsPrinted = false; // 准备好下次测试打印
+            minCountIndex = 0; maxCountIndex = 0;
+            isSettingsPrinted = false;
             UpdateStats();
         }
 
-        // 获取用户选中的本地出口端点
         private IPEndPoint GetLocalEndPoint()
         {
             string selected = comboLocalEnd.Text;
 
-            // Any 逻辑保持不变
             if (selected.Contains("0.0.0.0")) return new IPEndPoint(IPAddress.Any, 0);
             if (selected.Contains("::")) return new IPEndPoint(IPAddress.IPv6Any, 0);
 
-            // 如果字符串里有空格（说明后面跟着网卡名），只取前面的IP部分
             if (selected.Contains(" "))
             {
                 selected = selected.Split(' ')[0];
@@ -82,7 +142,6 @@ namespace NetInfoCheckerX
             return new IPEndPoint(IPAddress.Any, 0);
         }
 
-        //UDP Ping方法
         private async Task ExecuteUdpPing(string targetIp, int port, int timeout, CancellationToken token)
         {
             IPAddress targetAddr = IPAddress.Parse(targetIp);
@@ -92,76 +151,57 @@ namespace NetInfoCheckerX
             {
                 try
                 {
-                    // 绑定到用户选择的本地端点（可能是 Any）
                     socket.Bind(GetLocalEndPoint());
-                    // 设置底层超时，作为最后的防线
                     socket.ReceiveTimeout = timeout;
 
-                    // 如果用户选择的是 Any (0.0.0.0 / ::)，我们想知道实际系统将使用哪一个本地地址用于发包
-                    // 于是尝试通过一个临时 UDP connect 来获取真实的出口地址（不改变当前 socket 的绑定）
                     try
                     {
                         var localEp = (IPEndPoint)socket.LocalEndPoint;
                         if (localEp != null && (localEp.Address.Equals(IPAddress.Any) || localEp.Address.Equals(IPAddress.IPv6Any)))
                         {
-                            string outbound = GetActualLocalIp(targetIp); // 换成这行喵！
+                            string outbound = GetActualLocalIp(targetIp);
                             if (outbound != null)
                             {
-                                // 更新界面（如果当前下拉选中 Any，则替换为实际使用的 IP）
-                                //UpdateRealLocalIp(new IPEndPoint(outbound, 0));
-                                // 重点：在这里就直接打印设置！不要等到收到回包再打印
                                 PrintTestSettings(outbound.ToString());
                             }
                         }
                     }
                     catch { }
 
-                    // 1. 准备数据包
                     byte[] sendData;
-                    // 如果模拟DNS，构造一个最小DNS查询，每次使用随机域名避免缓存
                     if (port == 53)
                     {
-                        // 生成随机域名，避免DNS缓存
                         string randomDomain = GenerateRandomDomain();
                         sendData = BuildSimpleDnsQuery(randomDomain);
-                        // 记录使用的域名用于调试
                         Debug.WriteLine($"[{DateTime.Now:HH:mm:ss}] DNS查询域名: {randomDomain}");
                     }
-                    // 模拟NTP服务器同步时间
                     else if (port == 123)
                     {
                         sendData = new byte[48];
                         sendData[0] = 0x1B;
                     }
-                    //模拟STUN服务器回显IP
                     else if (port == 3478 || port == 3489 || port == 19302)
                     {
-                        // 使用最标准的 STUN 结构
                         sendData = new byte[20];
 
-                        // 1. Message Type: 0x0001 (Binding Request)
                         sendData[0] = 0x00;
                         sendData[1] = 0x01;
 
-                        // 2. Message Length: 0x0000 (没有附加属性)
                         sendData[2] = 0x00;
                         sendData[3] = 0x00;
 
-                        // 3. Magic Cookie: 0x2112A442
                         sendData[4] = 0x21;
                         sendData[5] = 0x12;
                         sendData[6] = 0xA4;
                         sendData[7] = 0x42;
 
-                        // 4. Transaction ID: 12字节。
-                        // 把当前时间戳塞进去，保证每次请求都不一样
                         byte[] ts = BitConverter.GetBytes(DateTime.Now.Ticks);
                         Array.Copy(ts, 0, sendData, 8, Math.Min(ts.Length, 12));
                     }
                     else
                     {
                         sendData = new byte[int.TryParse(txtPackage.Text, out int b) ? b : 32];
-                        new Random().NextBytes(sendData);
+                        FillRandomBytes(sendData);
                     }
 
                     byte[] receiveBuffer = new byte[4096];
@@ -170,13 +210,11 @@ namespace NetInfoCheckerX
                     string timeStr = DateTime.Now.ToString("HH:mm:ss");
                     var sw = new Stopwatch();
 
-                    // 预设接收任务
                     var receiveTask = Task.Factory.FromAsync(
                         (callback, state) => socket.BeginReceiveFrom(receiveBuffer, 0, receiveBuffer.Length, SocketFlags.None, ref receiveEP, callback, state),
                         (ar) => socket.EndReceiveFrom(ar, ref receiveEP),
                         null);
 
-                    // 计时并发送
                     sw.Start();
                     socket.SendTo(sendData, remoteEP);
 
@@ -193,11 +231,9 @@ namespace NetInfoCheckerX
                         successCount++;
                         UpdateDelay(rtt);
 
-                        // 获取真实的本地出口 IP
                         string localIpToPrint = "系统默认";
                         try
                         {
-                            // 从 socket 获取系统实际分配的本地端点
                             var localEp = (IPEndPoint)socket.LocalEndPoint;
                             if (localEp != null)
                             {
@@ -208,7 +244,6 @@ namespace NetInfoCheckerX
 
                         PrintTestSettings(localIpToPrint);
 
-                        // 3. 获取回包的目标 IP
                         string remoteIp = ((IPEndPoint)receiveEP).Address.ToString();
 
                         Color rowColor = GetRttColor(rtt);
@@ -218,7 +253,6 @@ namespace NetInfoCheckerX
                     }
                     else
                     {
-                        // 超时或取消
                         lossCount++;
                         AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
                         AppendColorText($"UDP失败: 请求超时({timeout}ms)", Color.Red, true);
@@ -237,27 +271,20 @@ namespace NetInfoCheckerX
             }
         }
 
-        // 生成随机域名
         private string GenerateRandomDomain()
         {
-            // 创建随机数生成器，使用时间相关的种子确保每次不同
             Random random = new Random(Guid.NewGuid().GetHashCode());
 
-            // 常见TLD列表
-            // string[] tlds = { ".ipleak.net" ".dns4.browserleaks.org" ".dns6.browserleaks.org" ".ipv4.surfsharkdns.com" ".ipv6.surfsharkdns.com"   };
             string[] tlds = { ".nstool.netease.com" };
 
-            // 生成随机长度的域名主体
             int nameLength = random.Next(4, 16);
             string domainName = GenerateRandomString(nameLength, random);
 
-            // 选择随机TLD
             string tld = tlds[random.Next(tlds.Length)];
 
             return domainName + tld;
         }
 
-        // 生成随机字符串
         private string GenerateRandomString(int length, Random random)
         {
             const string chars = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -268,30 +295,25 @@ namespace NetInfoCheckerX
                 result[i] = chars[random.Next(chars.Length)];
             }
 
-            // 确保不以数字开头（符合域名规范）
             if (char.IsDigit(result[0]))
             {
-                // 如果以数字开头，替换为字母
-                result[0] = chars[random.Next(26)]; // 只取字母部分
+                result[0] = chars[random.Next(26)];
             }
 
             return new string(result);
         }
 
-        // 修改BuildSimpleDnsQuery方法，使其接受域名参数
         private byte[] BuildSimpleDnsQuery(string domain)
         {
-            // DNS头部：事务ID(2字节) + 标志(2字节) + 问题计数(2字节) + 回答/权威/附加记录计数(各2字节)
             byte[] header = new byte[] {
-        0x00, 0x01,             // 事务ID - 随机生成（可以固定为0x0001）
-        0x01, 0x00,             // 标志：标准查询，递归期望
-        0x00, 0x01,             // 问题计数：1
-        0x00, 0x00,             // 回答记录计数：0
-        0x00, 0x00,             // 权威记录计数：0
-        0x00, 0x00              // 附加记录计数：0
+        0x00, 0x01,
+        0x01, 0x00,
+        0x00, 0x01,
+        0x00, 0x00,
+        0x00, 0x00,
+        0x00, 0x00
     };
 
-            // 生成随机的Transaction ID（可选，但更符合实际情况）
             Random rand = new Random();
             byte[] transId = BitConverter.GetBytes((ushort)rand.Next(0, 65535));
             if (BitConverter.IsLittleEndian)
@@ -300,25 +322,21 @@ namespace NetInfoCheckerX
             header[0] = transId[0];
             header[1] = transId[1];
 
-            // 编码域名：每个标签前加长度字节
             List<byte> queryBytes = new List<byte>();
             string[] labels = domain.Split('.');
 
             foreach (string label in labels)
             {
-                queryBytes.Add((byte)label.Length); // 标签长度
-                queryBytes.AddRange(System.Text.Encoding.ASCII.GetBytes(label)); // 标签内容
+                queryBytes.Add((byte)label.Length);
+                queryBytes.AddRange(System.Text.Encoding.ASCII.GetBytes(label));
             }
 
-            queryBytes.Add(0x00); // 域名结束标记
+            queryBytes.Add(0x00);
 
-            // 查询类型：A记录 (0x0001)
             queryBytes.AddRange(new byte[] { 0x00, 0x01 });
 
-            // 查询类：IN (0x0001)
             queryBytes.AddRange(new byte[] { 0x00, 0x01 });
 
-            // 合并头部和查询部分
             byte[] fullQuery = new byte[header.Length + queryBytes.Count];
             Buffer.BlockCopy(header, 0, fullQuery, 0, header.Length);
             Buffer.BlockCopy(queryBytes.ToArray(), 0, fullQuery, header.Length, queryBytes.Count);
@@ -326,10 +344,8 @@ namespace NetInfoCheckerX
             return fullQuery;
         }
 
-        //TCP Ping方法
         private async Task ExecuteTcpPing(string targetIp, int port, int timeout, CancellationToken token)
         {
-            //预先解析好IP地址
             IPAddress ipAddr = IPAddress.Parse(targetIp);
             IPEndPoint remoteEP = new IPEndPoint(ipAddr, port);
 
@@ -338,19 +354,15 @@ namespace NetInfoCheckerX
             {
                 socket = new Socket(ipAddr.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
 
-                // 保持优化设置
                 socket.LingerState = new LingerOption(false, 0);
                 socket.ExclusiveAddressUse = false;
-                socket.NoDelay = true; // 禁用Nagle算法，让发包更干脆
+                socket.NoDelay = true;
 
                 socket.Bind(GetLocalEndPoint());
                 string timeStr = DateTime.Now.ToString("HH:mm:ss");
 
-                //精确计时器
                 var sw = new Stopwatch();
 
-                // 使用 .NET 4.7.2 支持的 Task.Factory.FromAsync，这比 Task.Run 更直接
-                // 它会直接调用底层的 I/O 完成端口，不经过线程池排队
                 var connectTask = Task.Factory.FromAsync(
                     socket.BeginConnect,
                     socket.EndConnect,
@@ -360,7 +372,6 @@ namespace NetInfoCheckerX
                 int currentTotal = successCount + lossCount + 1;
                 sw.Start();
 
-                // 等待连接完成、超时或被用户取消
                 var completedTask = await Task.WhenAny(connectTask, Task.Delay(timeout, token));
 
                 if (completedTask == connectTask && socket.Connected)
@@ -372,14 +383,12 @@ namespace NetInfoCheckerX
                     successCount++;
                     UpdateDelay(rtt);
 
-                    // 更新 UI 逻辑
                     string actualIp = ((IPEndPoint)socket.LocalEndPoint).Address.ToString();
                     PrintTestSettings(actualIp);
 
                     Color rowColor = GetRttColor(rtt);
                     AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
 
-                    // ✨ 梦酱看这里：判断如果是 IPv6，就给 targetIp 套上中括号
                     string displayTarget = ipAddr.AddressFamily == AddressFamily.InterNetworkV6
                         ? $"[{targetIp}]:{port}"
                         : $"{targetIp}:{port}";
@@ -388,7 +397,6 @@ namespace NetInfoCheckerX
                 }
                 else
                 {
-                    // 处理失败逻辑
                     lossCount++;
                     AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
                     AppendColorText($"TCP失败: 连接超时({timeout}ms)", Color.Red, true);
@@ -405,7 +413,6 @@ namespace NetInfoCheckerX
             }
             finally
             {
-                // 彻底释放 Socket 资源
                 if (socket != null)
                 {
                     try { socket.Close(0); socket.Dispose(); } catch { }
@@ -414,7 +421,6 @@ namespace NetInfoCheckerX
             }
         }
 
-        // 切换协议提示
         private void RadioProtocol_CheckedChanged(object sender, EventArgs e)
         {
             UpdateProtocolUI(sender, true);
@@ -426,7 +432,7 @@ namespace NetInfoCheckerX
             if (autoClear)
             {
                 richTextBox1.Clear();
-                ResetStats(); //切换协议时顺便把标签还原
+                ResetStats();
             }
 
             if (radioICMP.Checked)
@@ -441,7 +447,7 @@ namespace NetInfoCheckerX
                     AppendColorText("        ❤还有问题，可尝试以管理员运行查询器X后再测❤ ", Color.LightPink, true);
                     AppendColorText("    ICMP 无端口测试，不支持分片, 最大包受本机MTU影响(MTU-28=最大包)\n", Color.White, true);
                     AppendColorText("    ❤ 延迟颜色对照表", Color.LightSkyBlue, true);
-                    AppendColorMap(); // 调用色卡生成
+                    AppendColorMap();
                     txtPort.Text = "0";
                 }
                 comboLocalEnd.Enabled = true;
@@ -461,7 +467,7 @@ namespace NetInfoCheckerX
                     AppendColorText(" \"发起请求-收到回复\" ", Color.LightPink, false);
                     AppendColorText("整个过程的真实延迟\n\n", Color.Yellow, false);
                     AppendColorText("    ❤ 延迟颜色对照表", Color.LightSkyBlue, true);
-                    AppendColorMap(); // 调用色卡生成
+                    AppendColorMap();
                     txtPort.Text = "53";
                 }
                 comboLocalEnd.Enabled = true;
@@ -477,7 +483,7 @@ namespace NetInfoCheckerX
                     AppendColorText("    通过 🔰 TcpClient 🔰 尝试握手连接；包大小无影响延迟已禁用设置 💦", Color.White, true);
                     AppendColorText("      ❤ 通常用于探测 🔥 80/443 🔥 等端口是否开放\n", Color.White, true);
                     AppendColorText("    ❤ 延迟颜色对照表", Color.LightSkyBlue, true);
-                    AppendColorMap(); // 调用色卡生成
+                    AppendColorMap();
                     txtPort.Text = "80";
                 }
                 comboLocalEnd.Enabled = true;
@@ -488,8 +494,8 @@ namespace NetInfoCheckerX
 
         private void PingPP_Load(object sender, EventArgs e)
         {
+            this.MinimumSize = this.Size;
             AppendColorText("✧ 正在检查系统环境，请稍候 ✧\n", Color.White, true);
-            // 字体优化逻辑
             using (Graphics g = this.CreateGraphics())
             {
                 if (g.DpiX > 96)
@@ -497,19 +503,14 @@ namespace NetInfoCheckerX
                     Font modernFont = new Font("Cascadia Mono", 9.5F, FontStyle.Regular);
                     richTextBox1.Font = modernFont;
                 }
-                else
-                {
-                    // 100%缩放保持默认或指定为新宋体
-                    //richTextBox1.Font = new Font("NSimSun", 10.5F, FontStyle.Regular);
-                }
             }
 
-            // 默认选中ICMP
             RadioProtocol_CheckedChanged(radioICMP, null);
             Task.Run(() => PingPPLoadAll());
+            LoadSettings();
+            CloudControl.UsedTimesCounter("PingPP");
         }
 
-        // 自动刷新网卡：当系统网卡变化导致选中网卡不存在时，刷新列表并恢复默认
         private void EnsureSelectedNICValid()
         {
             string selectedText = comboLocalEnd.Text;
@@ -541,52 +542,11 @@ namespace NetInfoCheckerX
             comboLocalEnd.Items.Add("系统默认 (ICMP兼容模式)");
             if (comboLocalEnd.Items.Count > 0) comboLocalEnd.SelectedIndex = 0;
 
-            //获取本机所有网卡
             try
             {
-                foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+                foreach (NicAddressInfo nicAddress in NicHelper.GetUsableIPAddresses())
                 {
-                    // 状态过滤：只看正在运行的
-                    if (ni.OperationalStatus != OperationalStatus.Up) continue;
-
-                    // 关键字黑名单：排除常见的纯虚拟网卡环境
-                    string desc = ni.Description.ToLower();
-                    if (desc.Contains("vmware") || desc.Contains("virtual") || desc.Contains("vbox") || desc.Contains("hyper-v") || desc.Contains("wsl") || desc.Contains("pseudo") || desc.Contains("tap") || desc.Contains("tun") || desc.Contains("loopback") || desc.Contains("vpn") || desc.Contains("teredo"))
-                        continue;
-
-                    // 获取 IP 属性
-                    var ipProps = ni.GetIPProperties();
-
-                    // 保留物理网卡+有网关的虚拟网卡
-                    bool isPhysical = (ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet ||
-                                       ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211);
-                    bool hasGateway = ipProps.GatewayAddresses.Count > 0;
-
-                    if (!isPhysical && !hasGateway) continue;
-
-                    // 遍历该网卡下的所有 IP
-                    foreach (UnicastIPAddressInformation ipInfo in ipProps.UnicastAddresses)
-                    {
-                        IPAddress ip = ipInfo.Address;
-
-                        // 排除回环地址、链路本地地址
-                        if (IPAddress.IsLoopback(ip)) continue;
-                        if (ip.IsIPv6LinkLocal) continue;
-                        if (ip.AddressFamily == AddressFamily.InterNetwork)
-                        {
-                            byte[] bytes = ip.GetAddressBytes();
-                            if (bytes[0] == 169 && bytes[1] == 254) continue;
-                        }
-
-                        // 去掉IPv6的%ID
-                        string ipStr = ip.ToString();
-                        if (ipStr.Contains("%")) ipStr = ipStr.Split('%')[0];
-
-                        //显示IP的同时也显示网卡名称
-                        string displayName = string.Format("{0} ({1})", ipStr, ni.Name);
-
-                        comboLocalEnd.Items.Add(displayName);
-                    }
+                    comboLocalEnd.Items.Add(nicAddress.DisplayText);
                 }
             }
             catch (Exception ex)
@@ -594,178 +554,63 @@ namespace NetInfoCheckerX
                 MessageBox.Show("获取网卡列表失败: " + ex.Message);
             }
 
-            // 后台预热逻辑
-            _ = Task.Run(async () => await WarmUpAllProtocols());
-            // 开发调试服务器列表
-            CloudControl.LoadTraceServers(comboTarget);
+            _ = Task.Run(async () => await WarmUpAsync());
+            CloudControl.LoadPingServers(comboTarget);
             CloudControl.ApplyDevTitle(this);
         }
 
-        // 新增：全局预热方法
-        private async Task WarmUpAllProtocols()
+        private async Task WarmUpAsync()
         {
             try
             {
-                // 阶段1：JIT预热 - 让.NET提前编译所有可能用到的代码
-                await Task.Run(() => PreJitWarmUp());
-
-                // 阶段2：网络预热 - 分别预热三种协议
-                await Task.WhenAll(
-                    WarmUpIcmpProtocol(),
-                    WarmUpTcpProtocol(),
-                    WarmUpUdpProtocol()
-                );
-
-                // 阶段3：让系统稳定一下
-                await Task.Delay(200);
-            }
-            catch { /* 静默处理，不影响用户 */ }
-        }
-        // 新增：JIT预热 - 提前编译所有可能的方法
-        private void PreJitWarmUp()
-        {
-            try
-            {
-                // 1. 预热所有统计方法
-                ResetStats();
-                UpdateStats();
-
-                // 2. 预热颜色方法
-                GetRttColor(0);
-                GetRttColor(100);
-                GetRttColor(300);
-
-                // 4. 预热网络地址解析
+                // 1. JIT 预热：触碰所有热路径类型和方法，触发即时编译
+                GetRttColor(0); GetRttColor(100); GetRttColor(300);
                 IPAddress.Parse("127.0.0.1");
-                IPAddress.Parse("::1");
-
-                // 5. 预热Socket对象创建
-                var socket1 = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-                var socket2 = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-                socket1.Close();
-                socket2.Close();
-
-                // 6. 预热Ping对象
-                using (var ping = new Ping())
-                {
-                    // 预热同步方法
-                }
-
-                // 7. 预热DNS解析
                 Dns.GetHostAddresses("localhost");
+                var sw = Stopwatch.StartNew(); sw.Stop();
 
-                // 8. 预热Stopwatch（高频使用）
-                var sw = Stopwatch.StartNew();
-                sw.Stop();
-            }
-            catch { }
-        }
-        // 新增：ICMP协议预热
-        private async Task WarmUpIcmpProtocol()
-        {
-            try
-            {
+                // 2. ICMP：一次本地回环 ping，初始化 Ping 类内部句柄
                 using (var ping = new Ping())
                 {
-                    // 预热本地回环，快速完成
-                    var task = ping.SendPingAsync("127.0.0.1", 100);
-                    // 等待但不超过200ms
-                    if (await Task.WhenAny(task, Task.Delay(200)) == task)
-                    {
-                        await task;
-                    }
+                    var t = ping.SendPingAsync("127.0.0.1", 100);
+                    await Task.WhenAny(t, Task.Delay(200));
+                }
 
-                    // 额外预热一次IPv6
-                    task = ping.SendPingAsync("::1", 100);
-                    if (await Task.WhenAny(task, Task.Delay(200)) == task)
-                    {
-                        await task;
-                    }
+                // 3. TCP：一次本地连接（端口关着，秒拒），预热 TCP socket + Connect 路径
+                using (var sock = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp))
+                {
+                    sock.ReceiveTimeout = 10; sock.SendTimeout = 10;
+                    try { sock.Connect("127.0.0.1", 65500); } catch { }
+                }
+
+                // 4. UDP：一次本地发包，预热 UDP socket + SendTo 路径
+                using (var sock = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+                {
+                    try { sock.SendTo(new byte[1], new IPEndPoint(IPAddress.Loopback, 53)); } catch { }
                 }
             }
             catch { }
         }
 
-        // 新增：TCP协议预热
-        private async Task WarmUpTcpProtocol()
+        private static void PreJitExecuteMethods()
         {
             try
             {
-                // 预热常用的几个地址族
-                var addresses = new[] { "127.0.0.1", "::1" };
-
-                foreach (var addr in addresses)
+                var type = typeof(PingPP);
+                var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                var methods = new[] { "ExecuteIcmpPing", "ExecuteNativeIcmpPing", "ExecuteTcpPing", "ExecuteUdpPing" };
+                foreach (var name in methods)
                 {
-                    using (var socket = new Socket(IPAddress.Parse(addr).AddressFamily,
-                                                  SocketType.Stream, ProtocolType.Tcp))
-                    {
-                        // 设置超时非常短，只是为了触发JIT编译
-                        socket.ReceiveTimeout = 10;
-                        socket.SendTimeout = 10;
-
-                        try
-                        {
-                            // 尝试连接一个不存在的高端口（应该会快速失败）
-                            var connectTask = Task.Run(() => socket.Connect(addr, 65500));
-                            if (await Task.WhenAny(connectTask, Task.Delay(50)) == connectTask)
-                            {
-                                await connectTask;
-                            }
-                        }
-                        catch { }
-
-                        // 确保Socket被正确关闭
-                        try
-                        {
-                            if (socket.Connected)
-                            {
-                                socket.Shutdown(SocketShutdown.Both);
-                            }
-                        }
-                        catch { }
-                    }
+                    var m = type.GetMethod(name, flags);
+                    if (m != null) RuntimeHelpers.PrepareMethod(m.MethodHandle);
                 }
-            }
-            catch { }
-        }
 
-        // 新增：UDP协议预热
-        private async Task WarmUpUdpProtocol()
-        {
-            try
-            {
-                var addresses = new[] { "127.0.0.1", "::1" };
-
-                foreach (var addr in addresses)
+                // 同时预热内部辅助方法
+                var helpers = new[] { "GetLocalEndPoint", "GetRttColor", "UpdateStats" };
+                foreach (var name in helpers)
                 {
-                    using (var socket = new Socket(IPAddress.Parse(addr).AddressFamily,
-                                                  SocketType.Dgram, ProtocolType.Udp))
-                    {
-                        // 绑定到随机端口
-                        socket.Bind(new IPEndPoint(IPAddress.Any, 0));
-
-                        // 发送一个小包到本地（通常会被丢弃）
-                        var remoteEP = new IPEndPoint(IPAddress.Parse(addr), 53);
-                        byte[] buffer = new byte[1];
-                        socket.SendTo(buffer, remoteEP);
-
-                        // 尝试接收（应该会超时）
-                        try
-                        {
-                            socket.ReceiveTimeout = 10;
-                            var receiveTask = Task.Run(() =>
-                            {
-                                byte[] recvBuffer = new byte[1024];
-                                return socket.Receive(recvBuffer);
-                            });
-
-                            if (await Task.WhenAny(receiveTask, Task.Delay(20)) == receiveTask)
-                            {
-                                await receiveTask;
-                            }
-                        }
-                        catch { }
-                    }
+                    var m = type.GetMethod(name, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    if (m != null) RuntimeHelpers.PrepareMethod(m.MethodHandle);
                 }
             }
             catch { }
@@ -773,19 +618,18 @@ namespace NetInfoCheckerX
 
         private void PingPP_FormClosing(object sender, FormClosingEventArgs e)
         {
+            SaveSettings();
             if (isRunning)
             {
-                _cts?.Cancel(); // 停止测试信号
+                _cts?.Cancel();
                 isRunning = false;
             }
+            _cts?.Dispose();
+            _cts = null;
         }
 
         private async void btnStart_Click(object sender, EventArgs e)
         {
-            // 自动刷新网卡（若当前选中的网卡已不存在）
-            EnsureSelectedNICValid();
-
-            // 修改停止按钮逻辑
             if (isRunning)
             {
                 AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
@@ -796,38 +640,38 @@ namespace NetInfoCheckerX
                 return;
             }
 
-            // 1. 先把输入全部转为小写（方便后面匹配协议头）并去除前后空格
+            EnsureSelectedNICValid();
+
+            if ((radioTCP.Checked || radioUDP.Checked) && comboLocalEnd.Text.Contains("ICMP兼容模式"))
+            {
+                richTextBox1.Clear();
+                AppendColorText("\n\nTCP/UDP Test 需绑定指定网卡，ICMP兼容模式下不支持。\n请选择本机 IP 网卡或切换到 ICMP 协议。\n", Color.Yellow, true);
+                return;
+            }
+
             string input = comboTarget.Text.Trim().ToLower();
 
-            // 2. 剔除协议头http:// 或 https://
             if (input.StartsWith("http://")) input = input.Substring(7);
             else if (input.StartsWith("https://")) input = input.Substring(8);
 
-            // 3. 剔除斜杠及其后面的内容：比如 "www.baidu.com/index.php" 变成 "www.baidu.com"
             if (input.Contains("/"))
             {
                 input = input.Split('/')[0];
             }
 
-            // 4. 正则表达式只保留 字母、数字、点(.)、冒号(:)、中划线(-)、下划线(_)
-            // 这里我们在括号里加了 _ 
             input = Regex.Replace(input, @"[^a-z0-9\.\:\-_]", "");
 
-            // 检查清洗后是否还剩下内容
             if (string.IsNullOrEmpty(input))
             {
-                SystemSounds.Beep.Play(); // 播放系统提示音
+                SystemSounds.Beep.Play();
                 return;
             }
 
-            // 把清洗干净的地址放回输入框
             comboTarget.Text = input;
 
-            // 接下来的逻辑保持不变
             bool isDirectIp = IPAddress.TryParse(input, out _);
             bool isSelectedIp = input.Contains(" (来自域名:");
 
-            // 修改 btnStart_Click 中的解析逻辑部分
             if (!isDirectIp && !isSelectedIp)
             {
                 try
@@ -835,18 +679,15 @@ namespace NetInfoCheckerX
                     richTextBox1.Clear();
                     AppendColorText($"[DNS] 正在解析域名: {input} \n", Color.Yellow, true);
 
-                    // 直接清空，然后把用户刚输入的域名再加回去
                     comboTarget.Items.Clear();
                     comboTarget.Items.Add(input);
 
-                    // 异步解析，不卡 UI
                     IPAddress[] addresses = await Task.Run(() => Dns.GetHostAddresses(input));
 
                     AppendColorText($"域名 [{input}] 解析出以下 IP：", Color.Yellow, true);
                     foreach (var ip in addresses)
                     {
                         string ipStr = ip.ToString();
-                        // 2. 关键点：直接添加 IP 字符串，不再带括号后缀
                         if (!comboTarget.Items.Contains(ipStr))
                         {
                             comboTarget.Items.Add(ipStr);
@@ -874,11 +715,9 @@ namespace NetInfoCheckerX
                 }
             }
 
-            // 准备测试参数
             string finalIP = input;
             comboTarget.Text = finalIP;
 
-            // 1. 初始化统计和状态
             ResetStats();
             richTextBox1.Clear();
             _cts = new CancellationTokenSource();
@@ -886,41 +725,34 @@ namespace NetInfoCheckerX
             btnStart.Text = "停止";
             SetControlsEnabled(false);
 
-            // 2. 立刻记录并显示开测时间
             string startTimeStr = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             AppendColorText($"[开测时间] {startTimeStr}", Color.Yellow, true);
             AppendColorText($"[测试目标] {input}", Color.Cyan, true);
 
-            // 3. 异步准备参数 (避免卡顿)
             int timeout = int.TryParse(txtMaxDelay.Text, out int t) ? t : 2000;
             int port = int.TryParse(txtPort.Text, out int p) ? p : 80;
             int bufferSize = int.TryParse(txtPackage.Text, out int b) ? b : 32;
 
-            // 开始测试，禁用所有设置 UI
             SetControlsEnabled(false);
 
-            // 热身逻辑
             try
             {
-                // 创建专门的热身超时Token
-                using (var warmupCts = new CancellationTokenSource(2000)) // 最多2秒热身
+                using (var warmupCts = new CancellationTokenSource(2000))
                 {
+                    PreJitExecuteMethods();
+
                     if (radioICMP.Checked)
                     {
-                        // ICMP热身：连续热身2次，模拟真实场景
                         using (Ping warmUpPing = new Ping())
                         {
-                            // 第一次热身
                             var firstTask = warmUpPing.SendPingAsync(finalIP, 100);
                             if (await Task.WhenAny(firstTask, Task.Delay(100, warmupCts.Token)) == firstTask)
                             {
                                 await firstTask;
                             }
 
-                            // 短暂延迟，模拟真实间隔
                             await Task.Delay(10, warmupCts.Token);
 
-                            // 第二次热身
                             var secondTask = warmUpPing.SendPingAsync(finalIP, timeout);
                             if (await Task.WhenAny(secondTask, Task.Delay(200, warmupCts.Token)) == secondTask)
                             {
@@ -930,39 +762,21 @@ namespace NetInfoCheckerX
                     }
                     else if (radioTCP.Checked)
                     {
-                        // TCP深度热身：创建真实的连接并断开
                         using (Socket s = new Socket(IPAddress.Parse(finalIP).AddressFamily,
                                                     SocketType.Stream, ProtocolType.Tcp))
                         {
-                            // 设置热身专用参数
                             s.LingerState = new LingerOption(false, 0);
                             s.ReceiveTimeout = 50;
                             s.SendTimeout = 50;
 
                             try
                             {
-                                // 绑定并连接（快速失败也没关系）
                                 s.Bind(GetLocalEndPoint());
 
                                 var connectTask = s.ConnectAsync(finalIP, port);
-                                // 快速热身：最多等100ms
                                 if (await Task.WhenAny(connectTask, Task.Delay(100, warmupCts.Token)) == connectTask)
                                 {
                                     await connectTask;
-
-                                    // 如果连接成功，发送一点数据再断开
-                                    if (s.Connected)
-                                    {
-                                        byte[] warmupData = new byte[1] { 0x00 };
-                                        var sendTask = s.SendAsync(new ArraySegment<byte>(warmupData), SocketFlags.None);
-                                        if (await Task.WhenAny(sendTask, Task.Delay(50, warmupCts.Token)) == sendTask)
-                                        {
-                                            await sendTask;
-                                        }
-
-                                        // 优雅关闭
-                                        s.Shutdown(SocketShutdown.Both);
-                                    }
                                 }
                             }
                             catch { }
@@ -970,84 +784,58 @@ namespace NetInfoCheckerX
                     }
                     else if (radioUDP.Checked)
                     {
-                        // UDP深度热身：发送几种不同大小的包
                         using (Socket s = new Socket(IPAddress.Parse(finalIP).AddressFamily,
                                                     SocketType.Dgram, ProtocolType.Udp))
                         {
                             s.Bind(GetLocalEndPoint());
                             s.ReceiveTimeout = 50;
 
-                            // 热身不同大小的包
-                            var packetSizes = new[] { 1, 32, 1024 };
-                            foreach (var size in packetSizes)
+                            try
                             {
-                                try
-                                {
-                                    byte[] warmupData = new byte[size];
-                                    new Random().NextBytes(warmupData); // 填充随机数据
-
-                                    var sendTask = s.SendToAsync(new ArraySegment<byte>(warmupData),
-                                                                SocketFlags.None,
-                                                                new IPEndPoint(IPAddress.Parse(finalIP), port));
-
-                                    if (await Task.WhenAny(sendTask, Task.Delay(50, warmupCts.Token)) == sendTask)
-                                    {
-                                        await sendTask;
-                                    }
-
-                                    // 短暂间隔
-                                    await Task.Delay(5, warmupCts.Token);
-                                }
-                                catch { }
+                                var sendTask = s.SendToAsync(new ArraySegment<byte>(new byte[1]),
+                                                            SocketFlags.None,
+                                                            new IPEndPoint(IPAddress.Parse(finalIP), port));
+                                await Task.WhenAny(sendTask, Task.Delay(50, warmupCts.Token));
                             }
+                            catch { }
                         }
                     }
 
-                    // 给系统留时间释放资源
                     await Task.Delay(30, warmupCts.Token);
                 }
             }
             catch (OperationCanceledException) { }
             catch { }
 
-            // 动态拼接前置提示
             string protocolName = radioICMP.Checked ? "ICMP" : (radioTCP.Checked ? "TCP" : "UDP");
             string localDisplay = radioICMP.Checked ? "系统默认" : comboLocalEnd.Text;
             if (localDisplay.Contains("Any") && !radioICMP.Checked)
             {
-                // 这里简单处理：先显示 Any，等第一笔测试出来后，UpdateRealLocalIp 会修正它
                 localDisplay = "自动选择中";
             }
 
-            // 构造设置行单独出一个方法，方便识别网卡输出好看
-            // 1. 判断是 IPv4 还是 IPv6
             string version = radioICMP.Checked ? "IP" : (IPAddress.Parse(finalIP).AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? "IPv4" : "IPv6");
             string checkTarget = comboLocalEnd.Text.Contains("::") ? "IPv6" : (comboLocalEnd.Text.Contains("0.0.0.0") ? "IPv4" : "");
 
-            // 2. 选择系统默认网卡，检测系统实际出口IP
             if (comboLocalEnd.Text.Contains("Any"))
             {
                 AppendColorText($"[检测网卡] 未指定出口网卡, 开始测试[{checkTarget}]实际出口网卡", Color.LightGreen, true);
             }
 
-            // 开始异步循环测试
             try
             {
                 while (!_cts.Token.IsCancellationRequested)
                 {
-                    if (this.IsDisposed) break; // 梦酱看这里：如果窗口关了，直接跳出循环
+                    if (this.IsDisposed) break;
 
                     if (radioICMP.Checked)
                     {
-                        // 判断用户是否选择了“兼容模式”
                         if (comboLocalEnd.Text.Contains("ICMP兼容模式"))
                         {
-                            // 兼容模式调用原生方法，不走Socket
                             await ExecuteNativeIcmpPing(finalIP, timeout, _cts.Token);
                         }
                         else
                         {
-                            // 否则使用改好的模拟Socket
                             await ExecuteIcmpPing(finalIP, timeout, _cts.Token);
                         }
                     }
@@ -1060,40 +848,65 @@ namespace NetInfoCheckerX
             catch (OperationCanceledException) { }
             finally
             {
-                // 在这里更新UI前，检查窗口是否还活着
                 if (!this.IsDisposed && this.IsHandleCreated)
                 {
+                    double savedMin = minDelay, savedMax = maxDelay, savedTotal = totalDelay;
+                    int savedSuccess = successCount, savedLoss = lossCount;
+                    int savedMinIdx = minCountIndex, savedMaxIdx = maxCountIndex;
+
                     string stopTimeStr = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                     isRunning = false;
                     btnStart.Text = "开测";
                     AppendColorText($"[停止时间] {stopTimeStr}", Color.Yellow, true);
                     AppendColorText(" ■ 用户手动停止测试", Color.Yellow, true);
-                    SetControlsEnabled(true);
+
+                    comboTarget.Enabled = true;
+                    txtMaxDelay.Enabled = true;
+                    txtPackage.Enabled = true;
+                    txtPort.Enabled = true;
+                    comboLocalEnd.Enabled = true;
+                    btnSave.Enabled = true;
+                    if (radioICMP.Checked)
+                    {
+                        txtPort.Enabled = false;
+                        txtPackage.Enabled = true;
+                    }
+                    else if (radioTCP.Checked)
+                    {
+                        txtPort.Enabled = true;
+                        txtPackage.Enabled = false;
+                    }
+                    else
+                    {
+                        txtPort.Enabled = true;
+                        txtPackage.Enabled = true;
+                    }
+                    radioICMP.Enabled = true;
+                    radioTCP.Enabled = true;
+                    radioUDP.Enabled = true;
+
+                    minDelay = savedMin; maxDelay = savedMax; totalDelay = savedTotal;
+                    successCount = savedSuccess; lossCount = savedLoss;
+                    minCountIndex = savedMinIdx; maxCountIndex = savedMaxIdx;
+                    UpdateStats();
                 }
             }
-            //测试结束，恢复UI
-            SetControlsEnabled(true);
         }
 
         private void comboTarget_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter)
             {
-                e.Handled = true; // 阻止系统默认处理
-
-                // 调用按钮的点击事件
+                e.Handled = true;
                 btnStart_Click(sender, e);
             }
         }
 
-        //原生ICMP PING
-        //原生ICMP PING（增加超时后验证）
         private async Task ExecuteNativeIcmpPing(string targetIp, int timeout, CancellationToken token)
         {
-            // 准备数据包大小
             int bufferSize = int.TryParse(txtPackage.Text, out int b) ? b : 32;
             byte[] buffer = new byte[bufferSize];
-            new Random().NextBytes(buffer);
+            FillRandomBytes(buffer);
 
             using (Ping pingSender = new Ping())
             {
@@ -1114,7 +927,6 @@ namespace NetInfoCheckerX
                             double rtt = reply.RoundtripTime;
                             if (rtt < 0.1) rtt = 0.1;
 
-                            // ✨ 关键修复：如果实际延迟超过设定的超时，视为失败
                             if (rtt > timeout)
                             {
                                 lossCount++;
@@ -1173,13 +985,11 @@ namespace NetInfoCheckerX
                 }
             }
         }
-        // Socket ICMP Ping方法
         private async Task ExecuteIcmpPing(string targetIp, int timeout, CancellationToken token)
         {
-            // 1. 准备设置
             int bufferSize = int.TryParse(txtPackage.Text, out int b) ? b : 32;
             byte[] payload = new byte[bufferSize];
-            new Random().NextBytes(payload);
+            FillRandomBytes(payload);
             ushort identifier = (ushort)(Process.GetCurrentProcess().Id & 0xFFFF);
             unchecked { _globalIcmpSequence++; }
 
@@ -1187,7 +997,6 @@ namespace NetInfoCheckerX
             var addrFamily = ipAddr.AddressFamily;
             IPEndPoint localEndPoint = GetLocalEndPoint();
 
-            // 地址族匹配检查
             if ((addrFamily == AddressFamily.InterNetwork && localEndPoint.Address.Equals(IPAddress.IPv6Any)) ||
                 (addrFamily == AddressFamily.InterNetworkV6 && localEndPoint.Address.Equals(IPAddress.Any)))
             {
@@ -1206,9 +1015,7 @@ namespace NetInfoCheckerX
                 {
                     raw = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.Icmp);
                     raw.Bind(localEndPoint);
-                    // 不设置 ReceiveTimeout，完全由外部超时控制
 
-                    // 自动识别出口 IP（用于显示）
                     try
                     {
                         var localEp = (IPEndPoint)raw.LocalEndPoint;
@@ -1220,7 +1027,6 @@ namespace NetInfoCheckerX
                     }
                     catch { }
 
-                    // 构造并发送 ICMP 包
                     byte[] icmpPacket = BuildIcmpEchoPacket(8, 0, identifier, _globalIcmpSequence, payload);
                     raw.SendTo(icmpPacket, new IPEndPoint(ipAddr, 0));
 
@@ -1231,7 +1037,6 @@ namespace NetInfoCheckerX
                     byte[] recvBuffer = new byte[4096];
                     EndPoint receiveEP = new IPEndPoint(IPAddress.Any, 0);
 
-                    // 异步接收循环（直到超时或取消）
                     bool receivedMatch = false;
                     double rtt = 0;
                     int ttl = 0;
@@ -1239,11 +1044,9 @@ namespace NetInfoCheckerX
 
                     while (!token.IsCancellationRequested && sw.ElapsedMilliseconds < timeout)
                     {
-                        // 计算剩余超时时间（确保总超时精确）
                         int remaining = (int)(timeout - sw.ElapsedMilliseconds);
                         if (remaining <= 0) break;
 
-                        // 异步接收，超时 = min(剩余时间, 200ms) 避免死循环
                         int recvTimeout = Math.Min(remaining, 200);
                         var receiveTask = Task.Factory.FromAsync(
                             (callback, state) => raw.BeginReceiveFrom(recvBuffer, 0, recvBuffer.Length, SocketFlags.None, ref receiveEP, callback, state),
@@ -1264,21 +1067,18 @@ namespace NetInfoCheckerX
                                 if (icmpType == 0 && respId == identifier && respSeq == _globalIcmpSequence)
                                 {
                                     sw.Stop();
-                                    rtt = sw.Elapsed.TotalMilliseconds; // 高精度
+                                    rtt = sw.Elapsed.TotalMilliseconds;
                                     ttl = recvBuffer[8];
                                     replyAddress = ((IPEndPoint)receiveEP).Address;
                                     receivedMatch = true;
                                     break;
                                 }
-                                // 不匹配则继续循环
                             }
                         }
-                        // 超时则继续循环（总超时控制在外层）
                     }
 
                     if (receivedMatch)
                     {
-                        // ✨ 关键修复：如果实际延迟超过设定的超时，视为失败
                         if (rtt > timeout)
                         {
                             lossCount++;
@@ -1349,7 +1149,6 @@ namespace NetInfoCheckerX
 
                     raw6 = new Socket(AddressFamily.InterNetworkV6, SocketType.Raw, ProtocolType.IcmpV6);
                     raw6.Bind(localEndPoint);
-                    // 不设置 ReceiveTimeout
 
                     _globalIcmpSequence++;
                     IPAddress srcForChecksum = localEndPoint.Address;
@@ -1412,7 +1211,7 @@ namespace NetInfoCheckerX
                                 if (respType == 129 && respId == identifier && respSeq == _globalIcmpSequence)
                                 {
                                     sw.Stop();
-                                    rtt = sw.Elapsed.TotalMilliseconds; // 高精度
+                                    rtt = sw.Elapsed.TotalMilliseconds;
                                     receivedMatch = true;
                                     break;
                                 }
@@ -1471,31 +1270,25 @@ namespace NetInfoCheckerX
                 return;
             }
 
-            // 未知地址族
             lossCount++;
             AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
             AppendColorText($"ICMP错误: 未知地址族 {addrFamily}", Color.Red, true);
             UpdateStats();
         }
 
-        // 辅助方法：构造 ICMP Echo 包 & 计算校验和 
         private static byte[] BuildIcmpEchoPacket(byte type, byte code, ushort identifier, ushort sequence, byte[] payload)
         {
             int headerLen = 8;
             byte[] packet = new byte[headerLen + payload.Length];
 
-            packet[0] = type; // 8 = Echo Request ; 0 = Echo Reply
+            packet[0] = type;
             packet[1] = code;
-            // checksum 占 [2..3]，先置 0
             packet[2] = 0;
             packet[3] = 0;
-            // identifier (网络字节序)
             packet[4] = (byte)(identifier >> 8);
             packet[5] = (byte)(identifier & 0xFF);
-            // sequence (网络字节序)
             packet[6] = (byte)(sequence >> 8);
             packet[7] = (byte)(sequence & 0xFF);
-            // payload
             Buffer.BlockCopy(payload, 0, packet, headerLen, payload.Length);
 
             ushort csum = ComputeChecksum(packet);
@@ -1518,21 +1311,18 @@ namespace NetInfoCheckerX
             {
                 sum += (uint)(data[i] << 8);
             }
-            // fold 32-bit to 16-bit
             while ((sum >> 16) != 0)
             {
                 sum = (sum & 0xFFFF) + (sum >> 16);
             }
             return (ushort)~sum;
         }
-        //  辅助：构造 ICMPv6 报文（不含校验和） 
         private static byte[] BuildIcmpv6PacketWithoutChecksum(byte type, byte code, ushort identifier, ushort sequence, byte[] payload)
         {
-            int headerLen = 8; // type(1)+code(1)+checksum(2)+id(2)+seq(2)
+            int headerLen = 8;
             byte[] packet = new byte[headerLen + payload.Length];
             packet[0] = type;
             packet[1] = code;
-            // checksum 两字节先置0
             packet[2] = 0;
             packet[3] = 0;
             packet[4] = (byte)(identifier >> 8);
@@ -1543,37 +1333,28 @@ namespace NetInfoCheckerX
             return packet;
         }
 
-        //  辅助：根据 src/dst 构造伪首部并返回完整 icmpv6 包（含校验和） 
         private static byte[] BuildIcmpv6WithChecksum(IPAddress src, IPAddress dst, byte[] icmpWithoutChecksum)
         {
-            // 伪首部: src(16) dst(16) upper-layer-pkt-len(4) zeros(3) next-header(1)
-            int pseudoLen = 16 + 16 + 4 + 4; // 后面3个0 + next header = 4 bytes
+            int pseudoLen = 16 + 16 + 4 + 4;
             int totalLen = pseudoLen + icmpWithoutChecksum.Length;
             byte[] buf = new byte[totalLen];
 
-            // src (16)
             Buffer.BlockCopy(src.GetAddressBytes(), 0, buf, 0, 16);
-            // dst (16)
             Buffer.BlockCopy(dst.GetAddressBytes(), 0, buf, 16, 16);
-            // upper-layer length (4 bytes) 网络字节序
             uint upperLen = (uint)icmpWithoutChecksum.Length;
             buf[32] = (byte)((upperLen >> 24) & 0xFF);
             buf[33] = (byte)((upperLen >> 16) & 0xFF);
             buf[34] = (byte)((upperLen >> 8) & 0xFF);
             buf[35] = (byte)(upperLen & 0xFF);
-            // zeros(3) + next header(1) (58 for ICMPv6)
             buf[36] = 0;
             buf[37] = 0;
             buf[38] = 0;
-            buf[39] = 58; // Next header = 58 (ICMPv6)
+            buf[39] = 58;
 
-            // copy icmp packet after pseudo header
             Buffer.BlockCopy(icmpWithoutChecksum, 0, buf, 40, icmpWithoutChecksum.Length);
 
-            // 计算校验和（伪首部 + icmp）
             ushort csum = ComputeChecksum(buf);
 
-            // 构造最终 icmp 数据（把校验和写回到 icmp 报文的 [2..3]）
             byte[] icmpWithChecksum = new byte[icmpWithoutChecksum.Length];
             Buffer.BlockCopy(icmpWithoutChecksum, 0, icmpWithChecksum, 0, icmpWithoutChecksum.Length);
             icmpWithChecksum[2] = (byte)(csum >> 8);
@@ -1583,7 +1364,6 @@ namespace NetInfoCheckerX
         }
 
 
-        // 更新 UI 上的那几个 lbl 标签
         private void UpdateStats()
         {
             if (InvokeRequired)
@@ -1592,16 +1372,14 @@ namespace NetInfoCheckerX
                 return;
             }
 
-            // 格式化最小/最大延迟的显示
             string minStr = (successCount > 0) ? $"{minDelay:F1}ms({minCountIndex})" : "-";
             string maxStr = (successCount > 0) ? $"{maxDelay:F1}ms({maxCountIndex})" : "-";
 
             double avgDelay = successCount > 0 ? totalDelay / successCount : 0;
             double lossRate = (successCount + lossCount) > 0 ? (double)lossCount / (successCount + lossCount) * 100 : 0;
 
-            // 把文字更新到对应的 Label 上
-            lblMin2.Text = minStr; // 比如显示：8.5(2)
-            lblMax2.Text = maxStr; // 比如显示：120.4(15)
+            lblMin2.Text = minStr;
+            lblMax2.Text = maxStr;
             lblAvg2.Text = $"{avgDelay:F1}ms";
             lblLoss2.Text = $"{lossRate:F1}%";
         }
@@ -1620,7 +1398,6 @@ namespace NetInfoCheckerX
 
             if (enabled)
             {
-                // 关键修复：调用加强版函数，并传入 false (不清空内容)
                 UpdateProtocolUI(
                     radioICMP.Checked ? radioICMP : (radioTCP.Checked ? radioTCP : radioUDP),
                     false
@@ -1630,14 +1407,12 @@ namespace NetInfoCheckerX
 
         private void btnSave_Click(object sender, EventArgs e)
         {
-            // 1. 如果文本框是空的，就没必要保存啦
             if (string.IsNullOrEmpty(richTextBox1.Text))
             {
                 MessageBox.Show("当前没有测试结果可以保存喵", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            // 2. 创建保存文件对话框
             using (SaveFileDialog sfd = new SaveFileDialog())
             {
                 sfd.Title = "请选择保存测试结果的位置";
@@ -1656,7 +1431,6 @@ namespace NetInfoCheckerX
                     pingType = radioUDP.Text;
                 }
 
-                // 默认文件名
                 string saveTime = DateTime.Now.ToString("yyyyMMdd_HHmmss");
                 sfd.FileName = $"NICX_Ping_{pingType}_{comboTarget.Text}_{saveTime}.txt";
 
@@ -1664,7 +1438,6 @@ namespace NetInfoCheckerX
                 {
                     try
                     {
-                        // 3. 准备要保存的内容
                         StringBuilder sb = new StringBuilder();
 
                         sb.AppendLine($"=== 欢迎使用 Ping+ ❤ 网络综合查询器X by Yumeyo ===");
@@ -1679,7 +1452,6 @@ namespace NetInfoCheckerX
                         sb.AppendLine($"=== 感谢使用 Ping+ ❤ 网络综合查询器X by Yumeyo ===");
                         sb.AppendLine($"======== 导出于 NetInfoCheckerX by Yumeyo ========\n");
 
-                        // 4. 写入文件
                         System.IO.File.WriteAllText(sfd.FileName, sb.ToString(), Encoding.UTF8);
 
                         MessageBox.Show($"保存[{sfd.FileName}]成功!", "保存成功了", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1696,50 +1468,41 @@ namespace NetInfoCheckerX
         {
             if (e.Button == MouseButtons.Right)
             {
-                // 1. 停止当前的测试逻辑（防止窗口关了后台还在跑）
                 if (isRunning)
                 {
                     _cts?.Cancel();
                 }
 
-                // 2. 记录当前窗口的位置，这样重启后窗口还在原来的地方，不会乱跳
                 Point currentPkgLocation = this.Location;
 
-                // 3. 创建一个新的窗口实例
                 PingPP newForm = new PingPP();
 
-                // 让新窗口在老窗口的位置显示
                 newForm.StartPosition = FormStartPosition.Manual;
                 newForm.Location = currentPkgLocation;
 
-                // 4. 显示新窗口
                 newForm.Show();
 
-                // 5. 彻底关闭并释放当前窗口
                 this.Close();
                 this.Dispose();
             }
         }
 
-        // 根据延迟返回夢酱设计的阶梯颜色
         private Color GetRttColor(double rtt)
         {
-            if (rtt <= 15) return Color.Lime;             // 15ms以内：亮绿色
-            if (rtt <= 30) return Color.MediumSpringGreen;// 16-30ms：青绿色
-            if (rtt <= 50) return Color.FromArgb(185, 210, 50);      // 30-50ms：青色
-            if (rtt <= 100) return Color.Gold;            // 50-100ms：黄色
-            if (rtt <= 200) return Color.Orange;          // 100-200ms：橙色
-            if (rtt <= 500) return Color.Tomato;       // 200-500ms：橙红色
-            return Color.Red;                       // 超过500ms：红色
+            if (rtt <= 15) return Color.Lime;
+            if (rtt <= 30) return Color.MediumSpringGreen;
+            if (rtt <= 50) return Color.FromArgb(185, 210, 50);
+            if (rtt <= 100) return Color.Gold;
+            if (rtt <= 200) return Color.Orange;
+            if (rtt <= 500) return Color.Tomato;
+            return Color.Red;
         }
 
         private void txtPort_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter)
             {
-                e.Handled = true; // 阻止系统默认处理
-
-                // 调用按钮的点击事件
+                e.Handled = true;
                 btnStart_Click(sender, e);
             }
         }
@@ -1748,9 +1511,7 @@ namespace NetInfoCheckerX
         {
             if (e.KeyCode == Keys.Enter)
             {
-                e.Handled = true; // 阻止系统默认处理
-
-                // 调用按钮的点击事件
+                e.Handled = true;
                 btnStart_Click(sender, e);
             }
         }
@@ -1759,9 +1520,7 @@ namespace NetInfoCheckerX
         {
             if (e.KeyCode == Keys.Enter)
             {
-                e.Handled = true; // 阻止系统默认处理
-
-                // 调用按钮的点击事件
+                e.Handled = true;
                 btnStart_Click(sender, e);
             }
         }
@@ -1777,20 +1536,15 @@ namespace NetInfoCheckerX
 
         private void AppendColorMap()
         {
-            // 定义夢酱设计的阶梯和颜色
             var colors = new[] {
         Color.Lime, Color.MediumSpringGreen, Color.FromArgb(185,210,50),
         Color.Gold, Color.Orange, Color.Tomato, Color.Red
     };
-            // 统一标签长度，方便箭头对齐（每个标签占 8 位宽度）
             var labels = new[] { "     ≤15ms ", " 30ms  ", " 50ms  ", " 100ms ", " 200ms ", " 500ms ", " >错误" };
-            // 对应每一段标签下方的箭头（数量可以根据视觉微调）
             var arrows = new[] { "     >>>>>>>", ">>>>>>>", ">>>>>>>", ">>>>>>>", ">>>>>>>", ">>>>>>>", ">>>>>>>" };
 
-            // 1. 画顶部的分割线
             AppendColorText("    ===========================================================", ColorTranslator.FromHtml("#a8a5ff"), true);
 
-            // 2. 第2排：打印数值行
             for (int i = 0; i < labels.Length; i++)
             {
                 AppendColorText(labels[i], colors[i], false);
@@ -1798,19 +1552,16 @@ namespace NetInfoCheckerX
             }
             richTextBox1.AppendText("\n");
 
-            // 3. 第3排：打印彩色箭头行
             for (int i = 0; i < arrows.Length; i++)
             {
                 AppendColorText(arrows[i], colors[i], false);
-                // 在箭头之间也加一个小空格或者保持连贯
                 if (i < arrows.Length - 1) AppendColorText(" ", Color.Black, false);
             }
             richTextBox1.AppendText("\n");
 
-            // 4. 画底部的分割线
             AppendColorText("    ===========================================================", ColorTranslator.FromHtml("#a8a5ff"), true);
         }
-        // 【全能版】出口 IP 探测器：统一处理 IPv4 和 IPv6
+
         private string GetActualLocalIp(string targetIp)
         {
             if (string.IsNullOrEmpty(targetIp)) return targetIp.Contains(":") ? "::" : "0.0.0.0";
@@ -1824,7 +1575,7 @@ namespace NetInfoCheckerX
                     if (socket.LocalEndPoint is IPEndPoint localEndPoint)
                     {
                         string ip = localEndPoint.Address.ToString();
-                        return ip.Contains("%") ? ip.Split('%')[0] : ip; // 去掉 IPv6 的作用域 ID
+                        return ip.Contains("%") ? ip.Split('%')[0] : ip;
                     }
                 }
             }
@@ -1832,7 +1583,6 @@ namespace NetInfoCheckerX
             return targetIp.Contains(":") ? "::" : "0.0.0.0";
         }
 
-        //识别当前网卡后打印的方法
         private void PrintTestSettings(string actualIp)
         {
             if (this.InvokeRequired)
@@ -1841,42 +1591,33 @@ namespace NetInfoCheckerX
                 return;
             }
 
-            // 如果传进来的是空地址，我们再等等，直到拿到真 IP
             if (actualIp == "0.0.0.0" || actualIp == "::") return;
 
-            if (isSettingsPrinted) return; // 保证每次测试只打印一次喵
+            if (isSettingsPrinted) return;
             isSettingsPrinted = true;
 
-            // 梦酱看这里：这里是找回括号的关键逻辑
             string displayName = actualIp;
-            // 梦酱看这里：遍历下拉框，让它自动选中带括号的那一项
             for (int i = 0; i < comboLocalEnd.Items.Count; i++)
             {
                 string itemStr = comboLocalEnd.Items[i].ToString();
-                // 如果发现某一项是以当前真实的 IP 开头，并且后面跟着括号
                 if (itemStr.StartsWith(actualIp + " ("))
                 {
                     displayName = itemStr;
-                    // 把下拉框的选中索引改到这一项，这样编辑框里就会显示完整名字了喵！
                     comboLocalEnd.SelectedIndex = i;
                     break;
                 }
             }
-            // 我们遍历一下下拉框里的所有项，看看能不能把网卡名字“认领”回来
             foreach (var item in comboLocalEnd.Items)
             {
                 string itemStr = item.ToString();
-                // 比如 itemStr 是 "192.168.1.5 (以太网)"，而 actualIp 是 "192.168.1.5"
-                // 我们检查 itemStr 是不是以 "IP + 空格 + 括号" 开头的
                 if (itemStr.StartsWith(actualIp + " ("))
                 {
-                    displayName = itemStr; // 找到了！把带有括号的名字给 displayName
+                    displayName = itemStr;
                     break;
                 }
             }
 
             if (displayName == "0.0.0.0" || displayName == "::") displayName = "系统默认";
-            //-------------------------------------------
 
             string protocolName = radioICMP.Checked ? "ICMP" : (radioTCP.Checked ? "TCP" : "UDP");
             int timeout = int.TryParse(txtMaxDelay.Text, out int t) ? t : 500;
@@ -1887,7 +1628,7 @@ namespace NetInfoCheckerX
 
             if (radioICMP.Checked) settingsLine += $" / 超时 {timeout}ms / 字节 {bufferSize}";
             else if (radioTCP.Checked) settingsLine += $" / 端口 {port} / 超时 {timeout}ms";
-            else settingsLine += $" / 端口 {port} / 超时 {timeout}ms"; // UDP 逻辑
+            else settingsLine += $" / 端口 {port} / 超时 {timeout}ms";
 
             AppendColorText(settingsLine + "\n", Color.LightPink, true);
         }
