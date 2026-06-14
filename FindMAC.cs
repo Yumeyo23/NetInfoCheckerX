@@ -15,9 +15,8 @@ namespace NetInfoCheckerX
     {
         private readonly string[] requiredFiles;
         private bool _filesValidated = false;
-        private bool _shouldShow = true; // 新增：控制窗体是否应该显示
+        private bool _shouldShow = true;
 
-        //自由拖拽
         [DllImport("user32.dll")]
         public static extern bool ReleaseCapture();
 
@@ -28,7 +27,6 @@ namespace NetInfoCheckerX
         private const int SC_MOVE = 0xF010;
         private const int HTCAPTION = 0x0002;
 
-        // 这是一个通用的拖动处理函数
         private void MyMouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Left)
@@ -39,37 +37,31 @@ namespace NetInfoCheckerX
         }
         public FindMAC()
         {
-            // 1. 先检查必需文件
             requiredFiles = new string[]
             {
             "oui.csv",
             "oui.txt",
             };
 
-            // 2. 在InitializeComponent之前检查文件
             if (!CheckRequiredFiles())
             {
                 _filesValidated = false;
-                _shouldShow = false; // 设置不显示
+                _shouldShow = false;
 
-                // 这里不调用InitializeComponent，直接返回
-                // 注意：我们需要确保窗体完全不会显示
                 return;
             }
 
-            // 3. 单例检查
             var existingForm = Application.OpenForms.OfType<FindMAC>()
                                       .FirstOrDefault(f => f != this);
             if (existingForm != null)
             {
                 existingForm.BringToFront();
                 existingForm.Focus();
-                _shouldShow = false; // 单例也不显示
+                _shouldShow = false;
                 this.Dispose();
                 return;
             }
 
-            // 4. 文件检查通过，初始化组件
             InitializeComponent();
             _filesValidated = true;
         }
@@ -107,7 +99,6 @@ namespace NetInfoCheckerX
                 return false;
             }
         }
-        // 重写 Show 方法，控制窗体是否显示
         public new void Show()
         {
             if (_shouldShow)
@@ -116,13 +107,11 @@ namespace NetInfoCheckerX
             }
             else
             {
-                // 如果不应该显示，直接关闭并释放
                 this.Close();
                 this.Dispose();
             }
         }
 
-        // 同样重写 ShowDialog 方法
         public new DialogResult ShowDialog()
         {
             if (_shouldShow)
@@ -131,19 +120,16 @@ namespace NetInfoCheckerX
             }
             else
             {
-                // 如果不应该显示，直接关闭并释放
                 this.Close();
                 this.Dispose();
                 return DialogResult.Cancel;
             }
         }
 
-        // 重写 OnLoad 方法，确保窗体加载时检查
         protected override void OnLoad(EventArgs e)
         {
             if (!_shouldShow || !_filesValidated)
             {
-                // 如果不需要显示或文件检查失败，立即关闭
                 this.Close();
                 this.Dispose();
                 return;
@@ -152,20 +138,15 @@ namespace NetInfoCheckerX
             base.OnLoad(e);
         }
 
-        // --- 1. 格式化工具 ---
-        // 夢酱，我们先把输入的内容统一转成纯大写的十六进制字符串
         private string GetCleanMAC()
         {
             string raw = txtMAC.Text.Trim().ToUpper();
-            // 去掉所有非十六进制字符（只留下 0-9 和 A-F）
             return Regex.Replace(raw, @"[^0-9A-F]", "");
         }
 
-        // 格式化为标准的 XX:XX:XX... 形式，用于 TXT 数据库匹配
         private string GetColonMAC(string cleanMac)
         {
             if (cleanMac.Length < 6) return cleanMac;
-            // 每两个字符加一个冒号
             return Regex.Replace(cleanMac, ".{2}", "$0:").TrimEnd(':');
         }
 
@@ -183,26 +164,20 @@ namespace NetInfoCheckerX
         }
         private async Task ApplyFindMACThemeAsync()
         {
-            // 异步等待，确保 UI 线程准备就绪
-            //await Task.Yield();
 
             bool isLight = Global.isThemelight;
             Color contrastColor = isLight ? Color.Black : Color.White;
-            // 文本框背景：深色下纯黑，浅色下全局色
             Color textBack = isLight ? Global.colorWhite : Global.themeBlack;
             Color yumeyoColor = isLight ? ColorTranslator.FromHtml("#8e8cd8") : ColorTranslator.FromHtml("#a8a5ff");
-            Color btnDarkBack = Color.FromArgb(60, 60, 60); // 梦酱专属 60 灰
+            Color btnDarkBack = Color.FromArgb(60, 60, 60);
 
-            // 1. 窗口整体背景颜色
             this.BackColor = isLight ? Global.themeLight : Global.themeBlack;
 
-            // 2. 提示标签 (lblTip) - 使用梦酱紫
             if (lblTip != null)
             {
                 lblTip.ForeColor = yumeyoColor;
             }
 
-            // 3. 文本框处理 (txtMAC, txtResult)
             Control[] textBoxes = { txtMAC, txtResult };
             foreach (var t in textBoxes)
             {
@@ -213,7 +188,6 @@ namespace NetInfoCheckerX
                 }
             }
 
-            // 4. 按钮组处理 (btnOK, btnPaste) - 智能样式切换
             Control[] buttons = { btnOK, btnPaste };
             foreach (var b in buttons)
             {
@@ -221,7 +195,6 @@ namespace NetInfoCheckerX
                 {
                     if (isLight)
                     {
-                        // 浅色模式：恢复系统原生 3D 风格
                         btn.ForeColor = Color.Black;
                         btn.BackColor = SystemColors.Control;
                         btn.UseVisualStyleBackColor = true;
@@ -229,31 +202,28 @@ namespace NetInfoCheckerX
                     }
                     else
                     {
-                        // 深色模式：60 灰扁平风格
                         btn.ForeColor = Color.White;
                         btn.BackColor = btnDarkBack;
                         btn.FlatStyle = FlatStyle.Flat;
                         btn.FlatAppearance.BorderColor = Color.DimGray;
-                        // 鼠标经过亮起梦酱紫
                         btn.FlatAppearance.MouseOverBackColor = ColorTranslator.FromHtml("#8e8cd8");
                     }
                 }
             }
 
-            // 5. 置顶勾选框 (chkTop)
             if (chkTop != null)
             {
                 chkTop.ForeColor = contrastColor;
-                chkTop.BackColor = Color.Transparent; // 透明背景更整洁
+                chkTop.BackColor = Color.Transparent;
             }
         }
         private void FindMAC_Load(object sender, EventArgs e)
         {
-            //随意拖拽
+            this.MinimumSize = this.Size;
             this.MouseDown += MyMouseDown;
             lblTip.MouseDown += MyMouseDown;
 
-            if (!_filesValidated || !_shouldShow)    // 如果文件检查失败，直接关闭窗口
+            if (!_filesValidated || !_shouldShow)
             {
                 this.Close();
                 return;
@@ -266,7 +236,6 @@ namespace NetInfoCheckerX
             string clipText = Clipboard.GetText();
             if (!string.IsNullOrEmpty(clipText))
             {
-                // 只保留 0-9, a-f, A-F 以及冒号和减号
                 clipText = Regex.Replace(clipText, @"[^0-9a-fA-F\-\:]", "");
 
                 txtMAC.Text = clipText;
@@ -323,19 +292,13 @@ namespace NetInfoCheckerX
                 string resultLine = "";
                 if (isCSV)
                 {
-                    // --- 左键逻辑 (CSV) ---
-                    // 构造搜索特征：MA-L,286FB9,
                     string prefix = $"MA-L,{cleanMac.Substring(0, 6)},";
-                    // 夢酱，我们用逐行读取，省内存又快速
                     resultLine = File.ReadLines(filePath)
                                      .FirstOrDefault(line => line.StartsWith(prefix));
                 }
                 else
                 {
-                    // --- 右键逻辑 (TXT) ---
                     string colonMac = GetColonMAC(cleanMac);
-                    // 逻辑：寻找能匹配输入前缀的最长那一行
-                    // 我们读取所有行，找那些开头被包含在输入 MAC 里的行
                     var matches = File.ReadLines(filePath)
                         .Where(line =>
                         {
@@ -349,7 +312,6 @@ namespace NetInfoCheckerX
 
                     if (matches != null)
                     {
-                        // 去掉制表符 \t
                         resultLine = matches.Replace("\t", " ");
                     }
                 }
@@ -374,21 +336,16 @@ namespace NetInfoCheckerX
 
         private void txtMAC_KeyDown(object sender, KeyEventArgs e)
         {
-            // 1. 判断按下的是否为回车键
             if (e.KeyCode == Keys.Enter)
             {
-                // 2. 获取清理后的 MAC 地址（直接复用夢酱写好的工具函数）
                 string cleanMac = GetCleanMAC();
 
-                // 3. 仿照 btnOK_MouseDown 里的逻辑进行校验
                 if (string.IsNullOrWhiteSpace(cleanMac) || cleanMac.Length < 6)
                 {
                     lblTip.Text = "内容无效（至少需要6位）";
                     return;
                 }
 
-                // 4. 核心：直接调用查询方法！
-                // 参数 "oui.csv" 和 true 就代表了夢酱想要的“数据库1”和“左键逻辑”
                 RunMACSearch("oui.csv", cleanMac, true);
             }
         }
@@ -397,18 +354,14 @@ namespace NetInfoCheckerX
         {
             if (e.KeyCode == Keys.Enter)
             {
-                // 2. 获取清理后的 MAC 地址（直接复用夢酱写好的工具函数）
                 string cleanMac = GetCleanMAC();
 
-                // 3. 仿照 btnOK_MouseDown 里的逻辑进行校验
                 if (string.IsNullOrWhiteSpace(cleanMac) || cleanMac.Length < 6)
                 {
                     lblTip.Text = "内容无效（至少需要6位）";
                     return;
                 }
 
-                // 4. 核心：直接调用查询方法！
-                // 参数 "oui.csv" 和 true 就代表了夢酱想要的“数据库1”和“左键逻辑”
                 RunMACSearch("oui.csv", cleanMac, true);
             }
         }
