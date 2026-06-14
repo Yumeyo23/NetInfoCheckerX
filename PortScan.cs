@@ -5,8 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Media;
 using System.Net;
-using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -17,9 +17,56 @@ namespace NetInfoCheckerX
 {
     public partial class PortScan : Form
     {
-        // 常用端口字符串
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern int WritePrivateProfileString(string section, string key, string value, string filePath);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetPrivateProfileString(string section, string key, string defaultValue,
+            StringBuilder buffer, int size, string filePath);
+        private string IniPath => Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
+        private const string IniSection = "PortScan";
+
+        private static string CleanPortsText(string raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return raw;
+            return string.Join(",",
+                raw.Replace("\r\n", ",").Replace("\n", ",").Replace("\r", ",")
+                   .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                   .Select(p => p.Trim())
+                   .Where(p => !string.IsNullOrEmpty(p)));
+        }
+
+        private void SaveSettings()
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(txtTarget.Text))
+                    WritePrivateProfileString(IniSection, "Target", txtTarget.Text.Replace("\r\n", "").Replace("\n", ""), IniPath);
+                WritePrivateProfileString(IniSection, "Port", CleanPortsText(txtPort.Text), IniPath);
+                WritePrivateProfileString(IniSection, "Threads", txtThreads.Text.Replace("\r\n", "").Replace("\n", ""), IniPath);
+                WritePrivateProfileString(IniSection, "Timeout", txtTimeout.Text.Replace("\r\n", "").Replace("\n", ""), IniPath);
+            }
+            catch { }
+        }
+
+        private void LoadSettings()
+        {
+            try
+            {
+                var sb = new StringBuilder(256);
+                string val;
+                GetPrivateProfileString(IniSection, "Target", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtTarget.Text = val;
+                GetPrivateProfileString(IniSection, "Port", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtPort.Text = val;
+                GetPrivateProfileString(IniSection, "Threads", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtThreads.Text = val;
+                GetPrivateProfileString(IniSection, "Timeout", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtTimeout.Text = val;
+            }
+            catch { }
+        }
         private readonly string commonPorts = "21-23,53,80,110,123,143,443,445,465,587,1433,1900,3306,3389,4000,5000,5201,5900,6000,7890-7895,8000,8080,8888,8989,9000,9090,9833,9987,9999";
-        private CancellationTokenSource _cts; // 控制扫描停止的“红绿灯”
+        private CancellationTokenSource _cts;
         private bool _isScanning = false;      // 记录当前是否正在扫描
 
         public PortScan()
@@ -57,40 +104,9 @@ namespace NetInfoCheckerX
 
             try
             {
-                foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+                foreach (NicAddressInfo nicAddress in NicHelper.GetUsableIPAddresses())
                 {
-                    // 按照夢酱提供的“聪明”筛选逻辑
-                    if (ni.OperationalStatus != OperationalStatus.Up) continue;
-
-                    string desc = ni.Description.ToLower();
-                    if (desc.Contains("vmware") || desc.Contains("virtual") || desc.Contains("vbox") || desc.Contains("hyper-v") || desc.Contains("wsl") || desc.Contains("pseudo") || desc.Contains("tap") || desc.Contains("tun") || desc.Contains("loopback") || desc.Contains("vpn") || desc.Contains("teredo"))
-                        continue;
-
-                    var ipProps = ni.GetIPProperties();
-                    bool isPhysical = (ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet ||
-                                       ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211);
-                    bool hasGateway = ipProps.GatewayAddresses.Count > 0;
-
-                    if (!isPhysical && !hasGateway) continue;
-
-                    foreach (UnicastIPAddressInformation ipInfo in ipProps.UnicastAddresses)
-                    {
-                        IPAddress ip = ipInfo.Address;
-                        if (IPAddress.IsLoopback(ip)) continue;
-                        if (ip.IsIPv6LinkLocal) continue;
-
-                        if (ip.AddressFamily == AddressFamily.InterNetwork)
-                        {
-                            byte[] bytes = ip.GetAddressBytes();
-                            if (bytes[0] == 169 && bytes[1] == 254) continue;
-                        }
-
-                        string ipStr = ip.ToString();
-                        if (ipStr.Contains("%")) ipStr = ipStr.Split('%')[0];
-
-                        string displayName = $"{ipStr} ({ni.Name})";
-                        comboLocalEnd.Items.Add(displayName);
-                    }
+                    comboLocalEnd.Items.Add(nicAddress.DisplayText);
                 }
             }
             catch (Exception ex)
@@ -106,19 +122,12 @@ namespace NetInfoCheckerX
             bool isLight = Global.isThemelight;
             Color textBack = isLight ? Global.colorWhite : Global.themeBlack;
 
-            // --- 夢酱指定的色彩细化 ---
-            // 基础文字颜色：浅色下是黑色，深色下是白色
             Color baseContrastColor = isLight ? Color.Black : Color.White;
-            // lblExeName 专属颜色：浅色 #8e8cd8 (Global.Yumeyo)，深色 #a8a5ff (Global.Yumeyo2)
             Color exeNameColor = isLight ? Global.Yumeyo : Global.Yumeyo2;
-            // 60 灰按钮背景
             Color btnDarkBack = Color.FromArgb(60, 60, 60);
 
-            // --- 2. 窗口整体背景 ---
             this.BackColor = isLight ? Global.themeLight : Global.themeBlack;
 
-            // --- 3. 标签分类处理 ---
-            // A组：必须严格遵循 黑/白 切换的标签
             Control[] blackWhiteLabels = {
         lblTarget, lblPort, lblThreads, lblTimeout, lbl5780LocalEnd, lblThreads, lblTimeout
     };
@@ -131,14 +140,12 @@ namespace NetInfoCheckerX
                 }
             }
 
-            // B组：夢酱指定的特殊主题色标签
             if (lblExeName != null)
             {
                 lblExeName.ForeColor = exeNameColor;
                 lblExeName.BackColor = Color.Transparent;
             }
 
-            // --- 4. 输入框处理 (保持与背景色同步) ---
             Control[] editControls = {
         txtTarget, txtPort, txtThreads, txtTimeout, comboLocalEnd
     };
@@ -160,7 +167,6 @@ namespace NetInfoCheckerX
                 }
             }
 
-            // --- 5. 结果框处理 ---
             if (richResult != null)
             {
                 richResult.BackColor = textBack;
@@ -168,7 +174,6 @@ namespace NetInfoCheckerX
                 richResult.BorderStyle = isLight ? BorderStyle.Fixed3D : BorderStyle.FixedSingle;
             }
 
-            // --- 6. 按钮组 ---
             Control[] buttons = { btnOK, btnPaste, btnSave, btnMinimum, btnFull };
             foreach (var b in buttons)
             {
@@ -198,6 +203,7 @@ namespace NetInfoCheckerX
             _ = ApplyPortScanThemeAsync();
             lblExeName.Text = Global.exeName + " " + Global.Version;
             InitNetworkInterfaces();
+            LoadSettings();
         }
 
         private void btnPaste_Click(object sender, EventArgs e)
@@ -261,10 +267,8 @@ namespace NetInfoCheckerX
                 }
             }
         }
-        //清洗端口号
         private List<int> ParsePorts(string input)
         {
-            // 1. 简单清洗：替换中文逗号，过滤掉非法字符
             string cleaned = Regex.Replace(input.Replace("，", ","), @"[^0-9,\-]", "");
             List<int> portList = new List<int>();
 
@@ -273,7 +277,7 @@ namespace NetInfoCheckerX
                 string[] parts = cleaned.Split(',');
                 foreach (var part in parts)
                 {
-                    if (part.Contains("-")) // 处理 100-200 这种范围
+                    if (part.Contains("-"))
                     {
                         var range = part.Split('-');
                         if (range.Length == 2 && int.TryParse(range[0], out int start) && int.TryParse(range[1], out int end))
@@ -282,45 +286,38 @@ namespace NetInfoCheckerX
                                 if (i >= 0 && i <= 65535) portList.Add(i);
                         }
                     }
-                    else if (int.TryParse(part, out int port)) // 处理单个端口
+                    else if (int.TryParse(part, out int port))
                     {
                         if (port >= 0 && port <= 65535) portList.Add(port);
                     }
                 }
             }
-            catch { /* 忽略解析错误 */ }
-            return portList.Distinct().ToList(); // 去重后返回
+            catch { }
+            return portList.Distinct().ToList();
         }
 
-        // --- 工具方法：格式化 IP 文本 ---
         private string GetFormattedIP()
         {
             string raw = txtTarget.Text.Trim();
 
-            //✨ 正则表达式大扫除：只保留 字母、数字、点(.)、冒号(:)
             raw = Regex.Replace(raw, @"[^a-zA-Z0-9\.\:\-]", "");
 
-            // 检查清洗后是否还剩下内容
             if (string.IsNullOrEmpty(raw))
             {
-                SystemSounds.Beep.Play(); // 播放系统提示音
+                SystemSounds.Beep.Play();
                 return String.Empty;
             }
 
-            // 把清洗干净的地址放回输入框
             return raw;
         }
 
-        //开始按钮方法
         private async void btnOK_Click(object sender, EventArgs e)
         {
             // 自动刷新网卡（若当前选中的网卡已不存在）
             EnsureSelectedNICValid();
 
-            // --- 1. 状态切换逻辑 ---
             if (_isScanning) { _cts?.Cancel(); return; }
 
-            // --- 2. 参数读取与目标解析 ---
             string target = GetFormattedIP();
             if (string.IsNullOrEmpty(target)) return;
 
@@ -336,7 +333,6 @@ namespace NetInfoCheckerX
                 return;
             }
 
-            // --- 3. 出口 IP 探测与协议检查 ---
             IPAddress selectedIp = GetSelectedLocalIP();
             IPAddress actualLocalIp = GetActualLocalIP(target, selectedIp);
 
@@ -348,7 +344,6 @@ namespace NetInfoCheckerX
                 return;
             }
 
-            // --- 4. 智能选中网卡（防重复逻辑） ---
             if (selectedIp.Equals(IPAddress.Any) || selectedIp.Equals(IPAddress.IPv6Any))
             {
                 string targetPrefix = actualLocalIp.ToString() + " (";
@@ -370,7 +365,6 @@ namespace NetInfoCheckerX
                 }
             }
 
-            // --- 5. 准备扫描参数 ---
             string finalLocalInfo = comboLocalEnd.SelectedItem.ToString();
             List<int> ports = ParsePorts(txtPort.Text);
             if (!int.TryParse(txtThreads.Text, out int threadCount)) threadCount = 100;
@@ -382,7 +376,6 @@ namespace NetInfoCheckerX
             SetControlsEnabled(false);
             richResult.Clear();
 
-            // --- 6. 打印梦酱要求的抬头格式 ---
             richResult.AppendText($"[扫描目标] {target} 的 {txtPort.Text.Trim()} 端口\n");
             richResult.AppendText($"[使用网卡] {finalLocalInfo}\n");
             richResult.AppendText($"[扫描设置] 线程 {threadCount} / 超时 {timeout}ms\n");
@@ -390,7 +383,6 @@ namespace NetInfoCheckerX
             richResult.AppendText("[TCP端口] ");
             richResult.ScrollToCaret();
 
-            // --- 7. 排序收集与进度报告逻辑 ---
             List<int> foundPortsList = new List<int>();
             var progress = new Progress<int>(port =>
             {
@@ -410,7 +402,6 @@ namespace NetInfoCheckerX
                 }
             });
 
-            // --- 8. 核心后台扫描引擎 ---
             await Task.Run(async () =>
             {
                 try
@@ -472,7 +463,7 @@ namespace NetInfoCheckerX
             int start = richResult.Find("[TCP端口]");
             if (start >= 0)
             {
-                // 选中从“[TCP端口]”开始到结尾的所有文本
+                // 选中从"[TCP端口]"开始到结尾的所有文本
                 richResult.Select(start, richResult.TextLength - start);
                 // 替换为排序后的新文本
                 richResult.SelectedText = newLineText;
@@ -638,19 +629,21 @@ namespace NetInfoCheckerX
 
         private void PortScan_FormClosing(object sender, FormClosingEventArgs e)
         {
+            SaveSettings();
             if (_isScanning)
             {
                 _cts?.Cancel(); // 告诉扫描任务赶紧停下
             }
+            _cts?.Dispose();
+            _cts = null;
         }
 
         private void txtTarget_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter)
             {
-                e.Handled = true; // 阻止系统默认处理
+                e.Handled = true;
 
-                // 调用按钮的点击事件
                 btnOK_Click(sender, e);
             }
         }
@@ -659,9 +652,8 @@ namespace NetInfoCheckerX
         {
             if (e.KeyCode == Keys.Enter)
             {
-                e.Handled = true; // 阻止系统默认处理
+                e.Handled = true;
 
-                // 调用按钮的点击事件
                 btnOK_Click(sender, e);
             }
         }
@@ -670,9 +662,8 @@ namespace NetInfoCheckerX
         {
             if (e.KeyCode == Keys.Enter)
             {
-                e.Handled = true; // 阻止系统默认处理
+                e.Handled = true;
 
-                // 调用按钮的点击事件
                 btnOK_Click(sender, e);
             }
         }
@@ -681,9 +672,8 @@ namespace NetInfoCheckerX
         {
             if (e.KeyCode == Keys.Enter)
             {
-                e.Handled = true; // 阻止系统默认处理
+                e.Handled = true;
 
-                // 调用按钮的点击事件
                 btnOK_Click(sender, e);
             }
         }
@@ -692,9 +682,8 @@ namespace NetInfoCheckerX
         {
             if (e.KeyCode == Keys.Enter)
             {
-                e.Handled = true; // 阻止系统默认处理
+                e.Handled = true;
 
-                // 调用按钮的点击事件
                 btnOK_Click(sender, e);
             }
         }
@@ -703,9 +692,8 @@ namespace NetInfoCheckerX
         {
             if (e.KeyCode == Keys.Enter)
             {
-                e.Handled = true; // 阻止系统默认处理
+                e.Handled = true;
 
-                // 调用按钮的点击事件
                 btnOK_Click(sender, e);
             }
         }
