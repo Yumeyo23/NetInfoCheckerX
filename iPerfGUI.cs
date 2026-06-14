@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -12,32 +13,62 @@ namespace NetInfoCheckerX
 {
     public partial class iPerfGUI : Form
     {
-        // --- 🧪 夢酱的强力内存清理魔法 ---
-        [DllImport("kernel32.dll")]
-        private static extern bool SetProcessWorkingSetSize(IntPtr proc, int min, int max);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern int WritePrivateProfileString(string section, string key, string value, string filePath);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetPrivateProfileString(string section, string key, string defaultValue,
+            StringBuilder buffer, int size, string filePath);
+        private string IniPath => Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
+        private const string IniSection = "iPerfGUI";
 
-        /// <summary>
-        /// 强制释放程序占用的内存，把它还给系统
-        /// </summary>
-        public void FlushMemory()
+        private void SaveSettings()
         {
             try
             {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                if (Environment.OSVersion.Platform == PlatformID.Win32NT)
-                {
-                    // 将工作集大小设为 -1，触发 Windows 强制回收
-                    SetProcessWorkingSetSize(Process.GetCurrentProcess().Handle, -1, -1);
-                }
+                WritePrivateProfileString(IniSection, "ClientIP", txtClientIP.Text, IniPath);
+                WritePrivateProfileString(IniSection, "ClientPort", txtClientPort.Text, IniPath);
+                WritePrivateProfileString(IniSection, "ServerPort", txtServerPort.Text, IniPath);
+                WritePrivateProfileString(IniSection, "Limit", txtLimit.Text, IniPath);
+                WritePrivateProfileString(IniSection, "TCP", chkTCP.Checked.ToString().ToLower(), IniPath);
+                WritePrivateProfileString(IniSection, "Way", chkWay.Checked.ToString().ToLower(), IniPath);
+                WritePrivateProfileString(IniSection, "Top", chkTop.Checked.ToString().ToLower(), IniPath);
+                WritePrivateProfileString(IniSection, "Time", numTime.Value.ToString(), IniPath);
+                WritePrivateProfileString(IniSection, "Thread", numThread.Value.ToString(), IniPath);
             }
-            catch { /* 静默处理，不打扰梦酱 */ }
+            catch { }
         }
-        // ------------------------------
+
+        private void LoadSettings()
+        {
+            try
+            {
+                var sb = new StringBuilder(256);
+                string val;
+                GetPrivateProfileString(IniSection, "ClientIP", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtClientIP.Text = val;
+                GetPrivateProfileString(IniSection, "ClientPort", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtClientPort.Text = val;
+                GetPrivateProfileString(IniSection, "ServerPort", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtServerPort.Text = val;
+                GetPrivateProfileString(IniSection, "Limit", "", sb, sb.Capacity, IniPath);
+                txtLimit.Text = sb.ToString(); // Limit can legitimately be empty
+                GetPrivateProfileString(IniSection, "TCP", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) chkTCP.Checked = val.ToLower() == "true";
+                GetPrivateProfileString(IniSection, "Way", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) chkWay.Checked = val.ToLower() == "true";
+                GetPrivateProfileString(IniSection, "Top", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) chkTop.Checked = val.ToLower() == "true";
+                GetPrivateProfileString(IniSection, "Time", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString()) && decimal.TryParse(val, out decimal t)) numTime.Value = t;
+                GetPrivateProfileString(IniSection, "Thread", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString()) && decimal.TryParse(val, out decimal n)) numThread.Value = n;
+            }
+            catch { }
+        }
+        private string _tempBatPath = null;
 
         public iPerfGUI()
         {
-            // 1. 先检查文件（在还没出生前就检查）
             string appPath = Application.StartupPath;
             var missing = new List<string>();
             foreach (var f in new[] { "cygwin1.dll", "iperf3.exe" })
@@ -45,7 +76,6 @@ namespace NetInfoCheckerX
                 if (!File.Exists(Path.Combine(appPath, f))) missing.Add(f);
             }
 
-            // 2. 如果缺文件，直接在这里弹窗
             if (missing.Count > 0)
             {
                 MessageBox.Show($"缺少运行iPerfGUI必要的文件：\n{string.Join("\n", missing)}\n建议重新打开/解压查询器X/检查杀毒软件喵。",
@@ -54,15 +84,21 @@ namespace NetInfoCheckerX
             }
 
             InitializeComponent();
+            this.FormClosing += iPerfGUI_FormClosing;
         }
 
-private void btnClientStart_Click(object sender, EventArgs e)
+        private void btnClientStart_Click(object sender, EventArgs e)
         {
-            // 确保使用绝对路径，防止 CMD 迷路
+            EnsureClientNICValid();
+
             string iperfPath = Path.Combine(Application.StartupPath, "iperf3.exe");
 
             StringBuilder arguments = new StringBuilder();
             arguments.Append("-c ").Append(txtClientIP.Text.Trim());
+
+            string bindNIC = GetSelectedIP(comboClientNIC);
+            if (!string.IsNullOrEmpty(bindNIC))
+                arguments.Append(" -B ").Append(bindNIC);
 
             if (!string.IsNullOrEmpty(txtClientPort.Text))
                 arguments.Append(" -p ").Append(txtClientPort.Text.Trim());
@@ -80,7 +116,6 @@ private void btnClientStart_Click(object sender, EventArgs e)
 
             string iperfArguments = arguments.ToString();
 
-            // 收集本次运行的参数信息，用于在控制台开头显示
             string direction = chkWay.Checked ? "下载" : "上传";
             string protocol = chkTCP.Checked ? "TCP" : "UDP";
             string threads = numThread.Value.ToString();
@@ -88,10 +123,10 @@ private void btnClientStart_Click(object sender, EventArgs e)
             string time = numTime.Value.ToString();
             string serverIp = txtClientIP.Text.Trim();
             string port = string.IsNullOrEmpty(txtClientPort.Text.Trim()) ? "5201" : txtClientPort.Text.Trim();
+            string nicDisplay = string.IsNullOrEmpty(bindNIC) ? "系统默认" : bindNIC;
 
-            // 创建临时批处理脚本，在 iperf 输出前显示带颜色的参数摘要
             string tempBat = Path.Combine(Path.GetTempPath(), $"nicx_iperf_{Environment.TickCount}.cmd");
-            string esc = "\x1b";  // ANSI ESC 字符，用于控制台着色（黄色 = 255,255,0）
+            string esc = "\x1b";
             string colorOn = $"{esc}[38;2;255;255;0m";
             string colorOff = $"{esc}[0m";
 
@@ -99,7 +134,7 @@ private void btnClientStart_Click(object sender, EventArgs e)
             bat.AppendLine("@echo off");
             bat.AppendLine("chcp 65001 >nul 2>&1");
             bat.AppendLine($"echo {colorOn}^>^>^>本次iperf运行参数：{colorOff}");
-            bat.AppendLine($"echo {colorOn}● 服务器[{serverIp}]  端口[{port}]{colorOff}");
+            bat.AppendLine($"echo {colorOn}● 服务器[{serverIp}]  端口[{port}]  使用网卡[{nicDisplay}]{colorOff}");
             bat.AppendLine($"echo {colorOn}方向[{direction}]  协议[{protocol}]  线程[{threads}]  限速[{limit}]Mbps  时长[{time}]秒{colorOff}");
             bat.AppendLine($"echo {colorOn}……………………………………………………………………………………{colorOff}");
             bat.AppendLine($"\"{iperfPath}\" {iperfArguments} -f m");
@@ -110,6 +145,7 @@ private void btnClientStart_Click(object sender, EventArgs e)
             try
             {
                 File.WriteAllText(tempBat, bat.ToString(), new UTF8Encoding(false));
+                _tempBatPath = tempBat;
 
                 ProcessStartInfo startInfo = new ProcessStartInfo
                 {
@@ -119,11 +155,7 @@ private void btnClientStart_Click(object sender, EventArgs e)
                     WorkingDirectory = Application.StartupPath
                 };
 
-                // 使用 using 确保 C# 这边的进程句柄被立即释放
                 using (Process.Start(startInfo)) { }
-
-                // 运行完立刻呼唤"清道夫"
-                FlushMemory();
             }
             catch (Exception ex)
             {
@@ -133,24 +165,29 @@ private void btnClientStart_Click(object sender, EventArgs e)
 
         private void btnServerStart_Click(object sender, EventArgs e)
         {
+            EnsureServerNICValid();
+
             string iperfPath = Path.Combine(Application.StartupPath, "iperf3.exe");
 
             if (!File.Exists(iperfPath))
             {
-                MessageBox.Show("找不到 iperf3.exe 文件！", "启动错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("找不到 iperf3.exe ", "启动错误了", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
             StringBuilder arguments = new StringBuilder();
             arguments.Append("-s");
 
+            string bindIP = GetSelectedIP(comboServerIP);
+            if (!string.IsNullOrEmpty(bindIP))
+                arguments.Append(" -B ").Append(bindIP);
+
             if (!string.IsNullOrEmpty(txtServerPort.Text))
                 arguments.Append(" -p ").Append(txtServerPort.Text.Trim());
 
-            arguments.Append(" -V");
+            arguments.Append(" -V --debug");
 
             string iperfArguments = arguments.ToString();
-            // 服务器模式通常保持开启，所以使用 /k
             string finalCmdArguments = $"/k \"\"{iperfPath}\" {iperfArguments}\"";
 
             try
@@ -164,7 +201,6 @@ private void btnClientStart_Click(object sender, EventArgs e)
                 };
 
                 using (Process.Start(startInfo)) { }
-                FlushMemory();
             }
             catch (Exception ex)
             {
@@ -190,7 +226,6 @@ private void btnClientStart_Click(object sender, EventArgs e)
 
         private async Task ApplyIPerfThemeAsync()
         {
-            // 如果任务开始时窗口已经关闭了，或者正在关闭，就直接溜掉~
             if (this.IsDisposed || this.Disposing) return;
 
             bool isLight = Global.isThemelight;
@@ -201,7 +236,6 @@ private void btnClientStart_Click(object sender, EventArgs e)
             Color contrastColor = isLight ? Color.Black : Color.White;
             Color controlBack = isLight ? Global.colorWhite : Global.themeBlack;
 
-            // 批量处理颜色，减少内存消耗
             Action<Control, Color, Color> setStyle = (ctrl, fore, back) =>
             {
                 if (ctrl != null)
@@ -213,15 +247,22 @@ private void btnClientStart_Click(object sender, EventArgs e)
 
             setStyle(lblServerTitle, yumeyoColor, Color.Empty);
             setStyle(lblClientTitle, yumeyoColor, Color.Empty);
-            setStyle(label1, yumeyoColor, Color.Empty);
 
-            Control[] labels = { lblServerIP, lblClient, lblTime, lblThread, lblLimit };
+            Control[] labels = { lblServerIP, lblClient, lblClientNIC, lblTime, lblThread, lblLimit };
             foreach (var c in labels) setStyle(c, contrastColor, Color.Empty);
 
-            Control[] inputs = { txtServerIP, txtServerPort, txtClientIP, txtClientPort, txtLimit, numTime, numThread, chkWay, chkTCP, chkTop };
+            Control[] inputs = { comboServerIP, txtServerPort, txtClientIP, txtClientPort, txtLimit, numTime, numThread, chkWay, chkTCP, chkTop, comboClientNIC };
             foreach (var c in inputs)
             {
                 setStyle(c, contrastColor, (c is CheckBox) ? Color.Transparent : controlBack);
+
+                if (c is ComboBox cb)
+                {
+                    if (isLight)
+                        cb.FlatStyle = FlatStyle.Standard;
+                    else
+                        cb.FlatStyle = FlatStyle.Flat;
+                }
             }
 
             Button[] buttons = { btnServerStart, btnClientStart };
@@ -241,7 +282,6 @@ private void btnClientStart_Click(object sender, EventArgs e)
                     btn.BackColor = btnDarkBack;
                     btn.FlatStyle = FlatStyle.Flat;
                     btn.FlatAppearance.BorderColor = Color.DimGray;
-                    // 悬停时变梦酱紫
                     btn.FlatAppearance.MouseOverBackColor = ColorTranslator.FromHtml("#8e8cd8");
                 }
             }
@@ -249,18 +289,119 @@ private void btnClientStart_Click(object sender, EventArgs e)
 
         private void iPerfGUI_Load(object sender, EventArgs e)
         {
-            // 这里的 Load 逻辑就变简单了，因为能走到这里的肯定文件都齐了
+            InitNICList();
+            LoadSettings();
             _ = ApplyIPerfThemeAsync();
-        }
-
-        private void txtServerIP_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.KeyCode == Keys.Enter) btnServerStart_Click(sender, e);
+            this.MinimumSize = this.Size;
         }
 
         private void txtClientIP_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter) btnClientStart_Click(sender, e);
+        }
+
+        // ===================== 网卡列表与纠错机制 =====================
+
+        /// <summary>
+        /// 从 ComboBox 选中项中提取纯 IP 地址。默认选项返回 null。
+        /// </summary>
+        private string GetSelectedIP(ComboBox combo)
+        {
+            string text = combo.Text.Trim();
+            if (string.IsNullOrEmpty(text)) return null;
+            if (text == "(Any)" || text == "(系统默认)") return null;
+
+            // "192.168.1.5 (以太网)" → "192.168.1.5"
+            if (text.Contains(" ")) text = text.Split(' ')[0];
+
+            if (IPAddress.TryParse(text, out _)) return text;
+            return null;
+        }
+
+        /// <summary>
+        /// 加载本机物理网卡 IP 列表到两个 ComboBox
+        /// </summary>
+        private void InitNICList()
+        {
+            string serverSelected = comboServerIP.Text;
+            string clientSelected = comboClientNIC.Text;
+
+            comboServerIP.Items.Clear();
+            comboServerIP.Items.Add("(Any)");
+
+            comboClientNIC.Items.Clear();
+            comboClientNIC.Items.Add("(系统默认)");
+
+            try
+            {
+                foreach (NicAddressInfo nicAddress in NicHelper.GetUsableIPAddresses())
+                {
+                    comboServerIP.Items.Add(nicAddress.DisplayText);
+                    comboClientNIC.Items.Add(nicAddress.DisplayText);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("初始化网卡失败: " + ex.Message, "获取失败了", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+            }
+
+            // 恢复之前选中的项，找不到则保持默认
+            RestoreComboSelection(comboServerIP, serverSelected);
+            RestoreComboSelection(comboClientNIC, clientSelected);
+        }
+
+        private void RestoreComboSelection(ComboBox combo, string previousText)
+        {
+            if (string.IsNullOrEmpty(previousText))
+            {
+                if (combo.Items.Count > 0) combo.SelectedIndex = 0;
+                return;
+            }
+
+            foreach (var item in combo.Items)
+            {
+                if (item.ToString() == previousText)
+                {
+                    combo.SelectedItem = item;
+                    return;
+                }
+            }
+            if (combo.Items.Count > 0) combo.SelectedIndex = 0;
+        }
+
+        private void EnsureServerNICValid()
+        {
+            string selectedText = comboServerIP.Text;
+            if (string.IsNullOrEmpty(selectedText)) return;
+            if (selectedText.Contains("Any")) return;
+
+            InitNICList();
+        }
+
+        private void EnsureClientNICValid()
+        {
+            string selectedText = comboClientNIC.Text;
+            if (string.IsNullOrEmpty(selectedText)) return;
+            if (selectedText.Contains("系统默认")) return;
+
+            InitNICList();
+        }
+
+        private void iPerfGUI_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            SaveSettings();
+            try
+            {
+                if (!string.IsNullOrEmpty(_tempBatPath) && File.Exists(_tempBatPath))
+                {
+                    File.Delete(_tempBatPath);
+                    _tempBatPath = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[iPerfGUI] 删除临时文件失败: {ex.Message}");
+            }
         }
     }
 }
