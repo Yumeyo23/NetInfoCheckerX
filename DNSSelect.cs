@@ -1,11 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Data;
 using System.Diagnostics;
 using System.Drawing;
-using System.Linq;
+using System.IO;
 using System.Net;
-using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -17,22 +15,97 @@ namespace NetInfoCheckerX
 {
     public partial class DNSSelect : Form
     {
-        // 这里的变量用来控制测试的开关
-        private bool isTesting = false; // 是否正在测试中
-        private int remainingSeconds = 300; // 剩余秒数
-        private CancellationTokenSource cts; // 用于一键停止所有异步任务
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern int WritePrivateProfileString(string section, string key, string value, string filePath);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetPrivateProfileString(string section, string key, string defaultValue,
+            StringBuilder buffer, int size, string filePath);
+        private string IniPath => Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
+        private const string IniSection = "DNSSelect";
 
-        // 在类顶部定义，这样整个程序运行期间只初始化一次
+        private void SaveSettings()
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(comboTLD.Text))
+                    WritePrivateProfileString(IniSection, "TLD", comboTLD.Text, IniPath);
+                WritePrivateProfileString(IniSection, "Timeout", txtTimeout.Text, IniPath);
+                if (radioDOH1.Checked) WritePrivateProfileString(IniSection, "Mode1", "DOH", IniPath);
+                else WritePrivateProfileString(IniSection, "Mode1", "DNS", IniPath);
+                if (radioDOH2.Checked) WritePrivateProfileString(IniSection, "Mode2", "DOH", IniPath);
+                else WritePrivateProfileString(IniSection, "Mode2", "DNS", IniPath);
+                if (radioDOH3.Checked) WritePrivateProfileString(IniSection, "Mode3", "DOH", IniPath);
+                else WritePrivateProfileString(IniSection, "Mode3", "DNS", IniPath);
+                if (radioDOH4.Checked) WritePrivateProfileString(IniSection, "Mode4", "DOH", IniPath);
+                else WritePrivateProfileString(IniSection, "Mode4", "DNS", IniPath);
+                if (!string.IsNullOrEmpty(comboServer1.Text))
+                    WritePrivateProfileString(IniSection, "Server1", comboServer1.Text, IniPath);
+                if (!string.IsNullOrEmpty(comboServer2.Text))
+                    WritePrivateProfileString(IniSection, "Server2", comboServer2.Text, IniPath);
+                if (!string.IsNullOrEmpty(comboServer3.Text))
+                    WritePrivateProfileString(IniSection, "Server3", comboServer3.Text, IniPath);
+                if (!string.IsNullOrEmpty(comboServer4.Text))
+                    WritePrivateProfileString(IniSection, "Server4", comboServer4.Text, IniPath);
+            }
+            catch { }
+        }
+
+        private void LoadSettings()
+        {
+            try
+            {
+                var sb = new StringBuilder(256);
+                string val;
+                GetPrivateProfileString(IniSection, "TLD", "", sb, sb.Capacity, IniPath);
+                string tld = sb.ToString();
+                if (!string.IsNullOrEmpty(tld) && comboTLD.Items.Count > 0)
+                {
+                    int idx = -1;
+                    for (int i = 0; i < comboTLD.Items.Count; i++)
+                        if (comboTLD.Items[i].ToString() == tld) { idx = i; break; }
+                    if (idx >= 0) comboTLD.SelectedIndex = idx;
+                    else comboTLD.Text = tld;
+                }
+                GetPrivateProfileString(IniSection, "Timeout", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtTimeout.Text = val;
+                GetPrivateProfileString(IniSection, "Mode1", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) { if (val == "DOH") radioDOH1.Checked = true; else if (val == "DNS") radioDNS1.Checked = true; }
+                GetPrivateProfileString(IniSection, "Mode2", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) { if (val == "DOH") radioDOH2.Checked = true; else if (val == "DNS") radioDNS2.Checked = true; }
+                GetPrivateProfileString(IniSection, "Mode3", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) { if (val == "DOH") radioDOH3.Checked = true; else if (val == "DNS") radioDNS3.Checked = true; }
+                GetPrivateProfileString(IniSection, "Mode4", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) { if (val == "DOH") radioDOH4.Checked = true; else if (val == "DNS") radioDNS4.Checked = true; }
+                GetPrivateProfileString(IniSection, "Server1", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) RestoreComboText(comboServer1, val);
+                GetPrivateProfileString(IniSection, "Server2", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) RestoreComboText(comboServer2, val);
+                GetPrivateProfileString(IniSection, "Server3", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) RestoreComboText(comboServer3, val);
+                GetPrivateProfileString(IniSection, "Server4", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) RestoreComboText(comboServer4, val);
+            }
+            catch { }
+        }
+
+        private void RestoreComboText(ComboBox combo, string text)
+        {
+            for (int i = 0; i < combo.Items.Count; i++)
+                if (combo.Items[i].ToString() == text) { combo.SelectedIndex = i; return; }
+            combo.Text = text;
+        }
+        private bool isTesting = false;
+        private int remainingSeconds = 300;
+        private CancellationTokenSource cts;
+
         private static readonly Random globalRnd = new Random();
 
-        // 定义三种测试状态
         public enum TestResultStatus
         {
-            Success,      // 成功：有回包且解析出了 IP
-            LogicError,   // 逻辑错误：有回包但告诉我们解析失败（比如 NXDOMAIN）
-            NetworkError  // 网络错误：完全没回包（超时或断网）
+            Success,
+            LogicError,
+            NetworkError
         }
-        //自由拖拽
         [DllImport("user32.dll")]
         public static extern bool ReleaseCapture();
 
@@ -43,7 +116,6 @@ namespace NetInfoCheckerX
         private const int SC_MOVE = 0xF010;
         private const int HTCAPTION = 0x0002;
 
-        // 这是一个通用的拖动处理函数
         private void MyMouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Left)
@@ -59,12 +131,20 @@ namespace NetInfoCheckerX
 
         private void DNSSelect_Load(object sender, EventArgs e)
         {
-            //随意拖拽
             this.MouseDown += MyMouseDown;
             pictureBox1.MouseDown += MyMouseDown;
             this.MinimumSize = this.Size;
             timer2.Start();
+
+            CloudControl.LoadDNSTLD(comboTLD);
+            CloudControl.LoadDNSServers(comboServer1);
+            CloudControl.LoadDNSServers(comboServer2);
+            CloudControl.LoadDNSServers(comboServer3);
+            CloudControl.LoadDNSServers(comboServer4);
+
             Task.Run(() => DNSSelectLoadALL());
+            CloudControl.UsedTimesCounter("DNS真选");
+            LoadSettings();
         }
 
         // 自动刷新网卡：当系统网卡变化导致选中网卡不存在时，刷新列表并恢复默认
@@ -102,61 +182,16 @@ namespace NetInfoCheckerX
             //获取本机所有网卡
             try
             {
-                foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+                foreach (NicAddressInfo nicAddress in NicHelper.GetUsableIPAddresses())
                 {
-                    // 状态过滤：只看正在运行的
-                    if (ni.OperationalStatus != OperationalStatus.Up) continue;
-
-                    // 关键字黑名单：排除常见的纯虚拟网卡环境
-                    string desc = ni.Description.ToLower();
-                    if (desc.Contains("vmware") || desc.Contains("virtual") || desc.Contains("vbox") || desc.Contains("hyper-v") || desc.Contains("wsl") || desc.Contains("pseudo") || desc.Contains("tap") || desc.Contains("tun") || desc.Contains("loopback") || desc.Contains("vpn") || desc.Contains("teredo"))
-                        continue;
-
-                    // 获取 IP 属性
-                    var ipProps = ni.GetIPProperties();
-
-                    // 保留物理网卡+有网关的虚拟网卡
-                    bool isPhysical = (ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet ||
-                                       ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211);
-                    bool hasGateway = ipProps.GatewayAddresses.Count > 0;
-
-                    if (!isPhysical && !hasGateway) continue;
-
-                    // 遍历该网卡下的所有 IP
-                    foreach (UnicastIPAddressInformation ipInfo in ipProps.UnicastAddresses)
-                    {
-                        IPAddress ip = ipInfo.Address;
-
-                        // 排除回环地址、链路本地地址
-                        if (IPAddress.IsLoopback(ip)) continue;
-                        if (ip.IsIPv6LinkLocal) continue;
-                        if (ip.AddressFamily == AddressFamily.InterNetwork)
-                        {
-                            byte[] bytes = ip.GetAddressBytes();
-                            if (bytes[0] == 169 && bytes[1] == 254) continue;
-                        }
-
-                        // 去掉IPv6的%ID
-                        string ipStr = ip.ToString();
-                        if (ipStr.Contains("%")) ipStr = ipStr.Split('%')[0];
-
-                        //显示IP的同时也显示网卡名称
-                        string displayName = string.Format("{0} ({1})", ipStr, ni.Name);
-
-                        comboLocalEnd.Items.Add(displayName);
-                    }
+                    comboLocalEnd.Items.Add(nicAddress.DisplayText);
                 }
             }
             catch (Exception ex)
             {
                 MessageBox.Show("获取网卡列表失败: " + ex.Message);
             }
-            // 开发调试服务器列表
-            CloudControl.LoadDNSTLD(comboTLD);
-            CloudControl.LoadDNSServers(comboServer1);
-            CloudControl.LoadDNSServers(comboServer2);
-            CloudControl.LoadDNSServers(comboServer3);
-            CloudControl.LoadDNSServers(comboServer4);
+            // 开发调试服务器列表（仅在窗口载入时加载一次，此处不再重复加载）
             CloudControl.ApplyDevTitle(this);
         }
 
@@ -164,44 +199,39 @@ namespace NetInfoCheckerX
         {
             if (!isTesting)
             {
-                // 自动刷新网卡（若当前选中的网卡已不存在）
                 EnsureSelectedNICValid();
 
-                // --- 1. 获取基础参数 ---
                 string tld = comboTLD.Text;
-                if (string.IsNullOrEmpty(tld)) { MessageBox.Show("夢酱，记得填入根域名哦！"); return; }
+                if (string.IsNullOrEmpty(tld)) { MessageBox.Show("请填入根域名"); return; }
 
                 int timeout;
                 if (!int.TryParse(txtTimeout.Text, out timeout)) timeout = 2000;
 
-                // --- 2. 核心：出口 IP 自动识别逻辑 ---
                 string selectedIpInfo = comboLocalEnd.Text;
-                string finalIp = selectedIpInfo.Split(' ')[0]; // 拿到原始填写的 IP 部分（如 0.0.0.0）
+                string finalIp = selectedIpInfo.Split(' ')[0];
 
                 if (finalIp == "0.0.0.0" || finalIp == "::")
                 {
                     AddressFamily family = (finalIp == "0.0.0.0") ? AddressFamily.InterNetwork : AddressFamily.InterNetworkV6;
-                    string realIp = GetRoutingLocalIp(family); // 调用刚才定义的寻路方法
+                    string realIp = GetRoutingLocalIp(family);
 
                     if (!string.IsNullOrEmpty(realIp))
                     {
-                        // 在 ComboBox 中寻找匹配的项并切换过去
                         for (int i = 0; i < comboLocalEnd.Items.Count; i++)
                         {
                             if (comboLocalEnd.Items[i].ToString().StartsWith(realIp))
                             {
                                 comboLocalEnd.SelectedIndex = i;
-                                finalIp = realIp; // 更新为真实的出口 IP
+                                finalIp = realIp;
                                 break;
                             }
                         }
                     }
                 }
 
-                // --- 3. 准备开始测试状态 ---
                 isTesting = true;
                 btnStart.Text = "停止";
-                ToggleUI(false); // 禁用输入框
+                ToggleUI(false);
                 this.Text = "DNS真选 ✧ NICX (300)";
                 CloudControl.ApplyDevTitle(this);
                 cts = new CancellationTokenSource();
@@ -211,13 +241,10 @@ namespace NetInfoCheckerX
                 richServer3.Text = String.Empty;
                 richServer4.Text = String.Empty;
                 timer1.Start();
-                CloudControl.UsedTimesCounter("DNS真选");
-                // --- 4. 启动 4 个错峰测试任务 ---
                 for (int i = 1; i <= 4; i++)
                 {
                     if (cts.Token.IsCancellationRequested) break;
 
-                    // 动态获取 UI 控件
                     ComboBox cb = (ComboBox)this.Controls.Find("comboServer" + i, true)[0];
                     RadioButton rbDoh = (RadioButton)this.Controls.Find("radioDOH" + i, true)[0];
                     RichTextBox rtb = (RichTextBox)this.Controls.Find("richServer" + i, true)[0];
@@ -229,14 +256,13 @@ namespace NetInfoCheckerX
                         bool isDohMode = rbDoh.Checked;
                         int index = i;
 
-                        // 强制在后台线程运行循环，彻底告别卡顿！
                         _ = Task.Run(async () =>
                         {
                             await StartTestLoop(index, serverAddr, isDohMode, tld, finalIp, timeout);
                         }, cts.Token);
                     }
 
-                    await Task.Delay(250); // 错峰 250ms
+                    await Task.Delay(250);
                 }
             }
             else
@@ -252,10 +278,7 @@ namespace NetInfoCheckerX
 
             if (server == "系统默认")
             {
-                var dnsAddr = NetworkInterface.GetAllNetworkInterfaces()
-                    .Where(nic => nic.OperationalStatus == OperationalStatus.Up)
-                    .SelectMany(nic => nic.GetIPProperties().DnsAddresses)
-                    .FirstOrDefault(addr => addr.AddressFamily == AddressFamily.InterNetwork);
+                var dnsAddr = NicHelper.GetFirstSystemDns(AddressFamily.InterNetwork);
                 if (dnsAddr == null) return (-1, TestResultStatus.NetworkError);
                 server = dnsAddr.ToString();
             }
@@ -393,6 +416,8 @@ namespace NetInfoCheckerX
         {
             isTesting = false;
             cts?.Cancel();
+            cts?.Dispose();
+            cts = null;
             timer1.Stop();
             this.Text = "DNS真选 ✧ NICX (已停止)";
             CloudControl.ApplyDevTitle(this);
@@ -443,7 +468,6 @@ namespace NetInfoCheckerX
                 rtb.SelectionStart = rtb.TextLength;
                 rtb.SelectionLength = 0;
 
-                // 1. 设置颜色
                 if (status == TestResultStatus.NetworkError) rtb.SelectionColor = Color.Red;
                 else if (ms <= 25) rtb.SelectionColor = Color.Lime;
                 else if (ms <= 50) rtb.SelectionColor = Color.MediumSpringGreen;
@@ -452,10 +476,8 @@ namespace NetInfoCheckerX
                 else if (ms <= 500) rtb.SelectionColor = Color.Orange;
                 else rtb.SelectionColor = Color.Tomato;
 
-                // 2. 设置字体倾斜：只有解析成功是不倾斜的
                 rtb.SelectionFont = new Font(rtb.Font, status == TestResultStatus.Success ? FontStyle.Regular : FontStyle.Italic);
 
-                // 3. 追加文字
                 rtb.AppendText(text + ", ");
                 rtb.ScrollToCaret();
             }));
@@ -572,7 +594,11 @@ namespace NetInfoCheckerX
 
         private void DNSSelect_FormClosing(object sender, FormClosingEventArgs e)
         {
+            SaveSettings();
+            timer1.Stop();
+            timer1.Dispose();
             timer2.Stop();
+            timer2.Dispose();
             StopTesting();
         }
 
@@ -585,26 +611,20 @@ namespace NetInfoCheckerX
         {
             if (e.Button == MouseButtons.Right)
             {
-                // 1. 停止当前的测试逻辑（防止窗口关了后台还在跑）
                 if (isTesting)
                 {
                     StopTesting();
                 }
 
-                // 2. 记录当前窗口的位置，这样重启后窗口还在原来的地方，不会乱跳
                 Point currentPkgLocation = this.Location;
 
-                // 3. 创建一个新的窗口实例
                 DNSSelect newForm = new DNSSelect();
 
-                // 让新窗口在老窗口的位置显示
                 newForm.StartPosition = FormStartPosition.Manual;
                 newForm.Location = currentPkgLocation;
 
-                // 4. 显示新窗口
                 newForm.Show();
 
-                // 5. 彻底关闭并释放当前窗口
                 this.Close();
                 this.Dispose();
             }
