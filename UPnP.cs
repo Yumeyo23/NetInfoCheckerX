@@ -92,8 +92,16 @@ namespace NetInfoCheckerX
                     {
                         try
                         {
-                            var d = await TryGetDeviceOnPort(gatewayIp, port, selectedIp);
+                            // 并行赛跑：直连 HTTP 抓取 XML 与标准 SSDP 发现
+                            var directTask = TryGetDeviceOnPort(gatewayIp, port, selectedIp);
+                            var ssdpTask = discoverer.DiscoverDeviceAsync(PortMapper.Upnp, new CancellationTokenSource(800));
+                            var done = await Task.WhenAny(directTask, ssdpTask);
+                            var d = await done;
                             if (d != null) { quickStageCts.Cancel(); return d; }
+
+                            // 如果先完成的返回 null，等另一个
+                            var other = (done == directTask) ? await ssdpTask : await directTask;
+                            if (other != null) { quickStageCts.Cancel(); return other; }
                         }
                         catch { }
                     }
