@@ -1473,15 +1473,18 @@ namespace NetInfoCheckerX
                     _cts?.Cancel();
                 }
 
-                Point currentPkgLocation = this.Location;
+                SaveSettings();
+
+                Point currentLocation = this.Location;
+                Size currentSize = this.Size;
 
                 PingPP newForm = new PingPP();
 
                 newForm.StartPosition = FormStartPosition.Manual;
-                newForm.Location = currentPkgLocation;
+                newForm.Location = currentLocation;
+                newForm.Size = currentSize;
 
                 newForm.Show();
-
                 this.Close();
                 this.Dispose();
             }
