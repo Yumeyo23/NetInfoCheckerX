@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Media;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -22,23 +23,63 @@ namespace NetInfoCheckerX
         public PingPP()
         {
             InitializeComponent();
+            _limitTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _limitTimer.Tick += LimitTimer_Tick;
         }
 
         double minDelay = 9999, maxDelay = 0, totalDelay = 0;
         int successCount = 0, lossCount = 0;
+        double _lastRtt = -1;
+        private readonly List<(double diff, DateTime time)> _jitterWindow = new List<(double diff, DateTime time)>();
+        private static readonly TimeSpan JitterWindowSize = TimeSpan.FromSeconds(1);
+        private int _tickCurrentSec = -1;
+        private readonly List<(int secBucket, int count)> _tickPerSec = new List<(int secBucket, int count)>();
         int minCountIndex = 0, maxCountIndex = 0;
         private ushort _globalIcmpSequence = 0;
 
         private CancellationTokenSource _cts;
         private bool isRunning = false;
+        private bool _isClosing = false;
+        private static int _activeTests = 0;
         private bool isSettingsPrinted = false;
         private readonly Random _random = new Random();
+        private bool _fatalError;
+        private string _fatalErrorMessage;
+        private string _lastExceptionMessage;
+        private DateTime _sessionStartTime;
+        private string _startTimeStr;
+        private int _shardIndex;
+        private double _baselineTps;
+        private int _nextCheckSec;
+        private double _scheduleDelaySum;
+        private int _scheduleDelayCount;
+        private int _loopIterationCount;
+        private int _rateDegradationCount;
+        private double _baselineIterations;
+        private System.Windows.Forms.Timer _limitTimer;
+        private int _remainingSeconds;
+
+        // 高频输出缓冲
+        private readonly List<(string text, Color color, bool newLine)> _outputBuffer = new List<(string text, Color color, bool newLine)>();
+        private readonly Stopwatch _flushWatch = Stopwatch.StartNew();
+        private bool _useBufferedOutput;
+        private bool _suppressOutput;
+        private const int FlushIntervalMs = 100;
+
+        // UpdateStats 节流
+        private readonly Stopwatch _statsWatch = Stopwatch.StartNew();
+        private const int StatsIntervalMs = 200;
+        private bool _forceStats;
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         private static extern int WritePrivateProfileString(string section, string key, string value, string filePath);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         private static extern int GetPrivateProfileString(string section, string key, string defaultValue,
             StringBuilder buffer, int size, string filePath);
+        [DllImport("winmm.dll")]
+        private static extern int timeBeginPeriod(uint uPeriod);
+        [DllImport("winmm.dll")]
+        private static extern int timeEndPeriod(uint uPeriod);
         private string IniPath => Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
         private const string IniSection = "PingPP";
 
@@ -53,6 +94,8 @@ namespace NetInfoCheckerX
                 WritePrivateProfileString(IniSection, "Port", txtPort.Text, IniPath);
                 string proto = radioICMP.Checked ? "ICMP" : (radioTCP.Checked ? "TCP" : "UDP");
                 WritePrivateProfileString(IniSection, "Protocol", proto, IniPath);
+                if (comboFreq.SelectedItem != null)
+                    WritePrivateProfileString(IniSection, "Freq", comboFreq.SelectedItem.ToString(), IniPath);
             }
             catch { }
         }
@@ -84,6 +127,13 @@ namespace NetInfoCheckerX
                 if (proto == "TCP") radioTCP.Checked = true;
                 else if (proto == "UDP") radioUDP.Checked = true;
                 else if (proto == "ICMP") radioICMP.Checked = true;
+                GetPrivateProfileString(IniSection, "Freq", "", sb, sb.Capacity, IniPath);
+                string freq = sb.ToString();
+                if (!string.IsNullOrEmpty(freq))
+                {
+                    for (int i = 0; i < comboFreq.Items.Count; i++)
+                        if (comboFreq.Items[i].ToString() == freq) { comboFreq.SelectedIndex = i; break; }
+                }
             }
             catch { }
         }
@@ -111,6 +161,25 @@ namespace NetInfoCheckerX
                 maxCountIndex = currentTotal;
             }
             totalDelay += rtt;
+
+            if (_lastRtt >= 0)
+            {
+                _jitterWindow.Add((rtt - _lastRtt, DateTime.Now));
+            }
+            _lastRtt = rtt;
+
+            int sec = (int)(DateTime.Now - _sessionStartTime).TotalSeconds;
+            if (sec != _tickCurrentSec)
+            {
+                _tickPerSec.Add((sec, 1));
+                _tickCurrentSec = sec;
+                if (_tickPerSec.Count > 5) _tickPerSec.RemoveAt(0);
+            }
+            else
+            {
+                var last = _tickPerSec[_tickPerSec.Count - 1];
+                _tickPerSec[_tickPerSec.Count - 1] = (last.secBucket, last.count + 1);
+            }
         }
 
         private void ResetStats()
@@ -118,6 +187,11 @@ namespace NetInfoCheckerX
             minDelay = 9999; maxDelay = 0; totalDelay = 0;
             successCount = 0; lossCount = 0;
             minCountIndex = 0; maxCountIndex = 0;
+            _lastRtt = -1; _jitterWindow.Clear();
+            _tickCurrentSec = -1; _tickPerSec.Clear();
+            _baselineTps = 0; _nextCheckSec = 0; _rateDegradationCount = 0;
+            _scheduleDelaySum = 0; _scheduleDelayCount = 0;
+            _loopIterationCount = 0; _rateDegradationCount = 0; _baselineIterations = 0;
             isSettingsPrinted = false;
             UpdateStats();
         }
@@ -173,7 +247,7 @@ namespace NetInfoCheckerX
                     {
                         string randomDomain = GenerateRandomDomain();
                         sendData = BuildSimpleDnsQuery(randomDomain);
-                        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss}] DNS查询域名: {randomDomain}");
+                        Debug.WriteLine($"[{GetTimeStr()}] DNS查询域名: {randomDomain}");
                     }
                     else if (port == 123)
                     {
@@ -207,7 +281,7 @@ namespace NetInfoCheckerX
                     byte[] receiveBuffer = new byte[4096];
                     EndPoint receiveEP = new IPEndPoint(targetAddr.AddressFamily == AddressFamily.InterNetwork ? IPAddress.Any : IPAddress.IPv6Any, 0);
 
-                    string timeStr = DateTime.Now.ToString("HH:mm:ss");
+                    string timeStr = GetTimeStr();
                     var sw = new Stopwatch();
 
                     var receiveTask = Task.Factory.FromAsync(
@@ -247,14 +321,14 @@ namespace NetInfoCheckerX
                         string remoteIp = ((IPEndPoint)receiveEP).Address.ToString();
 
                         Color rowColor = GetRttColor(rtt);
-                        AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                        AppendColorText($"UDP成功: {remoteIp} ={rtt:F1}ms", rowColor, true);
+                        AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
+                        AppendColorText($"UDP成功: {remoteIp} ={FormatRtt(rtt)}ms", rowColor, true);
 
                     }
                     else
                     {
                         lossCount++;
-                        AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                        AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
                         AppendColorText($"UDP失败: 请求超时({timeout}ms)", Color.Red, true);
                     }
                 }
@@ -262,9 +336,15 @@ namespace NetInfoCheckerX
                 {
                     if (!token.IsCancellationRequested)
                     {
+                        if (IsRepeatingException(ex.Message))
+                        {
+                            _fatalError = true;
+                            _fatalErrorMessage = $"[UDP] {ex.Message}";
+                            return;
+                        }
                         lossCount++;
-                        AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                        AppendColorText($"UDP错误: {ex.Message}", Color.Red, true);
+                        AppendColorText($"[{GetTimeStr()}] ", GetTimestampColor(), false);
+                        AppendColorText($"UDP错误: {ex.Message}", Color.Yellow, true);
                     }
                 }
                 UpdateStats();
@@ -359,7 +439,7 @@ namespace NetInfoCheckerX
                 socket.NoDelay = true;
 
                 socket.Bind(GetLocalEndPoint());
-                string timeStr = DateTime.Now.ToString("HH:mm:ss");
+                string timeStr = GetTimeStr();
 
                 var sw = new Stopwatch();
 
@@ -387,18 +467,18 @@ namespace NetInfoCheckerX
                     PrintTestSettings(actualIp);
 
                     Color rowColor = GetRttColor(rtt);
-                    AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                    AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
 
                     string displayTarget = ipAddr.AddressFamily == AddressFamily.InterNetworkV6
                         ? $"[{targetIp}]:{port}"
                         : $"{targetIp}:{port}";
 
-                    AppendColorText($"TCP成功: {displayTarget} ={rtt:F1}ms", rowColor, true);
+                    AppendColorText($"TCP成功: {displayTarget} ={FormatRtt(rtt)}ms", rowColor, true);
                 }
                 else
                 {
                     lossCount++;
-                    AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                    AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
                     AppendColorText($"TCP失败: 连接超时({timeout}ms)", Color.Red, true);
                 }
             }
@@ -406,9 +486,15 @@ namespace NetInfoCheckerX
             {
                 if (!token.IsCancellationRequested)
                 {
+                    if (IsRepeatingException(ex.Message))
+                    {
+                        _fatalError = true;
+                        _fatalErrorMessage = $"[TCP] {ex.Message}";
+                        return;
+                    }
                     lossCount++;
-                    AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                    AppendColorText($"TCP错误: {ex.Message}", Color.Red, true);
+                    AppendColorText($"[{GetTimeStr()}] ", GetTimestampColor(), false);
+                    AppendColorText($"TCP错误: {ex.Message}", Color.Yellow, true);
                 }
             }
             finally
@@ -445,7 +531,8 @@ namespace NetInfoCheckerX
                     AppendColorText("        ❤若指定网卡时频繁意外丢包, 影响判断, 请选\"ICMP兼容模式\"网卡, ", Color.Yellow, true);
                     AppendColorText("          以使用原生Ping更稳定, 但无法识别/指定网卡 (精度1ms)", Color.Yellow, true);
                     AppendColorText("        ❤还有问题，可尝试以管理员运行查询器X后再测❤ ", Color.LightPink, true);
-                    AppendColorText("    ICMP 无端口测试，不支持分片, 最大包受本机MTU影响(MTU-28=最大包)\n", Color.White, true);
+                    AppendColorText("    ICMP 无端口测试，不支持分片, 最大包受本机MTU影响(MTU-28=最大包)", Color.White, true);
+                    AppendColorText("    🚀 查询器X已更新Ping发包频率设置(Tickrate), 请按需设置, 避免滥用❤ \n", Color.Gold, true);
                     AppendColorText("    ❤ 延迟颜色对照表", Color.LightSkyBlue, true);
                     AppendColorMap();
                     txtPort.Text = "0";
@@ -465,7 +552,8 @@ namespace NetInfoCheckerX
                     AppendColorText("       ❤ 建议优先使用上述3种协议的UDP服务器测试, ", Color.Yellow, true);
                     AppendColorText("       ❤ 上述3种协议会测试 ", Color.Yellow, false);
                     AppendColorText(" \"发起请求-收到回复\" ", Color.LightPink, false);
-                    AppendColorText("整个过程的真实延迟\n\n", Color.Yellow, false);
+                    AppendColorText("整个过程的真实延迟\n", Color.Yellow, false);
+                    AppendColorText("    🚀 查询器X已更新Ping发包频率设置(Tickrate), 请按需设置, 避免滥用❤ \n", Color.Gold, true);
                     AppendColorText("    ❤ 延迟颜色对照表", Color.LightSkyBlue, true);
                     AppendColorMap();
                     txtPort.Text = "53";
@@ -482,6 +570,7 @@ namespace NetInfoCheckerX
                     AppendColorText("当前选中 TCP 协议，请先阅读下列提示：", Color.Lime, true);
                     AppendColorText("    通过 🔰 TcpClient 🔰 尝试握手连接；包大小无影响延迟已禁用设置 💦", Color.White, true);
                     AppendColorText("      ❤ 通常用于探测 🔥 80/443 🔥 等端口是否开放\n", Color.White, true);
+                    AppendColorText("    🚀 查询器X已更新Ping发包频率设置(Tickrate), 请按需设置, 避免滥用❤ \n", Color.Gold, true);
                     AppendColorText("    ❤ 延迟颜色对照表", Color.LightSkyBlue, true);
                     AppendColorMap();
                     txtPort.Text = "80";
@@ -492,15 +581,27 @@ namespace NetInfoCheckerX
             }
         }
 
+        private void CleanupTempFiles()
+        {
+            if (_activeTests > 0) return;
+            try
+            {
+                foreach (string file in System.IO.Directory.GetFiles(Application.StartupPath, "NICX_Ping_Temp_*.txt"))
+                    System.IO.File.Delete(file);
+            }
+            catch { }
+        }
+
         private void PingPP_Load(object sender, EventArgs e)
         {
+            CleanupTempFiles();
             this.MinimumSize = this.Size;
             AppendColorText("✧ 正在检查系统环境，请稍候 ✧\n", Color.White, true);
             using (Graphics g = this.CreateGraphics())
             {
                 if (g.DpiX > 96)
                 {
-                    Font modernFont = new Font("Cascadia Mono", 9.5F, FontStyle.Regular);
+                    Font modernFont = new Font("Cascadia Mono", 9F, FontStyle.Regular);
                     richTextBox1.Font = modernFont;
                 }
             }
@@ -508,6 +609,8 @@ namespace NetInfoCheckerX
             RadioProtocol_CheckedChanged(radioICMP, null);
             Task.Run(() => PingPPLoadAll());
             LoadSettings();
+            CloudControl.LoadPingServers(comboTarget);
+            if (comboFreq.SelectedIndex < 0) comboFreq.SelectedIndex = 0;
             CloudControl.UsedTimesCounter("PingPP");
         }
 
@@ -555,7 +658,6 @@ namespace NetInfoCheckerX
             }
 
             _ = Task.Run(async () => await WarmUpAsync());
-            CloudControl.LoadPingServers(comboTarget);
             CloudControl.ApplyDevTitle(this);
         }
 
@@ -618,21 +720,18 @@ namespace NetInfoCheckerX
 
         private void PingPP_FormClosing(object sender, FormClosingEventArgs e)
         {
+            _isClosing = true;
             SaveSettings();
-            if (isRunning)
-            {
-                _cts?.Cancel();
-                isRunning = false;
-            }
-            _cts?.Dispose();
-            _cts = null;
+            _cts?.Cancel();
+            _limitTimer?.Stop();
+            if (_activeTests <= 1) CleanupTempFiles();
         }
 
         private async void btnStart_Click(object sender, EventArgs e)
         {
             if (isRunning)
             {
-                AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                AppendColorText($"[{GetTimeStr()}] ", GetTimestampColor(), false);
                 AppendColorText("正在停止上次测试", ColorTranslator.FromHtml("#a8a5ff"), true);
                 _cts?.Cancel();
                 await Task.Delay(10);
@@ -646,6 +745,14 @@ namespace NetInfoCheckerX
             {
                 richTextBox1.Clear();
                 AppendColorText("\n\nTCP/UDP Test 需绑定指定网卡，ICMP兼容模式下不支持。\n请选择本机 IP 网卡或切换到 ICMP 协议。\n", Color.Yellow, true);
+                return;
+            }
+
+            if (comboLocalEnd.Text.Contains("ICMP兼容模式") && GetPingFrequency() != 1)
+            {
+                ResetStats();
+                richTextBox1.Clear();
+                AppendColorText("\n\nICMP兼容模式使用系统原生Ping，精度仅1ms，效率有限。\n不支持自定义测试频率，请将频率改回 1 或切换到非兼容模式网卡。\n", Color.Yellow, true);
                 return;
             }
 
@@ -683,9 +790,11 @@ namespace NetInfoCheckerX
                     comboTarget.Items.Add(input);
 
                     IPAddress[] addresses = await Task.Run(() => Dns.GetHostAddresses(input));
+                    // 去重：在某些网络环境下 Dns.GetHostAddresses 可能返回重复 IP
+                    var uniqueAddresses = addresses.Distinct().ToArray();
 
                     AppendColorText($"域名 [{input}] 解析出以下 IP：", Color.Yellow, true);
-                    foreach (var ip in addresses)
+                    foreach (var ip in uniqueAddresses)
                     {
                         string ipStr = ip.ToString();
                         if (!comboTarget.Items.Contains(ipStr))
@@ -718,11 +827,56 @@ namespace NetInfoCheckerX
             string finalIP = input;
             comboTarget.Text = finalIP;
 
+            // ICMP Raw Socket 模式下预校验地址族兼容性
+            _fatalError = false;
+            _fatalErrorMessage = null;
+            _lastExceptionMessage = null;
+            _sessionStartTime = DateTime.Now;
+            _startTimeStr = _sessionStartTime.ToString("yyyyMMdd_HHmmss");
+            _shardIndex = 0;
+            if (radioICMP.Checked && !comboLocalEnd.Text.Contains("ICMP兼容模式"))
+            {
+                IPAddress targetAddr = IPAddress.Parse(finalIP);
+                IPEndPoint localEp = GetLocalEndPoint();
+                if ((targetAddr.AddressFamily == AddressFamily.InterNetwork && localEp.Address.Equals(IPAddress.IPv6Any)) ||
+                    (targetAddr.AddressFamily == AddressFamily.InterNetworkV6 && localEp.Address.Equals(IPAddress.Any)))
+                {
+                    ResetStats();
+                    richTextBox1.Clear();
+                    AppendColorText($"\n\n目标IP [{finalIP}] 与所选网卡 [{comboLocalEnd.Text}] 的地址族不兼容。", Color.Yellow, true);
+                    AppendColorText("请选择与目标IP协议版本一致的网卡后重试。\n", Color.Yellow, true);
+                    comboTarget.Enabled = true;
+                    txtMaxDelay.Enabled = true;
+                    txtPackage.Enabled = true;
+                    txtPort.Enabled = true;
+                    comboLocalEnd.Enabled = true;
+                    comboFreq.Enabled = true;
+                    btnSave.Enabled = true;
+                    radioICMP.Enabled = true;
+                    radioTCP.Enabled = true;
+                    radioUDP.Enabled = true;
+                    return;
+                }
+            }
+
+            CleanupTempFiles();
             ResetStats();
             richTextBox1.Clear();
             _cts = new CancellationTokenSource();
             isRunning = true;
+            _activeTests++;
             btnStart.Text = "停止";
+            timeBeginPeriod(1);
+            //设置Ping太快时加入倒计时防止滥刷 当tick≥8时
+            if (GetPingFrequency() > 8)
+            {
+                _remainingSeconds = Global.isUnlimitedTime ? 0 : 300;
+                this.Text = Global.isUnlimitedTime
+                    ? "Ping+ ✧ NetInfoCheckerX (0)"
+                    : "Ping+ ✧ NetInfoCheckerX (300)";
+                CloudControl.ApplyDevTitle(this);
+                _limitTimer.Start();
+            }
             SetControlsEnabled(false);
 
             string startTimeStr = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
@@ -807,6 +961,26 @@ namespace NetInfoCheckerX
             catch (OperationCanceledException) { }
             catch { }
 
+            // Raw Socket ICMP 预热：消除首次测试的冷启动延迟
+            if (radioICMP.Checked && !comboLocalEnd.Text.Contains("ICMP兼容模式"))
+            {
+                try
+                {
+                    int warmupTimeout = Math.Min(timeout, 500);
+                    using (var warmupCts2 = new CancellationTokenSource(warmupTimeout + 300))
+                    {
+                        _suppressOutput = true;
+                        await ExecuteIcmpPing(finalIP, warmupTimeout, warmupCts2.Token);
+                    }
+                }
+                catch { }
+                finally { _suppressOutput = false; _fatalError = false; }
+                ResetStats();
+                richTextBox1.Clear();
+                AppendColorText($"[开测时间] {startTimeStr}", Color.Yellow, true);
+                AppendColorText($"[测试目标] {input}", Color.Cyan, true);
+            }
+
             string protocolName = radioICMP.Checked ? "ICMP" : (radioTCP.Checked ? "TCP" : "UDP");
             string localDisplay = radioICMP.Checked ? "系统默认" : comboLocalEnd.Text;
             if (localDisplay.Contains("Any") && !radioICMP.Checked)
@@ -824,6 +998,14 @@ namespace NetInfoCheckerX
 
             try
             {
+                int freq = GetPingFrequency();
+                long intervalTicks = (long)(Stopwatch.Frequency / (double)freq);
+                _useBufferedOutput = freq >= 4;
+                _flushWatch.Restart();
+                _statsWatch.Restart();
+
+                long nextFireTime = Stopwatch.GetTimestamp();
+
                 while (!_cts.Token.IsCancellationRequested)
                 {
                     if (this.IsDisposed) break;
@@ -842,54 +1024,123 @@ namespace NetInfoCheckerX
                     else if (radioTCP.Checked) await ExecuteTcpPing(finalIP, port, timeout, _cts.Token);
                     else await ExecuteUdpPing(finalIP, port, timeout, _cts.Token);
 
-                    await Task.Delay(1000, _cts.Token);
+                    _loopIterationCount++;
+
+                    if (_fatalError)
+                    {
+                        _useBufferedOutput = false;
+                        FlushOutputBuffer();
+                        _cts.Cancel();
+                        break;
+                    }
+
+                    // 批量刷新输出
+                    if (_useBufferedOutput && _flushWatch.ElapsedMilliseconds >= FlushIntervalMs)
+                    {
+                        FlushOutputBuffer();
+                        _flushWatch.Restart();
+                    }
+
+                    nextFireTime += intervalTicks;
+                    long now = Stopwatch.GetTimestamp();
+                    long waitTicks = nextFireTime - now;
+
+                    // 记录调度延迟（仅软件侧开销，不受丢包影响）
+                    double delayMs = waitTicks < 0 ? (-waitTicks * 1000.0 / Stopwatch.Frequency) : 0;
+                    _scheduleDelaySum += delayMs;
+                    _scheduleDelayCount++;
+
+                    int shardBefore = _shardIndex;
+                    CheckDegradation();
+                    if (_shardIndex != shardBefore)
+                    {
+                        // 分片操作阻塞了IO，重置调度基准
+                        nextFireTime = Stopwatch.GetTimestamp();
+                        _scheduleDelaySum = 0;
+                        _scheduleDelayCount = 0;
+                        _loopIterationCount = 0;
+                    }
+
+                    if (waitTicks > 0)
+                    {
+                        int waitMs = (int)(waitTicks * 1000 / Stopwatch.Frequency);
+                        if (waitMs >= 2)
+                            await Task.Delay(waitMs - 1, _cts.Token);
+                        while (Stopwatch.GetTimestamp() < nextFireTime)
+                        {
+                            if (_cts.Token.IsCancellationRequested) break;
+                        }
+                    }
+                    else if (waitTicks < -intervalTicks * 5)
+                    {
+                        // 落后太多，重置时间基准
+                        nextFireTime = now;
+                    }
                 }
             }
             catch (OperationCanceledException) { }
             finally
             {
-                if (!this.IsDisposed && this.IsHandleCreated)
+                try
                 {
-                    double savedMin = minDelay, savedMax = maxDelay, savedTotal = totalDelay;
-                    int savedSuccess = successCount, savedLoss = lossCount;
-                    int savedMinIdx = minCountIndex, savedMaxIdx = maxCountIndex;
-
-                    string stopTimeStr = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                    _useBufferedOutput = false;
+                    if (isRunning) { _activeTests--; }
                     isRunning = false;
-                    btnStart.Text = "开测";
-                    AppendColorText($"[停止时间] {stopTimeStr}", Color.Yellow, true);
-                    AppendColorText(" ■ 用户手动停止测试", Color.Yellow, true);
+                    _limitTimer.Stop();
+                    timeEndPeriod(1);
 
-                    comboTarget.Enabled = true;
-                    txtMaxDelay.Enabled = true;
-                    txtPackage.Enabled = true;
-                    txtPort.Enabled = true;
-                    comboLocalEnd.Enabled = true;
-                    btnSave.Enabled = true;
-                    if (radioICMP.Checked)
+                    if (!this.IsDisposed && this.IsHandleCreated)
                     {
-                        txtPort.Enabled = false;
-                        txtPackage.Enabled = true;
-                    }
-                    else if (radioTCP.Checked)
-                    {
-                        txtPort.Enabled = true;
-                        txtPackage.Enabled = false;
-                    }
-                    else
-                    {
-                        txtPort.Enabled = true;
-                        txtPackage.Enabled = true;
-                    }
-                    radioICMP.Enabled = true;
-                    radioTCP.Enabled = true;
-                    radioUDP.Enabled = true;
+                        FlushOutputBuffer();
+                        this.Text = "Ping+ ✧ NetInfoCheckerX";
+                        CloudControl.ApplyDevTitle(this);
+                        string stopTimeStr = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                        btnStart.Text = "开测";
 
-                    minDelay = savedMin; maxDelay = savedMax; totalDelay = savedTotal;
-                    successCount = savedSuccess; lossCount = savedLoss;
-                    minCountIndex = savedMinIdx; maxCountIndex = savedMaxIdx;
-                    UpdateStats();
+                        if (_fatalError)
+                        {
+                            ResetStats();
+                            AppendColorText($"{_fatalErrorMessage}", Color.Yellow, true);
+                            AppendColorText(" ■ 报错自动停止测试\n", Color.Yellow, true);
+                        }
+                        else
+                        {
+                            AppendColorText($"[停止时间] {stopTimeStr}", Color.Yellow, true);
+                            AppendColorText(" ■ 用户手动停止测试", Color.Yellow, true);
+                        }
+
+                        comboTarget.Enabled = true;
+                        txtMaxDelay.Enabled = true;
+                        txtPackage.Enabled = true;
+                        txtPort.Enabled = true;
+                        comboLocalEnd.Enabled = true;
+                        comboFreq.Enabled = true;
+                        btnSave.Enabled = true;
+                        if (radioICMP.Checked)
+                        {
+                            txtPort.Enabled = false;
+                            txtPackage.Enabled = true;
+                        }
+                        else if (radioTCP.Checked)
+                        {
+                            txtPort.Enabled = true;
+                            txtPackage.Enabled = false;
+                        }
+                        else
+                        {
+                            txtPort.Enabled = true;
+                            txtPackage.Enabled = true;
+                        }
+                        radioICMP.Enabled = true;
+                        radioTCP.Enabled = true;
+                        radioUDP.Enabled = true;
+                        _forceStats = true;
+                        UpdateStats();
+                    }
                 }
+                catch { }
+                try { _cts?.Dispose(); } catch { }
+                _cts = null;
             }
         }
 
@@ -912,7 +1163,7 @@ namespace NetInfoCheckerX
             {
                 try
                 {
-                    string timeStr = DateTime.Now.ToString("HH:mm:ss");
+                    string timeStr = GetTimeStr();
                     int currentTotal = successCount + lossCount + 1;
 
                     Task<PingReply> pingTask = pingSender.SendPingAsync(targetIp, timeout, buffer);
@@ -930,8 +1181,8 @@ namespace NetInfoCheckerX
                             if (rtt > timeout)
                             {
                                 lossCount++;
-                                AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                                AppendColorText($"ICMP失败: 实际延迟{rtt:F1}ms > 超时{timeout}ms", Color.Red, true);
+                                AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
+                                AppendColorText($"ICMP失败: 实际延迟{FormatRtt(rtt)}ms > 超时{timeout}ms", Color.Red, true);
                             }
                             else
                             {
@@ -940,7 +1191,7 @@ namespace NetInfoCheckerX
                                 PrintTestSettings("系统默认 (ICMP兼容模式)");
 
                                 Color rowColor = GetRttColor(rtt);
-                                AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                                AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
                                 string ttlInfo = "";
                                 if (reply.Address.AddressFamily == AddressFamily.InterNetwork)
                                 {
@@ -952,21 +1203,21 @@ namespace NetInfoCheckerX
                                 }
                                 else
                                 {
-                                    AppendColorText($"ICMP成功: {reply.Address} ={rtt:F1}ms{ttlInfo}", rowColor, true);
+                                    AppendColorText($"ICMP成功: {reply.Address} ={FormatRtt(rtt)}ms{ttlInfo}", rowColor, true);
                                 }
                             }
                         }
                         else
                         {
                             lossCount++;
-                            AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                            AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
                             AppendColorText($"ICMP失败: {reply.Status}", Color.Red, true);
                         }
                     }
                     else
                     {
                         lossCount++;
-                        AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                        AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
                         AppendColorText($"ICMP失败: 请求超时({timeout}ms)", Color.Red, true);
                     }
                 }
@@ -974,9 +1225,15 @@ namespace NetInfoCheckerX
                 {
                     if (!token.IsCancellationRequested)
                     {
+                        if (IsRepeatingException(ex.Message))
+                        {
+                            _fatalError = true;
+                            _fatalErrorMessage = $"[ICMP] {ex.Message}";
+                            return;
+                        }
                         lossCount++;
-                        AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                        AppendColorText($"ICMP错误: {ex.Message}", Color.Red, true);
+                        AppendColorText($"[{GetTimeStr()}] ", GetTimestampColor(), false);
+                        AppendColorText($"ICMP错误: {ex.Message}", Color.Yellow, true);
                     }
                 }
                 finally
@@ -1000,10 +1257,8 @@ namespace NetInfoCheckerX
             if ((addrFamily == AddressFamily.InterNetwork && localEndPoint.Address.Equals(IPAddress.IPv6Any)) ||
                 (addrFamily == AddressFamily.InterNetworkV6 && localEndPoint.Address.Equals(IPAddress.Any)))
             {
-                lossCount++;
-                AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                AppendColorText($"ICMP错误: 本机网卡IP({localEndPoint.Address})与目标IP({ipAddr})地址族不匹配", Color.Red, true);
-                UpdateStats();
+                _fatalError = true;
+                _fatalErrorMessage = $"本机网卡IP({localEndPoint.Address})与目标IP({ipAddr})地址族不匹配";
                 return;
             }
 
@@ -1030,7 +1285,7 @@ namespace NetInfoCheckerX
                     byte[] icmpPacket = BuildIcmpEchoPacket(8, 0, identifier, _globalIcmpSequence, payload);
                     raw.SendTo(icmpPacket, new IPEndPoint(ipAddr, 0));
 
-                    string timeStr = DateTime.Now.ToString("HH:mm:ss");
+                    string timeStr = GetTimeStr();
                     int currentTotal = successCount + lossCount + 1;
                     Stopwatch sw = Stopwatch.StartNew();
 
@@ -1082,7 +1337,7 @@ namespace NetInfoCheckerX
                         if (rtt > timeout)
                         {
                             lossCount++;
-                            AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                            AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
                             AppendColorText($"ICMP失败: 请求超时({timeout}ms)", Color.Red, true);
                         }
                         else
@@ -1093,14 +1348,14 @@ namespace NetInfoCheckerX
                             PrintTestSettings(actualIp);
                             string limitInfo = ttl > 0 ? $"TTL={ttl}" : "";
                             Color rowColor = GetRttColor(rtt);
-                            AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                            AppendColorText($"ICMP成功: {replyAddress} ={rtt:F1}ms {limitInfo}", rowColor, true);
+                            AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
+                            AppendColorText($"ICMP成功: {replyAddress} ={FormatRtt(rtt)}ms {limitInfo}", rowColor, true);
                         }
                     }
                     else if (!token.IsCancellationRequested)
                     {
                         lossCount++;
-                        AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                        AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
                         AppendColorText($"ICMP失败: 请求超时({timeout}ms)", Color.Red, true);
                     }
                 }
@@ -1108,18 +1363,30 @@ namespace NetInfoCheckerX
                 {
                     if (!token.IsCancellationRequested)
                     {
+                        if (IsRepeatingException(sex.Message))
+                        {
+                            _fatalError = true;
+                            _fatalErrorMessage = $"[ICMP] {sex.Message}";
+                            return;
+                        }
                         lossCount++;
-                        AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                        AppendColorText($"ICMP错误: {sex.Message}", Color.Red, true);
+                        AppendColorText($"[{GetTimeStr()}] ", GetTimestampColor(), false);
+                        AppendColorText($"ICMP错误: {sex.Message}", Color.Yellow, true);
                     }
                 }
                 catch (Exception ex)
                 {
                     if (!token.IsCancellationRequested)
                     {
+                        if (IsRepeatingException(ex.Message))
+                        {
+                            _fatalError = true;
+                            _fatalErrorMessage = $"[ICMP] {ex.Message}";
+                            return;
+                        }
                         lossCount++;
-                        AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                        AppendColorText($"ICMP错误: {ex.Message}", Color.Red, true);
+                        AppendColorText($"[{GetTimeStr()}] ", GetTimestampColor(), false);
+                        AppendColorText($"ICMP错误: {ex.Message}", Color.Yellow, true);
                     }
                 }
                 finally
@@ -1140,10 +1407,8 @@ namespace NetInfoCheckerX
                 {
                     if (localEndPoint.AddressFamily != AddressFamily.InterNetworkV6)
                     {
-                        lossCount++;
-                        AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                        AppendColorText($"ICMPv6错误: 本地地址({localEndPoint.Address})不是IPv6地址", Color.Red, true);
-                        UpdateStats();
+                        _fatalError = true;
+                        _fatalErrorMessage = $"本地地址({localEndPoint.Address})不是IPv6地址";
                         return;
                     }
 
@@ -1162,10 +1427,8 @@ namespace NetInfoCheckerX
                         }
                         else
                         {
-                            lossCount++;
-                            AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                            AppendColorText($"ICMPv6错误: 无法探测本地IPv6出口地址", Color.Red, true);
-                            UpdateStats();
+                            _fatalError = true;
+                            _fatalErrorMessage = "无法探测本地IPv6出口地址";
                             return;
                         }
                     }
@@ -1179,7 +1442,7 @@ namespace NetInfoCheckerX
                     byte[] icmpWithChecksum = BuildIcmpv6WithChecksum(srcForChecksum, ipAddr, icmpPacketNoChecksum);
                     raw6.SendTo(icmpWithChecksum, new IPEndPoint(ipAddr, 0));
 
-                    string timeStr = DateTime.Now.ToString("HH:mm:ss");
+                    string timeStr = GetTimeStr();
                     int currentTotal = successCount + lossCount + 1;
                     Stopwatch sw = Stopwatch.StartNew();
 
@@ -1224,7 +1487,7 @@ namespace NetInfoCheckerX
                         if (rtt > timeout)
                         {
                             lossCount++;
-                            AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                            AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
                             AppendColorText($"ICMPv6失败: 请求超时({timeout}ms)", Color.Red, true);
                         }
                         else
@@ -1232,14 +1495,14 @@ namespace NetInfoCheckerX
                             successCount++;
                             UpdateDelay(rtt);
                             Color rowColor = GetRttColor(rtt);
-                            AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                            AppendColorText($"ICMPv6成功: {targetIp} ={rtt:F1}ms", rowColor, true);
+                            AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
+                            AppendColorText($"ICMPv6成功: {targetIp} ={FormatRtt(rtt)}ms", rowColor, true);
                         }
                     }
                     else if (!token.IsCancellationRequested)
                     {
                         lossCount++;
-                        AppendColorText($"[{timeStr}]({currentTotal}) ", ColorTranslator.FromHtml("#a8a5ff"), false);
+                        AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
                         AppendColorText($"ICMPv6失败: 请求超时({timeout}ms)", Color.Red, true);
                     }
                 }
@@ -1247,18 +1510,30 @@ namespace NetInfoCheckerX
                 {
                     if (!token.IsCancellationRequested)
                     {
+                        if (IsRepeatingException(sex.Message))
+                        {
+                            _fatalError = true;
+                            _fatalErrorMessage = $"[ICMPv6] {sex.Message}";
+                            return;
+                        }
                         lossCount++;
-                        AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                        AppendColorText($"ICMPv6错误: {sex.Message}", Color.Red, true);
+                        AppendColorText($"[{GetTimeStr()}] ", GetTimestampColor(), false);
+                        AppendColorText($"ICMPv6错误: {sex.Message}", Color.Yellow, true);
                     }
                 }
                 catch (Exception ex)
                 {
                     if (!token.IsCancellationRequested)
                     {
+                        if (IsRepeatingException(ex.Message))
+                        {
+                            _fatalError = true;
+                            _fatalErrorMessage = $"[ICMPv6] {ex.Message}";
+                            return;
+                        }
                         lossCount++;
-                        AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
-                        AppendColorText($"ICMPv6错误: {ex.Message}", Color.Red, true);
+                        AppendColorText($"[{GetTimeStr()}] ", GetTimestampColor(), false);
+                        AppendColorText($"ICMPv6错误: {ex.Message}", Color.Yellow, true);
                     }
                 }
                 finally
@@ -1270,10 +1545,8 @@ namespace NetInfoCheckerX
                 return;
             }
 
-            lossCount++;
-            AppendColorText($"[{DateTime.Now:HH:mm:ss}] ", ColorTranslator.FromHtml("#a8a5ff"), false);
-            AppendColorText($"ICMP错误: 未知地址族 {addrFamily}", Color.Red, true);
-            UpdateStats();
+            _fatalError = true;
+            _fatalErrorMessage = $"[ICMP] 未知地址族 {addrFamily}";
         }
 
         private static byte[] BuildIcmpEchoPacket(byte type, byte code, ushort identifier, ushort sequence, byte[] payload)
@@ -1372,16 +1645,74 @@ namespace NetInfoCheckerX
                 return;
             }
 
-            string minStr = (successCount > 0) ? $"{minDelay:F1}ms({minCountIndex})" : "-";
-            string maxStr = (successCount > 0) ? $"{maxDelay:F1}ms({maxCountIndex})" : "-";
+            if (_suppressOutput) return;
+
+            // 高频时节流更新
+            bool forced = _forceStats;
+            _forceStats = false;
+            if (!forced && _statsWatch.ElapsedMilliseconds < StatsIntervalMs)
+                return;
+            _statsWatch.Restart();
+
+            string minStr = (successCount > 0) ? $"{FormatRtt(minDelay)}ms({minCountIndex})" : "-";
+            string maxStr = (successCount > 0) ? $"{FormatRtt(maxDelay)}ms({maxCountIndex})" : "-";
 
             double avgDelay = successCount > 0 ? totalDelay / successCount : 0;
             double lossRate = (successCount + lossCount) > 0 ? (double)lossCount / (successCount + lossCount) * 100 : 0;
 
             lblMin2.Text = minStr;
             lblMax2.Text = maxStr;
-            lblAvg2.Text = $"{avgDelay:F1}ms";
-            lblLoss2.Text = $"{lossRate:F1}%";
+            if (GetPingFrequency() >= 2)
+            {
+                int currentSec = (int)(DateTime.Now - _sessionStartTime).TotalSeconds;
+                int lastSecTicks = 0;
+                for (int i = _tickPerSec.Count - 1; i >= 0; i--)
+                {
+                    if (_tickPerSec[i].secBucket == currentSec - 1)
+                    {
+                        lastSecTicks = _tickPerSec[i].count;
+                        break;
+                    }
+                }
+                lblAvg2.Text = lastSecTicks > 0
+                    ? $"{FormatRtt(avgDelay)}ms({lastSecTicks})"
+                    : $"{FormatRtt(avgDelay)}ms";
+            }
+            else
+            {
+                lblAvg2.Text = $"{FormatRtt(avgDelay)}ms";
+            }
+
+            if (GetPingFrequency() > 1)
+            {
+                lblLoss.Text = "抖";
+
+                // 剪除超过1秒的旧数据
+                DateTime cutoff = DateTime.Now - JitterWindowSize;
+                _jitterWindow.RemoveAll(e => e.time < cutoff);
+
+                if (_jitterWindow.Count > 0)
+                {
+                    double sumSigned = 0, sumAbs = 0;
+                    foreach (var e in _jitterWindow)
+                    {
+                        sumSigned += e.diff;
+                        sumAbs += Math.Abs(e.diff);
+                    }
+                    double avgAbsJitter = sumAbs / _jitterWindow.Count;
+                    char sign = sumSigned >= 0 ? '+' : '-';
+                    lblLoss2.Text = $"{sign}{avgAbsJitter:F3}ms({lossRate:F1}%)";
+                }
+                else
+                {
+                    lblLoss2.Text = $"-ms({lossRate:F1}%)";
+                }
+            }
+            else
+            {
+                lblLoss.Text = "丢";
+                lblLoss2.Text = $"{lossRate:F1}%";
+            }
         }
 
         private void SetControlsEnabled(bool enabled)
@@ -1394,6 +1725,7 @@ namespace NetInfoCheckerX
             radioTCP.Enabled = enabled;
             radioUDP.Enabled = enabled;
             comboLocalEnd.Enabled = enabled;
+            comboFreq.Enabled = enabled;
             btnSave.Enabled = enabled;
 
             if (enabled)
@@ -1407,9 +1739,9 @@ namespace NetInfoCheckerX
 
         private void btnSave_Click(object sender, EventArgs e)
         {
-            if (string.IsNullOrEmpty(richTextBox1.Text))
+            if (string.IsNullOrEmpty(_startTimeStr) || string.IsNullOrEmpty(richTextBox1.Text))
             {
-                MessageBox.Show("当前没有测试结果可以保存喵", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("当前没有测试记录可以保存", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -1417,22 +1749,9 @@ namespace NetInfoCheckerX
             {
                 sfd.Title = "请选择保存测试结果的位置";
                 sfd.Filter = "文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*";
-                string pingType = String.Empty;
-                if (radioICMP.Checked == true)
-                {
-                    pingType = radioICMP.Text;
-                }
-                if (radioTCP.Checked == true)
-                {
-                    pingType = radioTCP.Text;
-                }
-                if (radioUDP.Checked == true)
-                {
-                    pingType = radioUDP.Text;
-                }
+                string pingType = radioICMP.Checked ? "ICMP" : (radioTCP.Checked ? "TCP" : "UDP");
 
-                string saveTime = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                sfd.FileName = $"NICX_Ping_{pingType}_{comboTarget.Text}_{saveTime}.txt";
+                sfd.FileName = $"NICX_Ping_{pingType}_{comboTarget.Text}_{_startTimeStr}.txt";
 
                 if (sfd.ShowDialog() == DialogResult.OK)
                 {
@@ -1442,14 +1761,61 @@ namespace NetInfoCheckerX
 
                         sb.AppendLine($"=== 欢迎使用 Ping+ ❤ 网络综合查询器X by Yumeyo ===");
                         sb.AppendLine($"\n🔰 本次 Ping+ 统计数据");
-                        sb.AppendLine($"[目标/协议]  {comboTarget.Text} [${pingType}]");
+                        sb.AppendLine($"[目标/协议]  {comboTarget.Text} [{pingType}]");
                         sb.AppendLine($"[最小延迟(次序)]  {lblMin2.Text}");
                         sb.AppendLine($"[最大延迟(次序)]  {lblMax2.Text}");
-                        sb.AppendLine($"[平均延迟(次序)]  {lblAvg2.Text}");
-                        sb.AppendLine($"[丢包率]  {lblLoss2.Text}");
+                        sb.AppendLine($"[平均延迟(tick/s)]  {lblAvg2.Text}");
+                        sb.AppendLine($"[丢包/抖动]  {lblLoss2.Text}");
                         sb.AppendLine($"\n🔥 本次 Ping+ 输出详情");
-                        sb.AppendLine(richTextBox1.Text);
-                        sb.AppendLine($"=== 感谢使用 Ping+ ❤ 网络综合查询器X by Yumeyo ===");
+
+                        // 拼接所有分片文件
+                        string pattern = $"NICX_Ping_Temp_*_{pingType}_{comboTarget.Text}_{_startTimeStr}.txt";
+                        string[] shardFiles = System.IO.Directory.GetFiles(Application.StartupPath, pattern);
+                        if (shardFiles.Length > 0)
+                        {
+                            // 按分片号排序
+                            Array.Sort(shardFiles, (a, b) =>
+                            {
+                                int ExtractNum(string path)
+                                {
+                                    var name = System.IO.Path.GetFileNameWithoutExtension(path);
+                                    var parts = name.Split('_');
+                                    return parts.Length > 3 && int.TryParse(parts[3], out int n) ? n : 0;
+                                }
+                                return ExtractNum(a).CompareTo(ExtractNum(b));
+                            });
+
+                            foreach (string file in shardFiles)
+                            {
+                                string content = System.IO.File.ReadAllText(file, Encoding.UTF8);
+                                // 去除末行分片标记
+                                int lastNewline = content.TrimEnd('\r', '\n').LastIndexOf('\n');
+                                if (lastNewline >= 0)
+                                {
+                                    string lastLine = content.Substring(lastNewline + 1).Trim();
+                                    if (lastLine.StartsWith("测试记录分片"))
+                                        content = content.Substring(0, lastNewline + 1);
+                                }
+                                sb.Append(content);
+                            }
+                        }
+
+                        // 追加当前文本框内容（去除首行续接标记）
+                        {
+                            string rtbText = richTextBox1.Text;
+                            int firstNewline = rtbText.IndexOf('\n');
+                            if (firstNewline >= 0)
+                            {
+                                string firstLine = rtbText.Substring(0, firstNewline).Trim();
+                                if (firstLine.StartsWith("接测试记录分片"))
+                                    rtbText = rtbText.Substring(firstNewline + 1);
+                            }
+                            sb.Append(rtbText);
+                            if (!rtbText.EndsWith("\n"))
+                                sb.AppendLine();
+                        }
+
+                        sb.AppendLine($"\n=== 感谢使用 Ping+ ❤ 网络综合查询器X by Yumeyo ===");
                         sb.AppendLine($"======== 导出于 NetInfoCheckerX by Yumeyo ========\n");
 
                         System.IO.File.WriteAllText(sfd.FileName, sb.ToString(), Encoding.UTF8);
@@ -1530,11 +1896,118 @@ namespace NetInfoCheckerX
 
         private void AppendColorText(string text, Color color, bool addNewLine = false)
         {
+            if (_suppressOutput || _isClosing) return;
+            if (_useBufferedOutput)
+            {
+                _outputBuffer.Add((text, color, addNewLine));
+                return;
+            }
             richTextBox1.SelectionStart = richTextBox1.Text.Length;
             richTextBox1.SelectionLength = 0;
             richTextBox1.SelectionColor = color;
             richTextBox1.AppendText(addNewLine ? text + Environment.NewLine : text);
             richTextBox1.ScrollToCaret();
+        }
+
+        private void FlushOutputBuffer()
+        {
+            if (_outputBuffer.Count == 0) return;
+            int count = _outputBuffer.Count;
+            for (int i = 0; i < count; i++)
+            {
+                var (text, color, newLine) = _outputBuffer[i];
+                richTextBox1.SelectionStart = richTextBox1.Text.Length;
+                richTextBox1.SelectionLength = 0;
+                richTextBox1.SelectionColor = color;
+                richTextBox1.AppendText(newLine ? text + Environment.NewLine : text);
+            }
+            _outputBuffer.Clear();
+            richTextBox1.ScrollToCaret();
+        }
+
+        private void AutoSaveAndClear()
+        {
+            _shardIndex++;
+            string target = comboTarget.Text.Trim();
+            string proto = radioICMP.Checked ? "ICMP" : (radioTCP.Checked ? "TCP" : "UDP");
+            string fileName = $"NICX_Ping_Temp_{_shardIndex}_{proto}_{target}_{_startTimeStr}.txt";
+            string filePath = Path.Combine(Application.StartupPath, fileName);
+
+            try
+            {
+                string shardFooter = $"测试记录分片{_shardIndex}\n";
+                System.IO.File.WriteAllText(filePath, richTextBox1.Text + shardFooter, Encoding.UTF8);
+            }
+            catch { }
+
+            richTextBox1.ResetText();
+            AppendColorText($"接测试记录分片{_shardIndex}", Color.Gray, true);
+
+            // 释放控件和缓冲区内部累积
+            _outputBuffer.Clear();
+            _outputBuffer.Capacity = 0;
+            GC.Collect(2, GCCollectionMode.Forced);
+            GC.WaitForPendingFinalizers();
+
+            // 重置监测状态（保留基准）
+            _rateDegradationCount = 0;
+            _scheduleDelaySum = 0;
+            _scheduleDelayCount = 0;
+            _loopIterationCount = 0;
+            _rateDegradationCount = 0;
+            int sec = (int)(DateTime.Now - _sessionStartTime).TotalSeconds;
+            _nextCheckSec = ((sec / 2) + 2) * 2;
+        }
+
+        private void CheckDegradation()
+        {
+            int freq = GetPingFrequency();
+            if (freq < 4) return;
+
+            int currentSec = (int)(DateTime.Now - _sessionStartTime).TotalSeconds;
+
+            // 基准采集：取前2秒的调度延迟基准 和 迭代速率基准
+            if (_baselineTps == 0 && _nextCheckSec == 0 && currentSec >= 2)
+            {
+                if (_scheduleDelayCount > 0)
+                    _baselineTps = _scheduleDelaySum / _scheduleDelayCount;
+                _baselineIterations = _loopIterationCount;
+                _nextCheckSec = 4;
+                _loopIterationCount = 0;
+            }
+            // 监测：每2秒评估（双指标并联）
+            else if (_nextCheckSec > 0 && currentSec >= _nextCheckSec)
+            {
+                bool degraded = false;
+
+                // 指标A：测试程序内部延迟是否过大
+                if (_scheduleDelayCount > 0)
+                {
+                    double avgDelay = _scheduleDelaySum / _scheduleDelayCount;
+                    if (_baselineTps > 0.01 && avgDelay > _baselineTps * 3.0 && avgDelay > 3.0)
+                        degraded = true;
+                }
+
+                // 指标B：实际速率低于基准80%（基准根据目标自动适配）
+                if (_baselineIterations > 0 && _loopIterationCount < _baselineIterations * 0.80)
+                    _rateDegradationCount++;
+                else
+                    _rateDegradationCount = 0;
+
+                _scheduleDelaySum = 0;
+                _scheduleDelayCount = 0;
+                _loopIterationCount = 0;
+
+                // 指标A单窗即触发，指标B连降2窗触发
+                if (!_suppressOutput && (degraded || _rateDegradationCount >= 2))
+                {
+                    AutoSaveAndClear();
+                }
+                else
+                {
+                    _nextCheckSec += 2;
+                }
+            }
         }
 
         private void AppendColorMap()
@@ -1627,13 +2100,82 @@ namespace NetInfoCheckerX
             int port = int.TryParse(txtPort.Text, out int p) ? p : 80;
             int bufferSize = int.TryParse(txtPackage.Text, out int b) ? b : 32;
 
-            string settingsLine = $"[测试设置] 网卡 {displayName} / 协议 {protocolName}";
+            string settingsLine = $"[测试设置] 网卡{displayName} / 协议{protocolName}";
 
-            if (radioICMP.Checked) settingsLine += $" / 超时 {timeout}ms / 字节 {bufferSize}";
-            else if (radioTCP.Checked) settingsLine += $" / 端口 {port} / 超时 {timeout}ms";
-            else settingsLine += $" / 端口 {port} / 超时 {timeout}ms";
+            if (radioICMP.Checked) settingsLine += $" / 超时{timeout}ms / 字节{bufferSize}";
+            else if (radioTCP.Checked) settingsLine += $" / 端口{port} / 超时{timeout}ms";
+            else settingsLine += $" / 端口{port} / 超时{timeout}ms";
+
+            settingsLine += $" / Tick{GetPingFrequency()}";
 
             AppendColorText(settingsLine + "\n", Color.LightPink, true);
+        }
+
+        private int GetPingFrequency()
+        {
+            if (comboFreq.SelectedItem != null && int.TryParse(comboFreq.SelectedItem.ToString(), out int freq))
+                return freq;
+            return 1;
+        }
+
+        private int GetPingIntervalMs()
+        {
+            int freq = GetPingFrequency();
+            if (freq < 1) freq = 1;
+            return 1000 / freq;
+        }
+
+        private void LimitTimer_Tick(object sender, EventArgs e)
+        {
+            if (Global.isUnlimitedTime)
+            {
+                _remainingSeconds++;
+                this.Text = $"Ping+ ✧ NetInfoCheckerX ({_remainingSeconds})";
+                CloudControl.ApplyDevTitle(this);
+            }
+            else
+            {
+                _remainingSeconds--;
+                if (_remainingSeconds <= 0)
+                {
+                    _limitTimer.Stop();
+                    if (isRunning)
+                    {
+                        _cts?.Cancel();
+                    }
+                    return;
+                }
+                this.Text = $"Ping+ ✧ NetInfoCheckerX ({_remainingSeconds})";
+                CloudControl.ApplyDevTitle(this);
+            }
+        }
+
+        private string GetTimeStr()
+        {
+            int freq = GetPingFrequency();
+            return DateTime.Now.ToString(freq > 1 ? "HH:mm:ss.fff" : "HH:mm:ss");
+        }
+
+        private bool IsRepeatingException(string message)
+        {
+            if (_lastExceptionMessage == message) return true;
+            _lastExceptionMessage = message;
+            return false;
+        }
+
+        private Color GetTimestampColor()
+        {
+            if (GetPingFrequency() <= 1)
+                return ColorTranslator.FromHtml("#a8a5ff");
+
+            int secBucket = (int)(DateTime.Now - _sessionStartTime).TotalSeconds;
+            return (secBucket % 2 == 0) ? ColorTranslator.FromHtml("#a8a5ff") : ColorTranslator.FromHtml("#ffa5cf");
+        }
+
+        private string FormatRtt(double rtt)
+        {
+            int freq = GetPingFrequency();
+            return rtt.ToString(freq > 1 ? "F3" : "F1");
         }
     }
 }
