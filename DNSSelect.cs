@@ -232,10 +232,12 @@ namespace NetInfoCheckerX
                 isTesting = true;
                 btnStart.Text = "停止";
                 ToggleUI(false);
-                this.Text = "DNS真选 ✧ NICX (300)";
+                this.Text = Global.isUnlimitedTime
+                    ? "DNS真选 ✧ NICX (0)"
+                    : "DNS真选 ✧ NICX (300)";
                 CloudControl.ApplyDevTitle(this);
                 cts = new CancellationTokenSource();
-                remainingSeconds = 300;
+                remainingSeconds = Global.isUnlimitedTime ? 0 : 300;
                 richServer1.Text = String.Empty;
                 richServer2.Text = String.Empty;
                 richServer3.Text = String.Empty;
@@ -556,15 +558,24 @@ namespace NetInfoCheckerX
         }
         private void timer1_Tick(object sender, EventArgs e)
         {
-            remainingSeconds--;
-            if (remainingSeconds <= 0)
+            if (Global.isUnlimitedTime)
             {
-                StopTesting();
+                remainingSeconds++;
+                this.Text = $"DNS真选 ✧ NICX ({remainingSeconds})";
+                CloudControl.ApplyDevTitle(this);
             }
             else
             {
-                this.Text = $"DNS真选 ✧ NICX ({remainingSeconds})";
-                CloudControl.ApplyDevTitle(this);
+                remainingSeconds--;
+                if (remainingSeconds <= 0)
+                {
+                    StopTesting();
+                }
+                else
+                {
+                    this.Text = $"DNS真选 ✧ NICX ({remainingSeconds})";
+                    CloudControl.ApplyDevTitle(this);
+                }
             }
         }
         //随机字符串
