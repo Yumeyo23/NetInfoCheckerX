@@ -192,6 +192,12 @@ namespace NetInfoCheckerX
             CloudControl.LoadStunServers(comboServer);
             CloudControl.ApplyDevTitle(this);
 
+            if (Global.IsBirthdayMonth)
+            {
+                pictureBox1.Image = Global.GetIcon();
+                pictureBox2.Image = Global.GetIcon();
+            }
+
             LoadSavedServerAndPort();
 
             if (comboServer.SelectedIndex < 0 && comboServer.Items.Count > 0)
