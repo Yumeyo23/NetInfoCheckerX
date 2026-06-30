@@ -76,6 +76,7 @@ release的程序完整包使用到了以下依赖及NuGet，在此致谢：
 | [Curl for Windows](https://curl.se/windows/)                 | 备用, 访问部分API使用                                        | 未修改，带证书                                               |
 | [Open.Nat](https://www.nuget.org/packages/Open.NAT/2.1.0?_src=template) | UPnP控制台                                                   | NuGet直接使用                                                |
 | [EmbedIO](https://www.nuget.org/packages/EmbedIO)            | LibreSpeed开服用                                             | 同上，其附属NuGet包此处省略                                  |
+| [ScottPlot](https://www.nuget.org/packages/ScottPlot.WinForms) | Ping+统计图绘制                                              | 同上                                                         |
 | [IPAddressControl](https://www.nuget.org/packages/IPAddressControl/) | 程序内所有IPv4编辑框                                         | 同上                                                         |
 | [IP2Region](https://www.nuget.org/packages/IP2Region.Net/)   | 程序内置的IP地理位置数据库(主窗口、手动查询IP、Trace+使用)   | 同上                                  |
 | [MaxMind.Db](https://www.nuget.org/packages/MaxMind.DB)      | 程序内置的IP地理位置数据库(主窗口、手动查询IP、Trace+使用)   | 同上，数据库使用[GeoCN](https://github.com/ljxi/GeoCN)       |
