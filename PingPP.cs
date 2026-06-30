@@ -58,13 +58,17 @@ namespace NetInfoCheckerX
         private double _baselineIterations;
         private System.Windows.Forms.Timer _limitTimer;
         private int _remainingSeconds;
+        private PingChart _chartForm;
+        private bool _chartDisabled;
 
         // 高频输出缓冲
         private readonly List<(string text, Color color, bool newLine)> _outputBuffer = new List<(string text, Color color, bool newLine)>();
         private readonly Stopwatch _flushWatch = Stopwatch.StartNew();
         private bool _useBufferedOutput;
         private bool _suppressOutput;
+        private bool _whiteTextOnly;
         private const int FlushIntervalMs = 100;
+        private int _flushIntervalMs = 100;
 
         // UpdateStats 节流
         private readonly Stopwatch _statsWatch = Stopwatch.StartNew();
@@ -80,6 +84,9 @@ namespace NetInfoCheckerX
         private static extern int timeBeginPeriod(uint uPeriod);
         [DllImport("winmm.dll")]
         private static extern int timeEndPeriod(uint uPeriod);
+        [DllImport("user32.dll")]
+        private static extern int SendMessage(IntPtr hWnd, int msg, int wParam, int lParam);
+        private const int WM_SETREDRAW = 0x000B;
         private string IniPath => Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
         private const string IniSection = "PingPP";
 
@@ -180,6 +187,12 @@ namespace NetInfoCheckerX
                 var last = _tickPerSec[_tickPerSec.Count - 1];
                 _tickPerSec[_tickPerSec.Count - 1] = (last.secBucket, last.count + 1);
             }
+
+            if (!_suppressOutput && _chartForm != null && !_chartForm.IsDisposed)
+            {
+                double elapsed = (DateTime.Now - _sessionStartTime).TotalSeconds;
+                _chartForm.AddDataPoint(elapsed, rtt);
+            }
         }
 
         private void ResetStats()
@@ -193,6 +206,10 @@ namespace NetInfoCheckerX
             _scheduleDelaySum = 0; _scheduleDelayCount = 0;
             _loopIterationCount = 0; _rateDegradationCount = 0; _baselineIterations = 0;
             isSettingsPrinted = false;
+            if (_chartForm != null && !_chartForm.IsDisposed)
+            {
+                try { _chartForm.SetInfo("", "", 1); } catch { }
+            }
             UpdateStats();
         }
 
@@ -592,6 +609,19 @@ namespace NetInfoCheckerX
             catch { }
         }
 
+        private bool ChartDependenciesAvailable()
+        {
+            string dir = Application.StartupPath;
+            if (!File.Exists(Path.Combine(dir, "ScottPlot.WinForms.dll")) ||
+                !File.Exists(Path.Combine(dir, "ScottPlot.dll")))
+            {
+                MessageBox.Show("未找到绘制折线图所需依赖，折线图窗口已禁用，如有需要请检查相关依赖是否完整",
+                    "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            return true;
+        }
+
         private void PingPP_Load(object sender, EventArgs e)
         {
             CleanupTempFiles();
@@ -612,6 +642,17 @@ namespace NetInfoCheckerX
             CloudControl.LoadPingServers(comboTarget);
             if (comboFreq.SelectedIndex < 0) comboFreq.SelectedIndex = 0;
             CloudControl.UsedTimesCounter("PingPP");
+
+            if (ChartDependenciesAvailable())
+            {
+                _chartForm = new PingChart();
+                _chartForm.Location = new Point(this.Left, this.Bottom + 8);
+                _chartForm.Show();
+            }
+            else
+            {
+                _chartDisabled = true;
+            }
         }
 
         private void EnsureSelectedNICValid()
@@ -725,6 +766,7 @@ namespace NetInfoCheckerX
             _cts?.Cancel();
             _limitTimer?.Stop();
             if (_activeTests <= 1) CleanupTempFiles();
+            try { _chartForm?.Shutdown(); _chartForm?.Dispose(); } catch { }
         }
 
         private async void btnStart_Click(object sender, EventArgs e)
@@ -1001,10 +1043,20 @@ namespace NetInfoCheckerX
                 int freq = GetPingFrequency();
                 long intervalTicks = (long)(Stopwatch.Frequency / (double)freq);
                 _useBufferedOutput = freq >= 4;
+                _whiteTextOnly = freq > 8;
+                _flushIntervalMs = freq >= 64 ? 200 : 100;
                 _flushWatch.Restart();
                 _statsWatch.Restart();
 
                 long nextFireTime = Stopwatch.GetTimestamp();
+
+                if (!_chartDisabled && (_chartForm == null || _chartForm.IsDisposed))
+                {
+                    _chartForm = new PingChart();
+                    _chartForm.Location = new Point(this.Left, this.Bottom + 8);
+                    _chartForm.Show();
+                }
+                _chartForm?.SetInfo(finalIP, protocolName, freq);
 
                 while (!_cts.Token.IsCancellationRequested)
                 {
@@ -1029,13 +1081,14 @@ namespace NetInfoCheckerX
                     if (_fatalError)
                     {
                         _useBufferedOutput = false;
+                        _whiteTextOnly = false;
                         FlushOutputBuffer();
                         _cts.Cancel();
                         break;
                     }
 
                     // 批量刷新输出
-                    if (_useBufferedOutput && _flushWatch.ElapsedMilliseconds >= FlushIntervalMs)
+                    if (_useBufferedOutput && _flushWatch.ElapsedMilliseconds >= _flushIntervalMs)
                     {
                         FlushOutputBuffer();
                         _flushWatch.Restart();
@@ -1084,6 +1137,7 @@ namespace NetInfoCheckerX
                 try
                 {
                     _useBufferedOutput = false;
+                    _whiteTextOnly = false;
                     if (isRunning) { _activeTests--; }
                     isRunning = false;
                     _limitTimer.Stop();
@@ -1105,7 +1159,7 @@ namespace NetInfoCheckerX
                         }
                         else
                         {
-                            AppendColorText($"[停止时间] {stopTimeStr}", Color.Yellow, true);
+                            AppendColorText($"[停止时间] {stopTimeStr} (本次测试总时长: {FormatDuration(DateTime.Now - _sessionStartTime)})", Color.Yellow, true);
                             AppendColorText(" ■ 用户手动停止测试", Color.Yellow, true);
                         }
 
@@ -1897,14 +1951,15 @@ namespace NetInfoCheckerX
         private void AppendColorText(string text, Color color, bool addNewLine = false)
         {
             if (_suppressOutput || _isClosing) return;
+            Color actualColor = _whiteTextOnly ? Color.White : color;
             if (_useBufferedOutput)
             {
-                _outputBuffer.Add((text, color, addNewLine));
+                _outputBuffer.Add((text, actualColor, addNewLine));
                 return;
             }
             richTextBox1.SelectionStart = richTextBox1.Text.Length;
             richTextBox1.SelectionLength = 0;
-            richTextBox1.SelectionColor = color;
+            richTextBox1.SelectionColor = actualColor;
             richTextBox1.AppendText(addNewLine ? text + Environment.NewLine : text);
             richTextBox1.ScrollToCaret();
         }
@@ -1912,16 +1967,40 @@ namespace NetInfoCheckerX
         private void FlushOutputBuffer()
         {
             if (_outputBuffer.Count == 0) return;
-            int count = _outputBuffer.Count;
-            for (int i = 0; i < count; i++)
+
+            SendMessage(richTextBox1.Handle, WM_SETREDRAW, 0, 0);
+
+            if (_whiteTextOnly)
             {
-                var (text, color, newLine) = _outputBuffer[i];
+                var sb = new StringBuilder();
+                int count = _outputBuffer.Count;
+                for (int i = 0; i < count; i++)
+                {
+                    var (text, _, newLine) = _outputBuffer[i];
+                    sb.Append(text);
+                    if (newLine) sb.AppendLine();
+                }
                 richTextBox1.SelectionStart = richTextBox1.Text.Length;
                 richTextBox1.SelectionLength = 0;
-                richTextBox1.SelectionColor = color;
-                richTextBox1.AppendText(newLine ? text + Environment.NewLine : text);
+                richTextBox1.SelectionColor = Color.White;
+                richTextBox1.AppendText(sb.ToString());
+            }
+            else
+            {
+                int count = _outputBuffer.Count;
+                for (int i = 0; i < count; i++)
+                {
+                    var (text, color, newLine) = _outputBuffer[i];
+                    richTextBox1.SelectionStart = richTextBox1.Text.Length;
+                    richTextBox1.SelectionLength = 0;
+                    richTextBox1.SelectionColor = color;
+                    richTextBox1.AppendText(newLine ? text + Environment.NewLine : text);
+                }
             }
             _outputBuffer.Clear();
+
+            SendMessage(richTextBox1.Handle, WM_SETREDRAW, 1, 0);
+            richTextBox1.Invalidate();
             richTextBox1.ScrollToCaret();
         }
 
@@ -1933,28 +2012,31 @@ namespace NetInfoCheckerX
             string fileName = $"NICX_Ping_Temp_{_shardIndex}_{proto}_{target}_{_startTimeStr}.txt";
             string filePath = Path.Combine(Application.StartupPath, fileName);
 
-            try
+            // Flush any pending output before saving
+            FlushOutputBuffer();
+
+            // Snapshot text and write file on background thread
+            string rtfText = richTextBox1.Text;
+            Task.Run(() =>
             {
-                string shardFooter = $"测试记录分片{_shardIndex}\n";
-                System.IO.File.WriteAllText(filePath, richTextBox1.Text + shardFooter, Encoding.UTF8);
-            }
-            catch { }
+                try
+                {
+                    string shardFooter = $"测试记录分片{_shardIndex}\n";
+                    System.IO.File.WriteAllText(filePath, rtfText + shardFooter, Encoding.UTF8);
+                }
+                catch { }
+            });
 
             richTextBox1.ResetText();
             AppendColorText($"接测试记录分片{_shardIndex}", Color.Gray, true);
 
-            // 释放控件和缓冲区内部累积
             _outputBuffer.Clear();
-            _outputBuffer.Capacity = 0;
-            GC.Collect(2, GCCollectionMode.Forced);
-            GC.WaitForPendingFinalizers();
 
             // 重置监测状态（保留基准）
             _rateDegradationCount = 0;
             _scheduleDelaySum = 0;
             _scheduleDelayCount = 0;
             _loopIterationCount = 0;
-            _rateDegradationCount = 0;
             int sec = (int)(DateTime.Now - _sessionStartTime).TotalSeconds;
             _nextCheckSec = ((sec / 2) + 2) * 2;
         }
@@ -2176,6 +2258,15 @@ namespace NetInfoCheckerX
         {
             int freq = GetPingFrequency();
             return rtt.ToString(freq > 1 ? "F3" : "F1");
+        }
+
+        private static string FormatDuration(TimeSpan ts)
+        {
+            if (ts.TotalSeconds < 60)
+                return $"{ts.TotalSeconds:F1}秒";
+            if (ts.TotalMinutes < 60)
+                return $"{ts.Minutes}分{ts.Seconds}秒";
+            return $"{ts.Hours}时{ts.Minutes}分{ts.Seconds}秒";
         }
     }
 }
