@@ -46,6 +46,13 @@ namespace NetInfoCheckerX
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         private static extern int GetPrivateProfileString(string section, string key, string defaultValue,
             StringBuilder buffer, int size, string filePath);
+
+        [DllImport("user32.dll")]
+        private static extern int SendMessage(IntPtr hWnd, int msg, int wParam, int lParam);
+        private const int WM_SETREDRAW = 0x000B;
+        private const int EM_GETFIRSTVISIBLELINE = 0x00CE;
+        private const int EM_LINESCROLL = 0x00B6;
+
         private string IniPath => Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
         private const string IniSection = "Trace";
 
@@ -70,6 +77,7 @@ namespace NetInfoCheckerX
                 WritePrivateProfileString(IniSection, "Delay", txtDelay.Text, IniPath);
                 WritePrivateProfileString(IniSection, "Port", txtTargetPort.Text, IniPath);
                 WritePrivateProfileString(IniSection, "GEO", checkGEO.Checked.ToString().ToLower(), IniPath);
+                WritePrivateProfileString(IniSection, "MTR", checkMTR.Checked.ToString().ToLower(), IniPath);
                 string proto = radioICMP.Checked ? "ICMP" : (radioTCP.Checked ? "TCP" : "UDP");
                 WritePrivateProfileString(IniSection, "Protocol", proto, IniPath);
             }
@@ -100,6 +108,8 @@ namespace NetInfoCheckerX
                 if (!string.IsNullOrEmpty(val = sb.ToString())) txtTargetPort.Text = val;
                 GetPrivateProfileString(IniSection, "GEO", "", sb, sb.Capacity, IniPath);
                 if (!string.IsNullOrEmpty(val = sb.ToString())) checkGEO.Checked = val.ToLower() == "true";
+                GetPrivateProfileString(IniSection, "MTR", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) checkMTR.Checked = val.ToLower() == "true";
                 GetPrivateProfileString(IniSection, "Protocol", "", sb, sb.Capacity, IniPath);
                 string proto = sb.ToString();
                 if (proto == "TCP") radioTCP.Checked = true;
@@ -304,6 +314,7 @@ namespace NetInfoCheckerX
 
         private async void Trace_Load(object sender, EventArgs e)
         {
+            this.MinimumSize = this.Size;
             // 1. 先做那些“秒开”的基础 UI 初始化
             comboLocalEnd.Items.Clear();
             comboLocalEnd.Items.Add("0.0.0.0 (Any)");
@@ -320,7 +331,7 @@ namespace NetInfoCheckerX
                 {
                     // 定义夢酱喜欢的现代感字体
                     // 微软雅黑适合中文，Segoe UI 适合英文数字，Consolas 或者 Cascadia Mono，C# 会自动回退匹配
-                    Font modernFont = new Font("Cascadia Mono", 9.5F, FontStyle.Regular);
+                    Font modernFont = new Font("Cascadia Mono", 9F, FontStyle.Regular);
 
                     // 应用到文本框和下拉框
                     richTextBox1.Font = modernFont;
@@ -561,6 +572,8 @@ namespace NetInfoCheckerX
             radioUDP.Enabled = enableControls;
             radioICMP.Enabled = enableControls;
             checkGEO.Enabled = enableControls;
+            checkMTR.Enabled = enableControls;
+            txtTargetPort.Enabled = !running && !radioICMP.Checked;
             btnWDF.Enabled = enableControls;
             btnSave.Enabled = enableControls;
 
@@ -774,7 +787,11 @@ namespace NetInfoCheckerX
                     AppendColorText($"使用接口: {localExportIp} 跳数:{maxHops} 超时:{maxDelayMs}ms\n\n", Color.LightSkyBlue, false);
                 }
 
-                if (selectedMethod == "ICMP")
+                if (checkMTR.Checked)
+                {
+                    await RunMtrTrace(finalTargetIp, localExportIp, maxHops, maxDelayMs, selectedMethod, targetPort, token);
+                }
+                else if (selectedMethod == "ICMP")
                 {
                     if (comboLocalEnd.Text.Contains("ICMP兼容模式"))
                     {
@@ -792,7 +809,7 @@ namespace NetInfoCheckerX
             }
             catch (OperationCanceledException)
             {
-                AppendColorText("\n\n ■ 用户手动停止测试 \n", Color.Yellow, true);
+                AppendColorText(" ■ 用户手动停止测试", Color.Yellow, true);
             }
             catch (Exception ex)
             {
@@ -823,6 +840,7 @@ namespace NetInfoCheckerX
                     for (int i = 0; i < 4; i++)
                     {
                         if (hopToken.IsCancellationRequested) break;
+                        if (i > 0) await Task.Delay(40, hopToken);
                         PingOptions options = new PingOptions(ttl, true);
                         byte[] buffer = Encoding.ASCII.GetBytes("YumeyoNICX_Trace_Packet");
                         Stopwatch sw = Stopwatch.StartNew();
@@ -832,6 +850,8 @@ namespace NetInfoCheckerX
                             sw.Stop();
                             if (reply.Status == IPStatus.Success || reply.Status == IPStatus.TtlExpired)
                             {
+                                if (result.ReplyAddress == null && geoChecked)
+                                    result.GeoInfo = ComputeCachedGeoInfo(reply.Address.ToString());
                                 result.ReplyAddress = reply.Address;
                                 result.RTTs[i] = sw.Elapsed.TotalMilliseconds;
                                 if (reply.Status == IPStatus.Success) result.TargetReached = true;
@@ -851,15 +871,39 @@ namespace NetInfoCheckerX
             for (int ttl = 1; ttl <= maxHops; ttl++)
             { int ct = ttl; tasks.Add(Task.Run(() => ProbeHop(ct, token), token)); }
             var allDone = Task.WhenAll(tasks);
+            var globalTimer = Stopwatch.StartNew();
+            int hopTimeout = timeout * 4 + 200;//最长等待时间 原生
+            int missingStreak = 0;
+            const int minPacingMs = 50; //显示缓冲时间
             for (int ttl = 1; ttl <= maxHops; ttl++)
             {
                 if (this.IsDisposed || token.IsCancellationRequested) break;
-                var w = Stopwatch.StartNew();
-                while (!results.TryGetValue(ttl, out _) && !allDone.IsCompleted && !token.IsCancellationRequested
-                    && w.ElapsedMilliseconds < timeout * 4 + 150) await Task.Delay(50);
+                int effectiveWait;
+                if (allDone.IsCompleted)
+                    effectiveWait = 0;
+                else if (missingStreak > 0)
+                {
+                    int futureDone = 0;
+                    for (int f = ttl + 1; f <= Math.Min(ttl + 6, maxHops); f++)
+                        if (results.ContainsKey(f)) futureDone++;
+                    if (futureDone >= 3) effectiveWait = 400;
+                    else if (futureDone >= 1) effectiveWait = Math.Min(700, hopTimeout);
+                    else effectiveWait = Math.Max(400, hopTimeout - missingStreak * 250);
+                }
+                else effectiveWait = hopTimeout;
+                effectiveWait = Math.Min(effectiveWait, Math.Max(0, hopTimeout - (int)globalTimer.ElapsedMilliseconds));
+                var iterStart = Stopwatch.StartNew();
+                var waited = Stopwatch.StartNew();
+                while (!results.TryGetValue(ttl, out _) && waited.ElapsedMilliseconds < effectiveWait
+                       && !allDone.IsCompleted && !token.IsCancellationRequested)
+                    await Task.Delay(20);
                 HopResult hop = results.TryGetValue(ttl, out var h) ? h : new HopResult(ttl);
                 DisplaySingleHop(hop, geoChecked);
                 if (hop.TargetReached) break;
+                missingStreak = hop.HasAnyResponse ? 0 : missingStreak + 1;
+                int iterMs = (int)iterStart.ElapsedMilliseconds;
+                if (iterMs < minPacingMs)
+                    await Task.Delay(minPacingMs - iterMs);
             }
             try { await allDone; } catch { }
         }
@@ -918,32 +962,32 @@ namespace NetInfoCheckerX
 
             using (Socket receiver = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.Icmp))
             {
-                try { receiver.Bind(new IPEndPoint(localIp, 0)); receiver.IOControl(IOControlCode.ReceiveAll, new byte[] { 1, 0, 0, 0 }, new byte[] { 1, 0, 0, 0 }); } catch { }
+                receiver.Bind(new IPEndPoint(localIp, 0));
+                receiver.ReceiveBufferSize = 65536;
 
                 var receiveLoopTask = Task.Run(() =>
                 {
                     byte[] rcvBuffer = new byte[1024];
                     EndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
+                    receiver.ReceiveTimeout = 500;
                     while (!token.IsCancellationRequested && !this.IsDisposed)
                     {
                         try
                         {
-                            if (receiver.Poll(5000, SelectMode.SelectRead))
+                            int len = receiver.ReceiveFrom(rcvBuffer, ref remoteEP);
+                            int ipHdrLen = (rcvBuffer[0] & 0x0F) * 4;
+                            if (len >= ipHdrLen + 8)
                             {
-                                int len = receiver.ReceiveFrom(rcvBuffer, ref remoteEP);
-                                int icmpStart = 20;
-                                if (len >= icmpStart + 8)
-                                {
-                                    byte type = rcvBuffer[icmpStart];
-                                    ushort rcvId = 0, rcvSeq = 0;
-                                    if (type == 0) { rcvId = BitConverter.ToUInt16(rcvBuffer, icmpStart + 4); rcvSeq = BitConverter.ToUInt16(rcvBuffer, icmpStart + 6); }
-                                    else if (type == 11) { int eOff = icmpStart + 8 + 20; if (len > eOff + 6) { rcvId = BitConverter.ToUInt16(rcvBuffer, eOff + 4); rcvSeq = BitConverter.ToUInt16(rcvBuffer, eOff + 6); } }
-                                    else continue;
-                                    if (rcvId == _instanceIdentifier && seqTcsStore.TryRemove(rcvSeq, out var tcs))
-                                        tcs.TrySetResult(((IPEndPoint)remoteEP).Address);
-                                }
+                                byte type = rcvBuffer[ipHdrLen];
+                                ushort rcvId = 0, rcvSeq = 0;
+                                if (type == 0) { rcvId = BitConverter.ToUInt16(rcvBuffer, ipHdrLen + 4); rcvSeq = BitConverter.ToUInt16(rcvBuffer, ipHdrLen + 6); }
+                                else if (type == 11) { int innerIpHdrLen = (rcvBuffer[ipHdrLen + 8] & 0x0F) * 4; int eOff = ipHdrLen + 8 + innerIpHdrLen; if (len > eOff + 6) { rcvId = BitConverter.ToUInt16(rcvBuffer, eOff + 4); rcvSeq = BitConverter.ToUInt16(rcvBuffer, eOff + 6); } }
+                                else continue;
+                                if (rcvId == _instanceIdentifier && seqTcsStore.TryRemove(rcvSeq, out var tcs))
+                                    tcs.TrySetResult(((IPEndPoint)remoteEP).Address);
                             }
                         }
+                        catch (SocketException) { continue; }
                         catch { break; }
                     }
                 }, token);
@@ -960,6 +1004,7 @@ namespace NetInfoCheckerX
                             for (int i = 0; i < 4; i++)
                             {
                                 if (hopToken.IsCancellationRequested) break;
+                                if (i > 0) await Task.Delay(40, hopToken);
                                 int seq = (ttl - 1) * 4 + i + 1;
                                 byte[] req = CreateIcmpPacket((ushort)seq);
                                 var tcs = new TaskCompletionSource<IPAddress>();
@@ -971,7 +1016,7 @@ namespace NetInfoCheckerX
                                     var done = await Task.WhenAny(tcs.Task, Task.Delay(timeout, hopToken));
                                     sw.Stop();
                                     seqTcsStore.TryRemove(seq, out _);
-                                    if (done == tcs.Task) { IPAddress addr = await tcs.Task; result.ReplyAddress = addr; result.RTTs[i] = sw.Elapsed.TotalMilliseconds; if (addr.Equals(targetIp)) result.TargetReached = true; }
+                                    if (done == tcs.Task) { IPAddress addr = await tcs.Task; if (result.ReplyAddress == null && geoChecked) result.GeoInfo = ComputeCachedGeoInfo(addr.ToString()); result.ReplyAddress = addr; result.RTTs[i] = sw.Elapsed.TotalMilliseconds; if (addr.Equals(targetIp)) result.TargetReached = true; }
                                 }
                                 catch (Exception ex) when (!(ex is OperationCanceledException)) { sw.Stop(); result.RTTs[i] = -2; seqTcsStore.TryRemove(seq, out _); }
                             }
@@ -984,16 +1029,39 @@ namespace NetInfoCheckerX
                 var tasks = new List<Task>();
                 for (int ttl = 1; ttl <= maxHops; ttl++) { int ct = ttl; tasks.Add(Task.Run(() => ProbeHop(ct, token), token)); }
                 var allDone = Task.WhenAll(tasks);
-                int maxWaitMs = timeout * 4 + 150; bool seenTimeout = false;
+                var globalTimer = Stopwatch.StartNew();
+                int hopTimeout = timeout * 4 + 200;//总等待时间 rawsocket
+                int missingStreak = 0;
+                const int minPacingMs = 70;
                 for (int ttl = 1; ttl <= maxHops; ttl++)
                 {
                     if (this.IsDisposed || token.IsCancellationRequested) break;
-                    if (!seenTimeout) { var waited = Stopwatch.StartNew(); while (!results.TryGetValue(ttl, out _) && !allDone.IsCompleted && !token.IsCancellationRequested) { await Task.Delay(33); if (waited.ElapsedMilliseconds > maxWaitMs) { bool fd = false; for (int f = ttl + 1; f <= Math.Min(ttl + 6, maxHops); f++) if (results.ContainsKey(f)) { fd = true; break; } if (fd) { seenTimeout = true; break; } } } }
-                    else { var waited = Stopwatch.StartNew(); while (!results.TryGetValue(ttl, out _) && waited.ElapsedMilliseconds < 200 && !allDone.IsCompleted && !token.IsCancellationRequested) await Task.Delay(33); }
+                    int effectiveWait;
+                    if (allDone.IsCompleted)
+                        effectiveWait = 0;
+                    else if (missingStreak > 0)
+                    {
+                        int futureDone = 0;
+                        for (int f = ttl + 1; f <= Math.Min(ttl + 6, maxHops); f++)
+                            if (results.ContainsKey(f)) futureDone++;
+                        if (futureDone >= 3) effectiveWait = 400;
+                        else if (futureDone >= 1) effectiveWait = Math.Min(700, hopTimeout);
+                        else effectiveWait = Math.Max(400, hopTimeout - missingStreak * 250);
+                    }
+                    else effectiveWait = hopTimeout;
+                    effectiveWait = Math.Min(effectiveWait, Math.Max(0, hopTimeout - (int)globalTimer.ElapsedMilliseconds));
+                    var iterStart = Stopwatch.StartNew();
+                    var waited = Stopwatch.StartNew();
+                    while (!results.TryGetValue(ttl, out _) && waited.ElapsedMilliseconds < effectiveWait
+                           && !allDone.IsCompleted && !token.IsCancellationRequested)
+                        await Task.Delay(20);
                     HopResult hop = results.TryGetValue(ttl, out var h) ? h : new HopResult(ttl);
                     DisplaySingleHop(hop, geoChecked);
                     if (hop.TargetReached) break;
-                    await Task.Delay(33);
+                    missingStreak = hop.HasAnyResponse ? 0 : missingStreak + 1;
+                    int iterMs = (int)iterStart.ElapsedMilliseconds;
+                    if (iterMs < minPacingMs)
+                        await Task.Delay(minPacingMs - iterMs);
                 }
                 try { await allDone; } catch { }
             }
@@ -1011,6 +1079,7 @@ namespace NetInfoCheckerX
             using (Socket receiver = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.Icmp))
             {
                 try { receiver.Bind(new IPEndPoint(localIp, 0)); receiver.IOControl(IOControlCode.ReceiveAll, new byte[] { 1, 0, 0, 0 }, new byte[] { 1, 0, 0, 0 }); } catch { }
+                receiver.ReceiveBufferSize = 65536;
 
                 var receiveLoopTask = Task.Run(() =>
                 {
@@ -1023,13 +1092,14 @@ namespace NetInfoCheckerX
                             if (receiver.Poll(5000, SelectMode.SelectRead))
                             {
                                 int len = receiver.ReceiveFrom(rcvBuffer, ref remoteEP);
-                                int icmpOff = 20;
-                                if (len >= icmpOff + 8)
+                                int ipHdrLen = (rcvBuffer[0] & 0x0F) * 4;
+                                if (len >= ipHdrLen + 8)
                                 {
-                                    int icmpType = rcvBuffer[icmpOff];
+                                    int icmpType = rcvBuffer[ipHdrLen];
                                     if (icmpType == 11 || icmpType == 3)
                                     {
-                                        int portOff = icmpOff + 8 + 20;
+                                        int innerIpHdrLen = (rcvBuffer[ipHdrLen + 8] & 0x0F) * 4;
+                                        int portOff = ipHdrLen + 8 + innerIpHdrLen;
                                         if (len <= portOff + 1) continue;
                                         int sport = (rcvBuffer[portOff] << 8) + rcvBuffer[portOff + 1];
                                         if (packetTcsStore.TryRemove(sport, out var tcs))
@@ -1050,6 +1120,7 @@ namespace NetInfoCheckerX
                         for (int i = 0; i < 4; i++)
                         {
                             if (hopToken.IsCancellationRequested) break;
+                            if (i > 0) await Task.Delay(40, hopToken);
                             using (Socket senderSocket = new Socket(AddressFamily.InterNetwork,
                                 protocol == "TCP" ? SocketType.Stream : SocketType.Dgram,
                                 protocol == "TCP" ? ProtocolType.Tcp : ProtocolType.Udp))
@@ -1074,8 +1145,8 @@ namespace NetInfoCheckerX
                                     var done = await Task.WhenAny(tcs.Task, tcpOk, Task.Delay(timeout, hopToken));
                                     sw.Stop();
                                     packetTcsStore.TryRemove(myPort, out _);
-                                    if (done == tcs.Task) { IPAddress addr = await tcs.Task; result.ReplyAddress = addr; result.RTTs[i] = sw.Elapsed.TotalMilliseconds; if (addr.Equals(targetIp)) result.TargetReached = true; }
-                                    else if (done == tcpOk) { result.ReplyAddress = targetIp; result.RTTs[i] = sw.Elapsed.TotalMilliseconds; result.TargetReached = true; }
+                                    if (done == tcs.Task) { IPAddress addr = await tcs.Task; if (result.ReplyAddress == null && geoChecked) result.GeoInfo = ComputeCachedGeoInfo(addr.ToString()); result.ReplyAddress = addr; result.RTTs[i] = sw.Elapsed.TotalMilliseconds; if (addr.Equals(targetIp)) result.TargetReached = true; }
+                                    else if (done == tcpOk) { if (result.ReplyAddress == null && geoChecked) result.GeoInfo = ComputeCachedGeoInfo(targetIp.ToString()); result.ReplyAddress = targetIp; result.RTTs[i] = sw.Elapsed.TotalMilliseconds; result.TargetReached = true; }
                                 }
                                 catch (Exception ex) when (!(ex is OperationCanceledException)) { result.RTTs[i] = -2; }
                             }
@@ -1088,18 +1159,293 @@ namespace NetInfoCheckerX
                 var tasks = new List<Task>();
                 for (int ttl = 1; ttl <= maxHops; ttl++) { int ct = ttl; tasks.Add(Task.Run(() => ProbeHop(ct, token), token)); }
                 var allDone = Task.WhenAll(tasks);
-                int maxWaitMs = timeout * 4 + 150; bool seenTimeout = false;
+                var globalTimer = Stopwatch.StartNew();
+                int hopTimeout = timeout * 4 + 200;//总等待时间 TCP UDP
+                int missingStreak = 0;
+                const int minPacingMs = 70;
                 for (int ttl = 1; ttl <= maxHops; ttl++)
                 {
                     if (this.IsDisposed || token.IsCancellationRequested) break;
-                    if (!seenTimeout) { var waited = Stopwatch.StartNew(); while (!results.TryGetValue(ttl, out _) && !allDone.IsCompleted && !token.IsCancellationRequested) { await Task.Delay(33); if (waited.ElapsedMilliseconds > maxWaitMs) { bool fd = false; for (int f = ttl + 1; f <= Math.Min(ttl + 6, maxHops); f++) if (results.ContainsKey(f)) { fd = true; break; } if (fd) { seenTimeout = true; break; } } } }
-                    else { var waited = Stopwatch.StartNew(); while (!results.TryGetValue(ttl, out _) && waited.ElapsedMilliseconds < 200 && !allDone.IsCompleted && !token.IsCancellationRequested) await Task.Delay(33); }
+                    int effectiveWait;
+                    if (allDone.IsCompleted)
+                        effectiveWait = 0;
+                    else if (missingStreak > 0)
+                    {
+                        int futureDone = 0;
+                        for (int f = ttl + 1; f <= Math.Min(ttl + 6, maxHops); f++)
+                            if (results.ContainsKey(f)) futureDone++;
+                        if (futureDone >= 3) effectiveWait = 400;
+                        else if (futureDone >= 1) effectiveWait = Math.Min(700, hopTimeout);
+                        else effectiveWait = Math.Max(400, hopTimeout - missingStreak * 250);
+                    }
+                    else effectiveWait = hopTimeout;
+                    effectiveWait = Math.Min(effectiveWait, Math.Max(0, hopTimeout - (int)globalTimer.ElapsedMilliseconds));
+                    var iterStart = Stopwatch.StartNew();
+                    var waited = Stopwatch.StartNew();
+                    while (!results.TryGetValue(ttl, out _) && waited.ElapsedMilliseconds < effectiveWait
+                           && !allDone.IsCompleted && !token.IsCancellationRequested)
+                        await Task.Delay(20);
                     HopResult hop = results.TryGetValue(ttl, out var h) ? h : new HopResult(ttl);
                     DisplaySingleHop(hop, geoChecked);
                     if (hop.TargetReached) break;
-                    await Task.Delay(33);
+                    missingStreak = hop.HasAnyResponse ? 0 : missingStreak + 1;
+                    int iterMs = (int)iterStart.ElapsedMilliseconds;
+                    if (iterMs < minPacingMs)
+                        await Task.Delay(minPacingMs - iterMs);
                 }
                 try { await allDone; } catch { }
+            }
+        }
+
+        // ==========================================
+        // MTR 模式：持续多轮探测 + 累计统计 + 实时刷新表格
+        // ==========================================
+        private async Task RunMtrTrace(IPAddress targetIp, IPAddress localIp, int maxHops, int timeout, string protocol, int targetPort, CancellationToken token)
+        {
+            bool geoChecked = checkGEO.Checked;
+            var stats = new ConcurrentDictionary<int, MtrHopStats>();
+            for (int ttl = 1; ttl <= maxHops; ttl++)
+                stats[ttl] = new MtrHopStats { TTL = ttl };
+
+            string targetLabel = targetIp.ToString();
+            int round = 0;
+            int hopTimeout = timeout * 4 + 200;
+            int effectiveMaxHops = maxHops;
+            int confirmedTargetHop = 0;
+            bool targetEverReached = false;
+            bool isFirstRound = true;
+
+            using (Socket receiver = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.Icmp))
+            {
+                try { receiver.Bind(new IPEndPoint(localIp, 0)); receiver.IOControl(IOControlCode.ReceiveAll, new byte[] { 1, 0, 0, 0 }, new byte[] { 1, 0, 0, 0 }); } catch { }
+                receiver.ReceiveBufferSize = 65536;
+
+                while (!token.IsCancellationRequested && !this.IsDisposed)
+                {
+                    round++;
+                    var roundResults = new ConcurrentDictionary<int, HopResult>();
+                    // 接收循环：同时支持 ICMP (ID+seq) 和 TCP/UDP (源端口) 匹配
+                    var roundSeqStore = new ConcurrentDictionary<int, TaskCompletionSource<IPAddress>>();
+                    var roundPortStore = new ConcurrentDictionary<int, TaskCompletionSource<IPAddress>>();
+                    var roundCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+
+                    var receiveTask = Task.Run(() =>
+                    {
+                        byte[] buf = new byte[1024];
+                        EndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
+                        receiver.ReceiveTimeout = 500;
+                        while (!roundCts.Token.IsCancellationRequested)
+                        {
+                            try
+                            {
+                                int len = receiver.ReceiveFrom(buf, ref remoteEP);
+                                int ipHdrLen = (buf[0] & 0x0F) * 4;
+                                if (len >= ipHdrLen + 8)
+                                {
+                                    byte type = buf[ipHdrLen];
+                                    // ICMP 匹配
+                                    if (type == 0 || type == 11)
+                                    {
+                                        ushort rcvId = 0, rcvSeq = 0;
+                                        if (type == 0) { rcvId = BitConverter.ToUInt16(buf, ipHdrLen + 4); rcvSeq = BitConverter.ToUInt16(buf, ipHdrLen + 6); }
+                                        else { int innerIpHdrLen = (buf[ipHdrLen + 8] & 0x0F) * 4; int eOff = ipHdrLen + 8 + innerIpHdrLen; if (len > eOff + 6) { rcvId = BitConverter.ToUInt16(buf, eOff + 4); rcvSeq = BitConverter.ToUInt16(buf, eOff + 6); } }
+                                        if (rcvId == _instanceIdentifier && roundSeqStore.TryRemove(rcvSeq, out var stcs))
+                                            stcs.TrySetResult(((IPEndPoint)remoteEP).Address);
+                                    }
+                                    // TCP/UDP 匹配（源端口在嵌入的 IP 头之后）
+                                    if (type == 11 || type == 3)
+                                    {
+                                        int innerIpHdrLen = (buf[ipHdrLen + 8] & 0x0F) * 4;
+                                        int portOff = ipHdrLen + 8 + innerIpHdrLen;
+                                        if (len > portOff + 1)
+                                        {
+                                            int sport = (buf[portOff] << 8) + buf[portOff + 1];
+                                            if (roundPortStore.TryRemove(sport, out var ptcs))
+                                                ptcs.TrySetResult(((IPEndPoint)remoteEP).Address);
+                                        }
+                                    }
+                                }
+                            }
+                            catch (SocketException) { continue; }
+                            catch { break; }
+                        }
+                    }, roundCts.Token);
+
+                    // 并发探测（每轮每跳 1 个探针）
+                    bool isIcmpProto = (protocol == "ICMP");
+                    var tasks = new List<Task>();
+                    for (int ttl = 1; ttl <= effectiveMaxHops; ttl++)
+                    {
+                        int ct = ttl;
+                        tasks.Add(Task.Run(async () =>
+                        {
+                            var result = new HopResult(ct);
+                            try
+                            {
+                                if (isIcmpProto)
+                                {
+                                    using (Socket sendSocket = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.Icmp))
+                                    {
+                                        sendSocket.Bind(new IPEndPoint(localIp, 0));
+                                        sendSocket.Ttl = (short)ct;
+                                        if (token.IsCancellationRequested) { roundResults[ct] = result; return; }
+                                        int seq = ct;
+                                        byte[] req = CreateIcmpPacket((ushort)seq);
+                                        var tcs = new TaskCompletionSource<IPAddress>();
+                                        roundSeqStore[seq] = tcs;
+                                        Stopwatch sw = Stopwatch.StartNew();
+                                        try
+                                        {
+                                            sendSocket.SendTo(req, new IPEndPoint(targetIp, 0));
+                                            var done = await Task.WhenAny(tcs.Task, Task.Delay(timeout, token));
+                                            sw.Stop();
+                                            roundSeqStore.TryRemove(seq, out _);
+                                            if (done == tcs.Task)
+                                            {
+                                                IPAddress addr = await tcs.Task;
+                                                if (geoChecked) result.GeoInfo = ComputeCachedGeoInfo(addr.ToString());
+                                                result.ReplyAddress = addr;
+                                                result.RTTs[0] = sw.Elapsed.TotalMilliseconds;
+                                                if (addr.Equals(targetIp)) result.TargetReached = true;
+                                            }
+                                        }
+                                        catch (Exception ex) when (!(ex is OperationCanceledException))
+                                        {
+                                            sw.Stop();
+                                            result.RTTs[0] = -2;
+                                            roundSeqStore.TryRemove(seq, out _);
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    using (Socket sendSocket = new Socket(AddressFamily.InterNetwork,
+                                        protocol == "TCP" ? SocketType.Stream : SocketType.Dgram,
+                                        protocol == "TCP" ? ProtocolType.Tcp : ProtocolType.Udp))
+                                    {
+                                        sendSocket.Bind(new IPEndPoint(localIp, 0));
+                                        int myPort = ((IPEndPoint)sendSocket.LocalEndPoint).Port;
+                                        sendSocket.Ttl = (short)ct;
+                                        if (token.IsCancellationRequested) { roundResults[ct] = result; return; }
+                                        var tcs = new TaskCompletionSource<IPAddress>();
+                                        roundPortStore[myPort] = tcs;
+                                        Stopwatch sw = Stopwatch.StartNew();
+                                        try
+                                        {
+                                            Task tcpOk = new TaskCompletionSource<bool>().Task;
+                                            if (protocol == "TCP")
+                                            {
+                                                var stcs = new TaskCompletionSource<bool>();
+                                                var rc = sendSocket.ConnectAsync(new IPEndPoint(targetIp, targetPort));
+                                                var _ = rc.ContinueWith(__ => { if (rc.Status == TaskStatus.RanToCompletion && sendSocket.Connected) stcs.TrySetResult(true); });
+                                                tcpOk = stcs.Task;
+                                            }
+                                            else sendSocket.SendTo(Encoding.ASCII.GetBytes("Yume"), new IPEndPoint(targetIp, targetPort));
+                                            var done = await Task.WhenAny(tcs.Task, tcpOk, Task.Delay(timeout, token));
+                                            sw.Stop();
+                                            roundPortStore.TryRemove(myPort, out _);
+                                            if (done == tcs.Task)
+                                            {
+                                                IPAddress addr = await tcs.Task;
+                                                if (geoChecked) result.GeoInfo = ComputeCachedGeoInfo(addr.ToString());
+                                                result.ReplyAddress = addr;
+                                                result.RTTs[0] = sw.Elapsed.TotalMilliseconds;
+                                                if (addr.Equals(targetIp)) result.TargetReached = true;
+                                            }
+                                            else if (done == tcpOk)
+                                            {
+                                                if (geoChecked) result.GeoInfo = ComputeCachedGeoInfo(targetIp.ToString());
+                                                result.ReplyAddress = targetIp;
+                                                result.RTTs[0] = sw.Elapsed.TotalMilliseconds;
+                                                result.TargetReached = true;
+                                            }
+                                        }
+                                        catch (Exception ex) when (!(ex is OperationCanceledException))
+                                        {
+                                            sw.Stop();
+                                            result.RTTs[0] = -2;
+                                            roundPortStore.TryRemove(myPort, out _);
+                                        }
+                                    }
+                                }
+                            }
+                            catch (OperationCanceledException) { }
+                            roundResults[ct] = result;
+                        }, token));
+                    }
+
+                    // 实时收集：每完成一跳即更新统计并节流重绘
+                    var pendingTasks = new List<Task>(tasks);
+                    var processedHops = new HashSet<int>();
+                    var lastDraw = Stopwatch.StartNew();
+
+                    while (pendingTasks.Count > 0)
+                    {
+                        var done = await Task.WhenAny(pendingTasks);
+                        pendingTasks.Remove(done);
+
+                        for (int ttl = 1; ttl <= effectiveMaxHops; ttl++)
+                        {
+                            if (processedHops.Contains(ttl)) continue;
+                            if (!roundResults.TryGetValue(ttl, out var hop)) continue;
+
+                            processedHops.Add(ttl);
+                            var stat = stats[ttl];
+                            stat.Sent += 1;
+                            if (hop.HasAnyResponse)
+                            {
+                                var ip = hop.ReplyAddress;
+                                stat.ReplyAddress = ip;
+                                string ipStr = ip.ToString();
+                                if (!stat.AllIPs.Any(a => a.Equals(ip)))
+                                {
+                                    stat.AllIPs.Add(ip);
+                                    if (hop.GeoInfo != null)
+                                        stat.IpGeoCache[ipStr] = hop.GeoInfo;
+                                }
+                                stat.GeoInfo = stat.IpGeoCache.ContainsKey(ipStr) ? stat.IpGeoCache[ipStr] : hop.GeoInfo;
+                                for (int i = 0; i < 4; i++)
+                                    if (hop.RTTs[i] >= 0) { stat.Received++; stat.RTTs.Add(hop.RTTs[i]); }
+                            }
+                        }
+
+                        if (!isFirstRound && (lastDraw.ElapsedMilliseconds >= 100 || pendingTasks.Count == 0))
+                        {
+                            DrawMtrTable(stats, targetLabel, localIp, maxHops, timeout, protocol, round, geoChecked, targetEverReached, effectiveMaxHops);
+                            lastDraw.Restart();
+                        }
+                    }
+
+                    // 全部跳完成后，扫描最小目标命中 TTL → 截断
+                    int roundTargetHop = 0;
+                    for (int ttl = 1; ttl <= effectiveMaxHops; ttl++)
+                    {
+                        if (roundResults.TryGetValue(ttl, out var hop) && hop.TargetReached)
+                        {
+                            roundTargetHop = ttl;
+                            break;
+                        }
+                    }
+                    if (roundTargetHop > 0 && confirmedTargetHop == 0)
+                    {
+                        confirmedTargetHop = roundTargetHop;
+                        effectiveMaxHops = confirmedTargetHop;
+                    }
+                    if (roundTargetHop > 0) targetEverReached = true;
+                    // 首轮必定显示最终表格；后续轮由实时刷新处理
+                    if (isFirstRound || confirmedTargetHop > 0)
+                        DrawMtrTable(stats, targetLabel, localIp, maxHops, timeout, protocol, round, geoChecked, targetEverReached, effectiveMaxHops);
+                    isFirstRound = false;
+
+                    // 停止本轮接收循环
+                    roundCts.Cancel();
+                    try { await receiveTask; } catch { }
+
+                    if (token.IsCancellationRequested) break;
+
+                    // 轮间间隔
+                    await Task.Delay(800, token);
+                }
             }
         }
 
@@ -1122,6 +1468,7 @@ namespace NetInfoCheckerX
             public IPAddress ReplyAddress;
             public bool TargetReached;
             public double[] RTTs = new double[4]; // >=0=ms, -1=timeout, -2=error
+            public string GeoInfo; // 预缓存的归属地信息（线程池线程计算，避免 UI 线程磁盘 I/O）
 
             public bool HasAnyResponse => ReplyAddress != null;
 
@@ -1130,6 +1477,38 @@ namespace NetInfoCheckerX
                 TTL = ttl;
                 for (int i = 0; i < 4; i++) RTTs[i] = -1;
             }
+        }
+
+        private class MtrHopStats
+        {
+            public int TTL;
+            public IPAddress ReplyAddress;
+            public string GeoInfo;
+            public List<IPAddress> AllIPs = new List<IPAddress>();
+            public Dictionary<string, string> IpGeoCache = new Dictionary<string, string>();
+            public int Sent;
+            public int Received;
+            public List<double> RTTs = new List<double>();
+            public double LastRTT => RTTs.Count > 0 ? RTTs[RTTs.Count - 1] : double.NaN;
+
+            public double LossPercent => Sent == 0 ? 0 : 100.0 * (Sent - Received) / Sent;
+            public double AvgRTT => RTTs.Count == 0 ? double.NaN : RTTs.Average();
+            public double BestRTT => RTTs.Count == 0 ? double.NaN : RTTs.Min();
+            public double WorstRTT => RTTs.Count == 0 ? double.NaN : RTTs.Max();
+        }
+
+        /// <summary>
+        /// 线程安全的归属地预计算（可在线程池线程调用，避免阻塞 UI）
+        /// </summary>
+        private string ComputeCachedGeoInfo(string ip)
+        {
+            try
+            {
+                string geo = GetIpLocationString(ip);
+                string geoCN = Api2.GetGeoCNLocationQuick(ip);
+                return string.IsNullOrEmpty(geoCN) ? geo : $"{geoCN} | {geo}";
+            }
+            catch { return null; }
         }
 
         private void DisplaySingleHop(HopResult result, bool geoChecked, bool isV6 = false)
@@ -1153,11 +1532,11 @@ namespace NetInfoCheckerX
             }
             else if (isV6)
             {
-                AppendColorText("\n               ", Color.White, false);
+                AppendColorText("\n  -            ", Color.Orange, false);
             }
             else
             {
-                AppendColorText("                 ", Color.White, false);
+                AppendColorText("  -              ", Color.Orange, false);
             }
 
             for (int i = 0; i < 4; i++)
@@ -1176,10 +1555,20 @@ namespace NetInfoCheckerX
                 AppendColorText("\n", Color.White, false);
                 if (geoChecked && !isV6)
                 {
-                    string geo = GetIpLocationString(result.ReplyAddress.ToString());
-                    string geoCN = Api2.GetGeoCNLocationQuick(result.ReplyAddress.ToString());
-                    string combined = string.IsNullOrEmpty(geoCN) ? geo : $"{geoCN} | {geo}";
-                    AppendColorText("             └─ " + combined + "\n", ColorTranslator.FromHtml("#a8a5ff"), false);
+                    string combined = result.GeoInfo;
+                    if (string.IsNullOrEmpty(combined))
+                    {
+                        string geo = GetIpLocationString(result.ReplyAddress.ToString());
+                        string geoCN = Api2.GetGeoCNLocationQuick(result.ReplyAddress.ToString());
+                        combined = string.IsNullOrEmpty(geoCN) ? geo : $"{geoCN} | {geo}";
+                    }
+                    var defaultFont2 = richTextBox1.Font;
+                    using (var smallFont2 = new Font(defaultFont2.FontFamily, Math.Max(defaultFont2.Size - 1.5f, 7f)))
+                    {
+                        richTextBox1.SelectionFont = smallFont2;
+                        AppendColorText("             -> " + combined + "\n", ColorTranslator.FromHtml("#a8a5ff"), false);
+                        richTextBox1.SelectionFont = defaultFont2;
+                    }
                 }
             }
             else
@@ -1193,6 +1582,126 @@ namespace NetInfoCheckerX
             {
                 AppendColorText("\nTrace 完成.\n", Color.Lime, false);
             }
+        }
+
+        private void DrawMtrTable(ConcurrentDictionary<int, MtrHopStats> stats, string targetIp, IPAddress localIp, int maxHops, int timeout, string protocol, int round, bool geoChecked, bool targetReached, int effectiveMaxHops)
+        {
+            if (this.IsDisposed || richTextBox1.IsDisposed) return;
+
+            int firstLine = SendMessage(richTextBox1.Handle, EM_GETFIRSTVISIBLELINE, 0, 0);
+            SendMessage(richTextBox1.Handle, WM_SETREDRAW, 0, 0);
+
+            richTextBox1.Clear();
+
+            AppendColorText($">> [MTR模式] 第 {round} 轮 | 目标: {targetIp} | {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n", Color.Lime, false);
+            AppendColorText($"   使用接口: {localIp}  跳数:{maxHops}  超时:{timeout}ms  协议:{protocol} | NICX By Yumeyo\n", Color.LightSkyBlue, false);
+
+            AppendColorText("\n   # IP                    Loss%   Sent  Rcvd   Last   Avg   Best   Worst\n", Color.Cyan, false);
+            //AppendColorText("──── ──────────────── ────── ──── ──── ───── ───── ───── ─────\n", Color.Gray, false);
+
+            var sorted = stats.Where(kv => kv.Key <= effectiveMaxHops).OrderBy(kv => kv.Key);
+            foreach (var kvp in sorted)
+            {
+                var s = kvp.Value;
+
+                AppendColorText(kvp.Key.ToString().PadLeft(4) + " ", Color.Yellow, false);
+
+                if (s.ReplyAddress != null)
+                    AppendColorText(s.ReplyAddress.ToString().PadRight(20) + " ", Color.Yellow, false);
+                else
+                    AppendColorText("-                    ", Color.Orange, false);
+
+                double loss = s.LossPercent;
+                Color lossColor = loss >= 50 ? Color.FromArgb(255, 160, 140) : (loss > 0 ? Color.FromArgb(255, 255, 190) : Color.White);
+                AppendColorText($"{loss:F1}%".PadLeft(6) + " ", lossColor, false);
+
+                AppendColorText(s.Sent.ToString().PadLeft(5) + " ", Color.White, false);
+                AppendColorText(s.Received.ToString().PadLeft(5) + " ", Color.White, false);
+
+                AppendRttCell(s.LastRTT);
+                AppendRttCellAvg(s.AvgRTT);
+                AppendRttCellBest(s.BestRTT);
+                AppendRttCellWorst(s.WorstRTT);
+
+                AppendColorText("\n", Color.White, false);
+
+                // 归属地用更小字号
+                var defaultFont = richTextBox1.Font;
+                using (var smallFont = new Font(defaultFont.FontFamily, Math.Max(defaultFont.Size - 1.5f, 7f)))
+                {
+                    if (geoChecked && s.GeoInfo != null)
+                    {
+                        richTextBox1.SelectionFont = defaultFont;
+                        AppendColorText("      " + "".PadRight(20), Color.White, false);
+                        richTextBox1.SelectionFont = smallFont;
+                        AppendColorText("-> " + s.GeoInfo, ColorTranslator.FromHtml("#a8a5ff"), false);
+                        richTextBox1.SelectionFont = defaultFont;
+                        AppendColorText("\n", Color.White, false);
+                    }
+
+                    // 同一跳的其他 IP（-> 箭头与主 IP 对齐）
+                    var altIPs = s.AllIPs.Where(ip => !ip.Equals(s.ReplyAddress)).ToList();
+                    foreach (var altIp in altIPs)
+                    {
+                        richTextBox1.SelectionFont = defaultFont;
+                        string altIpPadded = altIp.ToString().PadRight(20);
+                        AppendColorText("      " + altIpPadded, Color.Yellow, false);
+                        if (geoChecked && s.IpGeoCache.TryGetValue(altIp.ToString(), out var altGeo))
+                        {
+                            richTextBox1.SelectionFont = smallFont;
+                            AppendColorText("-> " + altGeo, ColorTranslator.FromHtml("#a8a5ff"), false);
+                        }
+                        richTextBox1.SelectionFont = defaultFont;
+                        AppendColorText("\n", Color.White, false);
+                    }
+                }
+            }
+
+            string status = targetReached ? "(目标已达)" : "";
+            AppendColorText($"\n>> 第 {round} 轮完成 {status}, 按[停止]结束 | {Global.exeName}", Color.LightGreen, true);
+
+            SendMessage(richTextBox1.Handle, WM_SETREDRAW, 1, 0);
+            richTextBox1.Invalidate();
+
+            // clamp 到有效行范围，避免截断后滚出空白
+            SendMessage(richTextBox1.Handle, EM_LINESCROLL, 0, -9999);
+            int lastChar = Math.Max(0, richTextBox1.TextLength - 1);
+            int totalLines = richTextBox1.GetLineFromCharIndex(lastChar) + 1;
+            int restoreLine = Math.Max(0, Math.Min(firstLine, totalLines - 1));
+            if (restoreLine > 0)
+                SendMessage(richTextBox1.Handle, EM_LINESCROLL, 0, restoreLine);
+        }
+
+        private void AppendRttCell(double ms)
+        {
+            if (double.IsNaN(ms))
+                AppendColorText("     - ", Color.Orange, false);
+            else
+                AppendColorText($"{ms,6:F1} ", Color.White, false);
+        }
+
+        private void AppendRttCellAvg(double ms)
+        {
+            if (double.IsNaN(ms))
+                AppendColorText("     - ", Color.Orange, false);
+            else
+                AppendColorText($"{ms,6:F1} ", Color.FromArgb(255, 255, 190), false);
+        }
+
+        private void AppendRttCellBest(double ms)
+        {
+            if (double.IsNaN(ms))
+                AppendColorText("     - ", Color.Orange, false);
+            else
+                AppendColorText($"{ms,6:F1} ", Color.Lime, false);
+        }
+
+        private void AppendRttCellWorst(double ms)
+        {
+            if (double.IsNaN(ms))
+                AppendColorText("     - ", Color.Orange, false);
+            else
+                AppendColorText($"{ms,6:F1} ", Color.Red, false);
         }
 
         private void Trace_FormClosing(object sender, FormClosingEventArgs e)
