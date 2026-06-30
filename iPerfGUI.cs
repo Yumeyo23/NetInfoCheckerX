@@ -185,7 +185,7 @@ namespace NetInfoCheckerX
             if (!string.IsNullOrEmpty(txtServerPort.Text))
                 arguments.Append(" -p ").Append(txtServerPort.Text.Trim());
 
-            arguments.Append(" -V --debug");
+            arguments.Append(" -V");
 
             string iperfArguments = arguments.ToString();
             string finalCmdArguments = $"/k \"\"{iperfPath}\" {iperfArguments}\"";
