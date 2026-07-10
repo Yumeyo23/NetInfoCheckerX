@@ -194,8 +194,14 @@ namespace NetInfoCheckerX
 
             if (Global.IsBirthdayMonth)
             {
-                pictureBox1.Image = Global.GetIcon();
-                pictureBox2.Image = Global.GetIcon();
+                if (Global.isThemelight)
+                {
+                    pictureBox2.Image = Global.GetIconw();
+                }
+                else
+                {
+                    pictureBox2.Image = Global.GetIcon();
+                }
             }
 
             LoadSavedServerAndPort();
