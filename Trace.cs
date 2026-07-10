@@ -39,6 +39,14 @@ namespace NetInfoCheckerX
 
         // 新增：当前窗口的唯一标识符，防止多开窗口时串扰
         private ushort _instanceIdentifier;
+        private ConcurrentDictionary<string, string> _geoCache = new ConcurrentDictionary<string, string>();
+        private int _activeGeoOnlineIndex = 0;
+        private const int GeoOnlineTimeoutMs = 3000;
+        private SemaphoreSlim _geoEnrichSemaphore = new SemaphoreSlim(3, 3);
+        private ConcurrentDictionary<string, byte> _enrichPending = new ConcurrentDictionary<string, byte>();
+        private Dictionary<int, string> _hopGeoOriginal = new Dictionary<int, string>();
+        private Dictionary<string, int> _ipToHop = new Dictionary<string, int>();
+
 
         // INI 读写
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
@@ -63,6 +71,7 @@ namespace NetInfoCheckerX
         public Trace()
         {
             InitializeComponent();
+            this.MinimumSize = this.Size;
             // 初始化一个随机的标识符 (使用时间戳和随机数混合)
             _instanceIdentifier = (ushort)(DateTime.Now.Ticks % 60000 + new Random().Next(100, 5000));
         }
@@ -314,8 +323,7 @@ namespace NetInfoCheckerX
 
         private async void Trace_Load(object sender, EventArgs e)
         {
-            this.MinimumSize = this.Size;
-            // 1. 先做那些“秒开”的基础 UI 初始化
+            // 1. 先做那些”秒开”的基础 UI 初始化
             comboLocalEnd.Items.Clear();
             comboLocalEnd.Items.Add("0.0.0.0 (Any)");
             comboLocalEnd.Items.Add("系统默认 (ICMP兼容模式)");
@@ -344,35 +352,32 @@ namespace NetInfoCheckerX
             }
             AppendColorText("✧ 正在检查系统环境，请稍候... ✧\n", Color.White, true);
 
-            // 2. 开启异步任务，不阻塞窗口显示
+            // 2. 后台初始化 IP 数据库和防火墙状态
             await Task.Run(() =>
             {
-                // 在后台线程初始化 IP 数据库
                 InitIp2Region();
-
-                // 在后台线程检查防火墙和规则
                 initialFirewallOn = _lastFwStatus = IsFirewallEnabled();
                 initialRuleExisted = _lastRuleStatus = IsICMPRuleExisted();
-
-                try
-                {
-                    foreach (NicAddressInfo nicAddress in NicHelper.GetUsableIPAddresses(includeIPv6: false))
-                    {
-                        comboLocalEnd.Items.Add(nicAddress.DisplayText);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show("获取网卡列表失败: " + ex.Message);
-                }
-
-                if (comboLocalEnd.Items.Count > 0) comboLocalEnd.SelectedIndex = 0;
-
-                radioICMP.CheckedChanged += UpdateProtocolTip;
-                radioTCP.CheckedChanged += UpdateProtocolTip;
-                radioUDP.CheckedChanged += UpdateProtocolTip;
-
             });
+
+            // 3. UI 线程：填充网卡列表
+            try
+            {
+                foreach (NicAddressInfo nicAddress in NicHelper.GetUsableIPAddresses(includeIPv6: false))
+                {
+                    comboLocalEnd.Items.Add(nicAddress.DisplayText);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("获取网卡列表失败: " + ex.Message);
+            }
+
+            if (comboLocalEnd.Items.Count > 0) comboLocalEnd.SelectedIndex = 0;
+
+            radioICMP.CheckedChanged += UpdateProtocolTip;
+            radioTCP.CheckedChanged += UpdateProtocolTip;
+            radioUDP.CheckedChanged += UpdateProtocolTip;
 
             // 3. 后台干完活了，回到 UI 线程更新界面
             UpdateWDFUI(true);
@@ -551,6 +556,11 @@ namespace NetInfoCheckerX
                 AppendColorText("    建议同时只运行一个Trace测试，包括但不限于查询器X和同类软件! ", Color.Gold, true);
                 comboLocalEnd.Enabled = true;
                 txtTargetPort.Enabled = true;
+                // 切换协议时自动填入默认端口
+                if (protocol == "TCP")
+                    txtTargetPort.Text = "80";
+                else if (protocol == "UDP")
+                    txtTargetPort.Text = "53";
             }
         }
 
@@ -725,6 +735,11 @@ namespace NetInfoCheckerX
 
             isRunning = true;
             cts = new CancellationTokenSource();
+            _activeGeoOnlineIndex = ReadTraceGEOIndexFromIni();
+            _geoCache.Clear();
+            _enrichPending.Clear();
+            _hopGeoOriginal.Clear();
+            _ipToHop.Clear();
             CancellationToken token = cts.Token;
 
             if (!int.TryParse(txtHops.Text, out int maxHops)) maxHops = 30;
@@ -851,7 +866,7 @@ namespace NetInfoCheckerX
                             if (reply.Status == IPStatus.Success || reply.Status == IPStatus.TtlExpired)
                             {
                                 if (result.ReplyAddress == null && geoChecked)
-                                    result.GeoInfo = ComputeCachedGeoInfo(reply.Address.ToString());
+                                    result.GeoInfo = ResolveGeoInfo(reply.Address.ToString(), hopToken);
                                 result.ReplyAddress = reply.Address;
                                 result.RTTs[i] = sw.Elapsed.TotalMilliseconds;
                                 if (reply.Status == IPStatus.Success) result.TargetReached = true;
@@ -911,6 +926,215 @@ namespace NetInfoCheckerX
         // ==========================================
         // 第一部分：校验和计算
         // ==========================================
+        private string GetLocalGeoInfo(string ip)
+        {
+            try
+            {
+                string geo = GetIpLocationString(ip);
+                string geoCN = Api2.GetGeoCNLocationQuick(ip);
+                return string.IsNullOrEmpty(geoCN) ? geo : $"{geoCN} | {geo}";
+            }
+            catch { return null; }
+        }
+
+        private string ResolveGeoInfo(string ip, CancellationToken token)
+        {
+            string geo = GetLocalGeoInfo(ip);
+            bool isReserved = !string.IsNullOrEmpty(IanaReservedIP.Check(ip));
+            Debug.WriteLine($"[GEO-Trace] 本地 ip={ip} reserved={isReserved} geo={geo}");
+            if (!isReserved)
+                EnrichGeoCacheAsync(ip, token);
+            return geo;
+        }
+
+        private void EnrichGeoCacheAsync(string ip, CancellationToken token)
+        {
+            if (_activeGeoOnlineIndex <= 0) return;
+            if (!_enrichPending.TryAdd(ip, 0)) return;
+
+            Debug.WriteLine($"[GEO-Trace] 发起查询 ip={ip}");
+            _ = Task.Run(async () =>
+            {
+                try { await _geoEnrichSemaphore.WaitAsync(token); }
+                catch { _enrichPending.TryRemove(ip, out _); return; }
+                try
+                {
+                    if (_geoCache.ContainsKey(ip)) { Debug.WriteLine($"[GEO-Trace] 跳过(已缓存) ip={ip}"); return; }
+                    var provider = Api2.GeoCN_Providers[_activeGeoOnlineIndex];
+                    var sw = Stopwatch.StartNew();
+                    var geoResult = await provider.GetGeoTask(ip, token);
+                    sw.Stop();
+                    if (geoResult != null && (!string.IsNullOrEmpty(geoResult.Loc) || !string.IsNullOrEmpty(geoResult.AS)))
+                    {
+                        string enriched = $"{geoResult.Loc} {geoResult.AS}".Trim();
+                        _geoCache[ip] = enriched;
+                        Debug.WriteLine($"[GEO-Trace] 完成 ip={ip} => {enriched} 耗时={sw.Elapsed.TotalSeconds:F1}s");
+                    }
+                    else
+                    {
+                        Debug.WriteLine($"[GEO-Trace] 空结果 ip={ip} 耗时={sw.Elapsed.TotalSeconds:F1}s");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[GEO-Trace] 异常 ip={ip}: {ex.Message}");
+                }
+                finally
+                {
+                    _geoEnrichSemaphore.Release();
+                    _enrichPending.TryRemove(ip, out _);
+                    if (_geoCache.TryGetValue(ip, out string enriched) && _ipToHop.TryGetValue(ip, out int hop))
+                    {
+                        BeginInvoke((Action)(() =>
+                        {
+                            if (_hopGeoOriginal.TryGetValue(hop, out string oldGeo) && enriched != oldGeo)
+                            {
+                                try
+                                {
+                                    int pos = richTextBox1.Find(oldGeo, 0, RichTextBoxFinds.None);
+                                    if (pos >= 0)
+                                    {
+                                        richTextBox1.Select(pos, oldGeo.Length);
+                                        richTextBox1.SelectedText = enriched;
+                                        _hopGeoOriginal[hop] = enriched;
+                                    }
+                                }
+                                catch { }
+                            }
+                        }));
+                    }
+                }
+            }, token);
+        }
+
+        private async Task WaitForEnrichmentsAsync(CancellationToken token)
+        {
+            if (_activeGeoOnlineIndex <= 0) return;
+
+            // 第一次扫描：为所有仍显示本地库格式的IP启动在线查询
+            bool startedAny = false;
+            foreach (var kvp in _ipToHop)
+            {
+                string ip = kvp.Key;
+                int hop = kvp.Value;
+                if (_hopGeoOriginal.TryGetValue(hop, out string oldGeo)
+                    && !string.IsNullOrEmpty(oldGeo)
+                    && oldGeo.Contains(" | ")
+                    && string.IsNullOrEmpty(IanaReservedIP.Check(ip)))
+                {
+                    EnrichGeoCacheAsync(ip, token);
+                    startedAny = true;
+                }
+            }
+
+            bool hasPending = _enrichPending.Count > 0;
+            if (hasPending || startedAny)
+            {
+                if (hasPending)
+                    AppendColorText("\n正在查询地理位置...", Color.FromArgb(168, 165, 255), false);
+                using (var cts = new CancellationTokenSource(GeoOnlineTimeoutMs + 2000))
+                using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, cts.Token))
+                {
+                    try
+                    {
+                        while (_enrichPending.Count > 0 && !linked.Token.IsCancellationRequested)
+                            await Task.Delay(100, linked.Token);
+                    }
+                    catch { }
+                }
+            }
+
+            // 同步应用所有已完成的在线查询结果到 RichTextBox
+            foreach (var kvp in _ipToHop)
+            {
+                string ip = kvp.Key;
+                int hop = kvp.Value;
+                if (_geoCache.TryGetValue(ip, out string enriched)
+                    && _hopGeoOriginal.TryGetValue(hop, out string oldGeo)
+                    && enriched != oldGeo)
+                {
+                    try
+                    {
+                        int pos = richTextBox1.Find(oldGeo, 0, RichTextBoxFinds.None);
+                        if (pos >= 0)
+                        {
+                            richTextBox1.Select(pos, oldGeo.Length);
+                            richTextBox1.SelectedText = enriched;
+                            _hopGeoOriginal[hop] = enriched;
+                        }
+                    }
+                    catch { }
+                }
+            }
+        }
+
+        private static void ApplyEnrichedGeoToAllStats(string ip, string enriched,
+            ConcurrentDictionary<int, MtrHopStats> stats)
+        {
+            foreach (var kvp in stats)
+            {
+                if (kvp.Value.ReplyAddress?.ToString() == ip)
+                {
+                    kvp.Value.GeoInfo = enriched;
+                    if (kvp.Value.IpGeoCache.ContainsKey(ip))
+                        kvp.Value.IpGeoCache[ip] = enriched;
+                }
+            }
+        }
+
+        private async Task EnrichGeoOnlineAsync(string ip, int ttl,
+            ConcurrentDictionary<int, MtrHopStats> stats, CancellationToken token)
+        {
+            if (_activeGeoOnlineIndex <= 0) return;
+            if (_geoCache.ContainsKey(ip)) return;
+
+            Debug.WriteLine($"[GEO-MTR] 发起查询 ttl={ttl} ip={ip}");
+            try { await _geoEnrichSemaphore.WaitAsync(token); }
+            catch (OperationCanceledException) { return; }
+            try
+            {
+                if (_geoCache.ContainsKey(ip))
+                {
+                    ApplyEnrichedGeoToAllStats(ip, _geoCache[ip], stats);
+                    Debug.WriteLine($"[GEO-MTR] 跳过(已缓存) ttl={ttl} ip={ip}");
+                    return;
+                }
+                var provider = Api2.GeoCN_Providers[_activeGeoOnlineIndex];
+                var sw = Stopwatch.StartNew();
+                var geoResult = await provider.GetGeoTask(ip, token);
+                sw.Stop();
+                if (geoResult != null && (!string.IsNullOrEmpty(geoResult.Loc) || !string.IsNullOrEmpty(geoResult.AS)))
+                {
+                    string enriched = $"{geoResult.Loc} {geoResult.AS}".Trim();
+                    _geoCache[ip] = enriched;
+                    ApplyEnrichedGeoToAllStats(ip, enriched, stats);
+                    Debug.WriteLine($"[GEO-MTR] 完成 ttl={ttl} ip={ip} => {enriched} 耗时={sw.Elapsed.TotalSeconds:F1}s");
+                }
+                else
+                {
+                    Debug.WriteLine($"[GEO-MTR] 空结果 ttl={ttl} ip={ip} 耗时={sw.Elapsed.TotalSeconds:F1}s");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[GEO-MTR] 异常 ttl={ttl} ip={ip}: {ex.Message}");
+            }
+            finally { _geoEnrichSemaphore.Release(); _enrichPending.TryRemove(ip, out _); }
+        }
+
+        private int ReadTraceGEOIndexFromIni()
+        {
+            try
+            {
+                var sb = new StringBuilder(16);
+                GetPrivateProfileString("Trace", "TraceGEO", "0", sb, sb.Capacity, IniPath);
+                if (int.TryParse(sb.ToString(), out int idx) && idx > 0 && idx < Api2.GeoCN_Providers.Count)
+                    return idx;
+            }
+            catch { }
+            return 0;
+        }
+
         private static ushort ComputeChecksum(byte[] data)
         {
             uint sum = 0;
@@ -965,12 +1189,13 @@ namespace NetInfoCheckerX
                 receiver.Bind(new IPEndPoint(localIp, 0));
                 receiver.ReceiveBufferSize = 65536;
 
-                var receiveLoopTask = Task.Run(() =>
+                var receiveCts = new CancellationTokenSource();
+                var receiveTask = Task.Run(() =>
                 {
                     byte[] rcvBuffer = new byte[1024];
                     EndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
                     receiver.ReceiveTimeout = 500;
-                    while (!token.IsCancellationRequested && !this.IsDisposed)
+                    while (!receiveCts.Token.IsCancellationRequested && !this.IsDisposed)
                     {
                         try
                         {
@@ -990,7 +1215,7 @@ namespace NetInfoCheckerX
                         catch (SocketException) { continue; }
                         catch { break; }
                     }
-                }, token);
+                }, receiveCts.Token);
 
                 async Task ProbeHop(int ttl, CancellationToken hopToken)
                 {
@@ -1016,9 +1241,23 @@ namespace NetInfoCheckerX
                                     var done = await Task.WhenAny(tcs.Task, Task.Delay(timeout, hopToken));
                                     sw.Stop();
                                     seqTcsStore.TryRemove(seq, out _);
-                                    if (done == tcs.Task) { IPAddress addr = await tcs.Task; if (result.ReplyAddress == null && geoChecked) result.GeoInfo = ComputeCachedGeoInfo(addr.ToString()); result.ReplyAddress = addr; result.RTTs[i] = sw.Elapsed.TotalMilliseconds; if (addr.Equals(targetIp)) result.TargetReached = true; }
+                                    if (done == tcs.Task)
+                                    {
+                                        IPAddress addr = await tcs.Task;
+                                        if (result.ReplyAddress == null && geoChecked)
+                                            result.GeoInfo = ResolveGeoInfo(addr.ToString(), hopToken);
+                                        result.ReplyAddress = addr;
+                                        result.RTTs[i] = sw.Elapsed.TotalMilliseconds;
+                                        if (addr.Equals(targetIp))
+                                            result.TargetReached = true;
+                                    }
                                 }
-                                catch (Exception ex) when (!(ex is OperationCanceledException)) { sw.Stop(); result.RTTs[i] = -2; seqTcsStore.TryRemove(seq, out _); }
+                                catch (Exception ex) when (!(ex is OperationCanceledException))
+                                {
+                                    sw.Stop();
+                                    result.RTTs[i] = -2;
+                                    seqTcsStore.TryRemove(seq, out _);
+                                }
                             }
                         }
                     }
@@ -1026,44 +1265,36 @@ namespace NetInfoCheckerX
                     results[ttl] = result;
                 }
 
-                var tasks = new List<Task>();
-                for (int ttl = 1; ttl <= maxHops; ttl++) { int ct = ttl; tasks.Add(Task.Run(() => ProbeHop(ct, token), token)); }
-                var allDone = Task.WhenAll(tasks);
-                var globalTimer = Stopwatch.StartNew();
-                int hopTimeout = timeout * 4 + 200;//总等待时间 rawsocket
-                int missingStreak = 0;
-                const int minPacingMs = 70;
+                // 并发启动所有跳
+                var hopTasks = new Dictionary<int, Task>();
                 for (int ttl = 1; ttl <= maxHops; ttl++)
                 {
-                    if (this.IsDisposed || token.IsCancellationRequested) break;
-                    int effectiveWait;
-                    if (allDone.IsCompleted)
-                        effectiveWait = 0;
-                    else if (missingStreak > 0)
-                    {
-                        int futureDone = 0;
-                        for (int f = ttl + 1; f <= Math.Min(ttl + 6, maxHops); f++)
-                            if (results.ContainsKey(f)) futureDone++;
-                        if (futureDone >= 3) effectiveWait = 400;
-                        else if (futureDone >= 1) effectiveWait = Math.Min(700, hopTimeout);
-                        else effectiveWait = Math.Max(400, hopTimeout - missingStreak * 250);
-                    }
-                    else effectiveWait = hopTimeout;
-                    effectiveWait = Math.Min(effectiveWait, Math.Max(0, hopTimeout - (int)globalTimer.ElapsedMilliseconds));
-                    var iterStart = Stopwatch.StartNew();
-                    var waited = Stopwatch.StartNew();
-                    while (!results.TryGetValue(ttl, out _) && waited.ElapsedMilliseconds < effectiveWait
-                           && !allDone.IsCompleted && !token.IsCancellationRequested)
-                        await Task.Delay(20);
+                    int ct = ttl;
+                    hopTasks[ttl] = Task.Run(() => ProbeHop(ct, token), token);
+                }
+
+                // 顺序收集显示：等待每跳的Task完成，不会因为启发式超时而跳过未完成的跳
+                int hopTimeout = timeout * 4 + 200;
+                bool reachedTarget = false;
+                for (int ttl = 1; ttl <= maxHops; ttl++)
+                {
+                    if (token.IsCancellationRequested || this.IsDisposed) break;
+
+                    Task hopTask = hopTasks[ttl];
+                    try { await Task.WhenAny(hopTask, Task.Delay(hopTimeout, token)); } catch { }
+
                     HopResult hop = results.TryGetValue(ttl, out var h) ? h : new HopResult(ttl);
                     DisplaySingleHop(hop, geoChecked);
-                    if (hop.TargetReached) break;
-                    missingStreak = hop.HasAnyResponse ? 0 : missingStreak + 1;
-                    int iterMs = (int)iterStart.ElapsedMilliseconds;
-                    if (iterMs < minPacingMs)
-                        await Task.Delay(minPacingMs - iterMs);
+                    if (hop.TargetReached) { reachedTarget = true; break; }
                 }
-                try { await allDone; } catch { }
+
+                receiveCts.Cancel();
+                try { await receiveTask; } catch { }
+                receiveCts.Dispose();
+
+                if (geoChecked) await WaitForEnrichmentsAsync(token);
+                if (reachedTarget)
+                    AppendColorText("\nTrace 完成.\n", Color.Lime, false);
             }
         }
 
@@ -1073,44 +1304,52 @@ namespace NetInfoCheckerX
         private async Task RunSocketTrace(IPAddress targetIp, IPAddress localIp, int maxHops, int timeout, string protocol, int customPort, CancellationToken token)
         {
             bool geoChecked = checkGEO.Checked;
+            bool isTcp = (protocol == "TCP");
             var results = new ConcurrentDictionary<int, HopResult>();
-            var packetTcsStore = new ConcurrentDictionary<int, TaskCompletionSource<IPAddress>>();
+            var portTcsStore = new ConcurrentDictionary<int, TaskCompletionSource<IPAddress>>();
 
             using (Socket receiver = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.Icmp))
             {
                 try { receiver.Bind(new IPEndPoint(localIp, 0)); receiver.IOControl(IOControlCode.ReceiveAll, new byte[] { 1, 0, 0, 0 }, new byte[] { 1, 0, 0, 0 }); } catch { }
                 receiver.ReceiveBufferSize = 65536;
 
-                var receiveLoopTask = Task.Run(() =>
+                var receiveCts = new CancellationTokenSource();
+                int expectedProtocol = isTcp ? 6 : 17;
+                var receiveTask = Task.Run(() =>
                 {
                     byte[] rcvBuffer = new byte[8192];
                     EndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
-                    while (!token.IsCancellationRequested && !this.IsDisposed)
+                    receiver.ReceiveTimeout = 500;
+                    while (!receiveCts.Token.IsCancellationRequested && !this.IsDisposed)
                     {
                         try
                         {
-                            if (receiver.Poll(5000, SelectMode.SelectRead))
+                            int len = receiver.ReceiveFrom(rcvBuffer, ref remoteEP);
+                            int ipHdrLen = (rcvBuffer[0] & 0x0F) * 4;
+                            if (len >= ipHdrLen + 8)
                             {
-                                int len = receiver.ReceiveFrom(rcvBuffer, ref remoteEP);
-                                int ipHdrLen = (rcvBuffer[0] & 0x0F) * 4;
-                                if (len >= ipHdrLen + 8)
+                                int icmpType = rcvBuffer[ipHdrLen];
+                                if (icmpType == 11 || icmpType == 3)
                                 {
-                                    int icmpType = rcvBuffer[ipHdrLen];
-                                    if (icmpType == 11 || icmpType == 3)
-                                    {
-                                        int innerIpHdrLen = (rcvBuffer[ipHdrLen + 8] & 0x0F) * 4;
-                                        int portOff = ipHdrLen + 8 + innerIpHdrLen;
-                                        if (len <= portOff + 1) continue;
-                                        int sport = (rcvBuffer[portOff] << 8) + rcvBuffer[portOff + 1];
-                                        if (packetTcsStore.TryRemove(sport, out var tcs))
-                                            tcs.TrySetResult(((IPEndPoint)remoteEP).Address);
-                                    }
+                                    // 验证嵌入包的IP头长度和协议类型，防止误匹配
+                                    int innerIpHdrLen = (rcvBuffer[ipHdrLen + 8] & 0x0F) * 4;
+                                    if (innerIpHdrLen < 20) continue;
+                                    int innerProto = rcvBuffer[ipHdrLen + 8 + 9];
+                                    if (innerProto != expectedProtocol) continue;
+                                    int portOff = ipHdrLen + 8 + innerIpHdrLen;
+                                    if (len <= portOff + 3) continue;
+                                    int sport = (rcvBuffer[portOff] << 8) + rcvBuffer[portOff + 1];
+                                    int dport = (rcvBuffer[portOff + 2] << 8) + rcvBuffer[portOff + 3];
+                                    if (dport != customPort) continue;
+                                    if (portTcsStore.TryRemove(sport, out var tcs))
+                                        tcs.TrySetResult(((IPEndPoint)remoteEP).Address);
                                 }
                             }
                         }
+                        catch (SocketException) { continue; }
                         catch { break; }
                     }
-                }, token);
+                }, receiveCts.Token);
 
                 async Task ProbeHop(int ttl, CancellationToken hopToken)
                 {
@@ -1122,33 +1361,86 @@ namespace NetInfoCheckerX
                             if (hopToken.IsCancellationRequested) break;
                             if (i > 0) await Task.Delay(40, hopToken);
                             using (Socket senderSocket = new Socket(AddressFamily.InterNetwork,
-                                protocol == "TCP" ? SocketType.Stream : SocketType.Dgram,
-                                protocol == "TCP" ? ProtocolType.Tcp : ProtocolType.Udp))
+                                isTcp ? SocketType.Stream : SocketType.Dgram,
+                                isTcp ? ProtocolType.Tcp : ProtocolType.Udp))
                             {
                                 try
                                 {
                                     senderSocket.Bind(new IPEndPoint(localIp, 0));
                                     int myPort = ((IPEndPoint)senderSocket.LocalEndPoint).Port;
                                     senderSocket.Ttl = (short)ttl;
-                                    var tcs = new TaskCompletionSource<IPAddress>();
-                                    packetTcsStore[myPort] = tcs;
+                                    var icmpTcs = new TaskCompletionSource<IPAddress>();
+                                    portTcsStore[myPort] = icmpTcs;
                                     Stopwatch sw = Stopwatch.StartNew();
-                                    Task tcpOk = new TaskCompletionSource<bool>().Task;
-                                    if (protocol == "TCP")
+
+                                    Task<IPAddress> tcpResultTask = null;
+                                    if (isTcp)
                                     {
-                                        var stcs = new TaskCompletionSource<bool>();
-                                        var rc = senderSocket.ConnectAsync(new IPEndPoint(targetIp, customPort));
-                                        var _ = rc.ContinueWith(__ => { if (rc.Status == TaskStatus.RanToCompletion && senderSocket.Connected) stcs.TrySetResult(true); });
-                                        tcpOk = stcs.Task;
+                                        var tcpTcs = new TaskCompletionSource<IPAddress>();
+                                        tcpResultTask = tcpTcs.Task;
+                                        var _ = senderSocket.ConnectAsync(new IPEndPoint(targetIp, customPort))
+                                            .ContinueWith(t =>
+                                            {
+                                                // 只有TCP握手成功才认为到达目标。
+                                                // ConnectionRefused可能来自中间设备的RST，不可靠。
+                                                if (t.Status == TaskStatus.RanToCompletion)
+                                                    tcpTcs.TrySetResult(targetIp);
+                                            }, TaskContinuationOptions.NotOnCanceled);
                                     }
-                                    else senderSocket.SendTo(Encoding.ASCII.GetBytes("Yume"), new IPEndPoint(targetIp, customPort));
-                                    var done = await Task.WhenAny(tcs.Task, tcpOk, Task.Delay(timeout, hopToken));
+                                    else
+                                    {
+                                        senderSocket.SendTo(Encoding.ASCII.GetBytes("Yume"), new IPEndPoint(targetIp, customPort));
+                                        // UDP响应监听：目标端口开放时(如DNS 53)，目标可能直接回复UDP而不发ICMP
+                                        var udpTcs = new TaskCompletionSource<IPAddress>();
+                                        tcpResultTask = udpTcs.Task;
+                                        var _ = Task.Run(() =>
+                                        {
+                                            try
+                                            {
+                                                byte[] buf = new byte[512];
+                                                EndPoint from = new IPEndPoint(IPAddress.Any, 0);
+                                                senderSocket.ReceiveTimeout = timeout;
+                                                int n = senderSocket.ReceiveFrom(buf, ref from);
+                                                var fromAddr = ((IPEndPoint)from).Address;
+                                                if (fromAddr.Equals(targetIp))
+                                                    udpTcs.TrySetResult(fromAddr);
+                                            }
+                                            catch { }
+                                        });
+                                    }
+
+                                    Task completed;
+                                    if (tcpResultTask != null)
+                                        completed = await Task.WhenAny(icmpTcs.Task, tcpResultTask, Task.Delay(timeout, hopToken));
+                                    else
+                                        completed = await Task.WhenAny(icmpTcs.Task, Task.Delay(timeout, hopToken));
+
                                     sw.Stop();
-                                    packetTcsStore.TryRemove(myPort, out _);
-                                    if (done == tcs.Task) { IPAddress addr = await tcs.Task; if (result.ReplyAddress == null && geoChecked) result.GeoInfo = ComputeCachedGeoInfo(addr.ToString()); result.ReplyAddress = addr; result.RTTs[i] = sw.Elapsed.TotalMilliseconds; if (addr.Equals(targetIp)) result.TargetReached = true; }
-                                    else if (done == tcpOk) { if (result.ReplyAddress == null && geoChecked) result.GeoInfo = ComputeCachedGeoInfo(targetIp.ToString()); result.ReplyAddress = targetIp; result.RTTs[i] = sw.Elapsed.TotalMilliseconds; result.TargetReached = true; }
+                                    portTcsStore.TryRemove(myPort, out _);
+
+                                    if (completed == icmpTcs.Task)
+                                    {
+                                        IPAddress addr = ((Task<IPAddress>)completed).Result;
+                                        if (result.ReplyAddress == null && geoChecked)
+                                            result.GeoInfo = ResolveGeoInfo(addr.ToString(), hopToken);
+                                        result.ReplyAddress = addr;
+                                        result.RTTs[i] = sw.Elapsed.TotalMilliseconds;
+                                        if (addr.Equals(targetIp))
+                                            result.TargetReached = true;
+                                    }
+                                    else if (tcpResultTask != null && completed == tcpResultTask)
+                                    {
+                                        if (result.ReplyAddress == null && geoChecked)
+                                            result.GeoInfo = ResolveGeoInfo(targetIp.ToString(), hopToken);
+                                        result.ReplyAddress = targetIp;
+                                        result.RTTs[i] = sw.Elapsed.TotalMilliseconds;
+                                        result.TargetReached = true;
+                                    }
                                 }
-                                catch (Exception ex) when (!(ex is OperationCanceledException)) { result.RTTs[i] = -2; }
+                                catch (Exception ex) when (!(ex is OperationCanceledException))
+                                {
+                                    result.RTTs[i] = -2;
+                                }
                             }
                         }
                     }
@@ -1156,44 +1448,36 @@ namespace NetInfoCheckerX
                     results[ttl] = result;
                 }
 
-                var tasks = new List<Task>();
-                for (int ttl = 1; ttl <= maxHops; ttl++) { int ct = ttl; tasks.Add(Task.Run(() => ProbeHop(ct, token), token)); }
-                var allDone = Task.WhenAll(tasks);
-                var globalTimer = Stopwatch.StartNew();
-                int hopTimeout = timeout * 4 + 200;//总等待时间 TCP UDP
-                int missingStreak = 0;
-                const int minPacingMs = 70;
+                // 并发启动所有跳
+                var hopTasks = new Dictionary<int, Task>();
                 for (int ttl = 1; ttl <= maxHops; ttl++)
                 {
-                    if (this.IsDisposed || token.IsCancellationRequested) break;
-                    int effectiveWait;
-                    if (allDone.IsCompleted)
-                        effectiveWait = 0;
-                    else if (missingStreak > 0)
-                    {
-                        int futureDone = 0;
-                        for (int f = ttl + 1; f <= Math.Min(ttl + 6, maxHops); f++)
-                            if (results.ContainsKey(f)) futureDone++;
-                        if (futureDone >= 3) effectiveWait = 400;
-                        else if (futureDone >= 1) effectiveWait = Math.Min(700, hopTimeout);
-                        else effectiveWait = Math.Max(400, hopTimeout - missingStreak * 250);
-                    }
-                    else effectiveWait = hopTimeout;
-                    effectiveWait = Math.Min(effectiveWait, Math.Max(0, hopTimeout - (int)globalTimer.ElapsedMilliseconds));
-                    var iterStart = Stopwatch.StartNew();
-                    var waited = Stopwatch.StartNew();
-                    while (!results.TryGetValue(ttl, out _) && waited.ElapsedMilliseconds < effectiveWait
-                           && !allDone.IsCompleted && !token.IsCancellationRequested)
-                        await Task.Delay(20);
+                    int ct = ttl;
+                    hopTasks[ttl] = Task.Run(() => ProbeHop(ct, token), token);
+                }
+
+                // 顺序收集显示：等待每跳的Task完成，不会因为启发式超时而跳过未完成的跳
+                int hopTimeout = timeout * 4 + 200;
+                bool reachedTarget = false;
+                for (int ttl = 1; ttl <= maxHops; ttl++)
+                {
+                    if (token.IsCancellationRequested || this.IsDisposed) break;
+
+                    Task hopTask = hopTasks[ttl];
+                    try { await Task.WhenAny(hopTask, Task.Delay(hopTimeout, token)); } catch { }
+
                     HopResult hop = results.TryGetValue(ttl, out var h) ? h : new HopResult(ttl);
                     DisplaySingleHop(hop, geoChecked);
-                    if (hop.TargetReached) break;
-                    missingStreak = hop.HasAnyResponse ? 0 : missingStreak + 1;
-                    int iterMs = (int)iterStart.ElapsedMilliseconds;
-                    if (iterMs < minPacingMs)
-                        await Task.Delay(minPacingMs - iterMs);
+                    if (hop.TargetReached) { reachedTarget = true; break; }
                 }
-                try { await allDone; } catch { }
+
+                receiveCts.Cancel();
+                try { await receiveTask; } catch { }
+                receiveCts.Dispose();
+
+                if (geoChecked) await WaitForEnrichmentsAsync(token);
+                if (reachedTarget)
+                    AppendColorText("\nTrace 完成.\n", Color.Lime, false);
             }
         }
 
@@ -1252,17 +1536,21 @@ namespace NetInfoCheckerX
                                         if (rcvId == _instanceIdentifier && roundSeqStore.TryRemove(rcvSeq, out var stcs))
                                             stcs.TrySetResult(((IPEndPoint)remoteEP).Address);
                                     }
-                                    // TCP/UDP 匹配（源端口在嵌入的 IP 头之后）
+                                    // TCP/UDP 匹配（源端口在嵌入的 IP 头之后），增加协议和目标端口验证
                                     if (type == 11 || type == 3)
                                     {
                                         int innerIpHdrLen = (buf[ipHdrLen + 8] & 0x0F) * 4;
+                                        if (innerIpHdrLen < 20) continue;
+                                        int expectedProto = (protocol == "TCP") ? 6 : 17;
+                                        int innerProto = buf[ipHdrLen + 8 + 9];
+                                        if (innerProto != expectedProto) continue;
                                         int portOff = ipHdrLen + 8 + innerIpHdrLen;
-                                        if (len > portOff + 1)
-                                        {
-                                            int sport = (buf[portOff] << 8) + buf[portOff + 1];
-                                            if (roundPortStore.TryRemove(sport, out var ptcs))
-                                                ptcs.TrySetResult(((IPEndPoint)remoteEP).Address);
-                                        }
+                                        if (len <= portOff + 3) continue;
+                                        int sport = (buf[portOff] << 8) + buf[portOff + 1];
+                                        int dport = (buf[portOff + 2] << 8) + buf[portOff + 3];
+                                        if (dport != targetPort) continue;
+                                        if (roundPortStore.TryRemove(sport, out var ptcs))
+                                            ptcs.TrySetResult(((IPEndPoint)remoteEP).Address);
                                     }
                                 }
                             }
@@ -1303,7 +1591,7 @@ namespace NetInfoCheckerX
                                             if (done == tcs.Task)
                                             {
                                                 IPAddress addr = await tcs.Task;
-                                                if (geoChecked) result.GeoInfo = ComputeCachedGeoInfo(addr.ToString());
+                                                if (geoChecked) result.GeoInfo = GetLocalGeoInfo(addr.ToString());
                                                 result.ReplyAddress = addr;
                                                 result.RTTs[0] = sw.Elapsed.TotalMilliseconds;
                                                 if (addr.Equals(targetIp)) result.TargetReached = true;
@@ -1332,29 +1620,57 @@ namespace NetInfoCheckerX
                                         Stopwatch sw = Stopwatch.StartNew();
                                         try
                                         {
-                                            Task tcpOk = new TaskCompletionSource<bool>().Task;
+                                            Task<IPAddress> tcpResultTask = null;
                                             if (protocol == "TCP")
                                             {
-                                                var stcs = new TaskCompletionSource<bool>();
-                                                var rc = sendSocket.ConnectAsync(new IPEndPoint(targetIp, targetPort));
-                                                var _ = rc.ContinueWith(__ => { if (rc.Status == TaskStatus.RanToCompletion && sendSocket.Connected) stcs.TrySetResult(true); });
-                                                tcpOk = stcs.Task;
+                                                var tcpTcs = new TaskCompletionSource<IPAddress>();
+                                                tcpResultTask = tcpTcs.Task;
+                                                var _ = sendSocket.ConnectAsync(new IPEndPoint(targetIp, targetPort))
+                                                    .ContinueWith(t =>
+                                                    {
+                                                        // 只有TCP握手成功才认为到达目标
+                                                        if (t.Status == TaskStatus.RanToCompletion)
+                                                            tcpTcs.TrySetResult(targetIp);
+                                                    }, TaskContinuationOptions.NotOnCanceled);
                                             }
-                                            else sendSocket.SendTo(Encoding.ASCII.GetBytes("Yume"), new IPEndPoint(targetIp, targetPort));
-                                            var done = await Task.WhenAny(tcs.Task, tcpOk, Task.Delay(timeout, token));
+                                            else
+                                            {
+                                                sendSocket.SendTo(Encoding.ASCII.GetBytes("Yume"), new IPEndPoint(targetIp, targetPort));
+                                                var udpTcs = new TaskCompletionSource<IPAddress>();
+                                                tcpResultTask = udpTcs.Task;
+                                                var _ = Task.Run(() =>
+                                                {
+                                                    try
+                                                    {
+                                                        byte[] buf = new byte[512];
+                                                        EndPoint from = new IPEndPoint(IPAddress.Any, 0);
+                                                        sendSocket.ReceiveTimeout = timeout;
+                                                        int n = sendSocket.ReceiveFrom(buf, ref from);
+                                                        var fromAddr = ((IPEndPoint)from).Address;
+                                                        if (fromAddr.Equals(targetIp))
+                                                            udpTcs.TrySetResult(fromAddr);
+                                                    }
+                                                    catch { }
+                                                });
+                                            }
+                                            Task completed;
+                                            if (tcpResultTask != null)
+                                                completed = await Task.WhenAny(tcs.Task, tcpResultTask, Task.Delay(timeout, token));
+                                            else
+                                                completed = await Task.WhenAny(tcs.Task, Task.Delay(timeout, token));
                                             sw.Stop();
                                             roundPortStore.TryRemove(myPort, out _);
-                                            if (done == tcs.Task)
+                                            if (completed == tcs.Task)
                                             {
                                                 IPAddress addr = await tcs.Task;
-                                                if (geoChecked) result.GeoInfo = ComputeCachedGeoInfo(addr.ToString());
+                                                if (geoChecked) result.GeoInfo = GetLocalGeoInfo(addr.ToString());
                                                 result.ReplyAddress = addr;
                                                 result.RTTs[0] = sw.Elapsed.TotalMilliseconds;
                                                 if (addr.Equals(targetIp)) result.TargetReached = true;
                                             }
-                                            else if (done == tcpOk)
+                                            else if (tcpResultTask != null && completed == tcpResultTask)
                                             {
-                                                if (geoChecked) result.GeoInfo = ComputeCachedGeoInfo(targetIp.ToString());
+                                                if (geoChecked) result.GeoInfo = GetLocalGeoInfo(targetIp.ToString());
                                                 result.ReplyAddress = targetIp;
                                                 result.RTTs[0] = sw.Elapsed.TotalMilliseconds;
                                                 result.TargetReached = true;
@@ -1397,15 +1713,36 @@ namespace NetInfoCheckerX
                                 var ip = hop.ReplyAddress;
                                 stat.ReplyAddress = ip;
                                 string ipStr = ip.ToString();
+                                // 统计IP出现次数
+                                if (!stat.IpAppearCount.ContainsKey(ipStr))
+                                    stat.IpAppearCount[ipStr] = 0;
+                                stat.IpAppearCount[ipStr]++;
                                 if (!stat.AllIPs.Any(a => a.Equals(ip)))
                                 {
                                     stat.AllIPs.Add(ip);
+                                    if (!stat.FirstSeenRound.ContainsKey(ipStr))
+                                        stat.FirstSeenRound[ipStr] = round;
                                     if (hop.GeoInfo != null)
                                         stat.IpGeoCache[ipStr] = hop.GeoInfo;
+                                    if (geoChecked
+                                        && _enrichPending.TryAdd(ipStr, 0)
+                                        && string.IsNullOrEmpty(IanaReservedIP.Check(ipStr)))
+                                    {
+                                        int capTtl = ttl;
+                                        string capIp = ipStr;
+                                        _ = Task.Run(() => EnrichGeoOnlineAsync(capIp, capTtl, stats, token), token);
+                                    }
                                 }
                                 stat.GeoInfo = stat.IpGeoCache.ContainsKey(ipStr) ? stat.IpGeoCache[ipStr] : hop.GeoInfo;
                                 for (int i = 0; i < 4; i++)
                                     if (hop.RTTs[i] >= 0) { stat.Received++; stat.RTTs.Add(hop.RTTs[i]); }
+                                if (geoChecked && _enrichPending.TryAdd(ipStr, 0)
+                                    && string.IsNullOrEmpty(IanaReservedIP.Check(ipStr)))
+                                {
+                                    int captureTtl = ttl;
+                                    string captureIp = ipStr;
+                                    _ = Task.Run(() => EnrichGeoOnlineAsync(captureIp, captureTtl, stats, token), token);
+                                }
                             }
                         }
 
@@ -1486,6 +1823,8 @@ namespace NetInfoCheckerX
             public string GeoInfo;
             public List<IPAddress> AllIPs = new List<IPAddress>();
             public Dictionary<string, string> IpGeoCache = new Dictionary<string, string>();
+            public Dictionary<string, int> FirstSeenRound = new Dictionary<string, int>();
+            public Dictionary<string, int> IpAppearCount = new Dictionary<string, int>();
             public int Sent;
             public int Received;
             public List<double> RTTs = new List<double>();
@@ -1568,6 +1907,9 @@ namespace NetInfoCheckerX
                         richTextBox1.SelectionFont = smallFont2;
                         AppendColorText("             -> " + combined + "\n", ColorTranslator.FromHtml("#a8a5ff"), false);
                         richTextBox1.SelectionFont = defaultFont2;
+                        _hopGeoOriginal[result.TTL] = combined;
+                        if (result.ReplyAddress != null)
+                            _ipToHop[result.ReplyAddress.ToString()] = result.TTL;
                     }
                 }
             }
@@ -1577,11 +1919,6 @@ namespace NetInfoCheckerX
             }
 
             richTextBox1.ScrollToCaret();
-
-            if (result.TargetReached)
-            {
-                AppendColorText("\nTrace 完成.\n", Color.Lime, false);
-            }
         }
 
         private void DrawMtrTable(ConcurrentDictionary<int, MtrHopStats> stats, string targetIp, IPAddress localIp, int maxHops, int timeout, string protocol, int round, bool geoChecked, bool targetReached, int effectiveMaxHops)
@@ -1607,7 +1944,10 @@ namespace NetInfoCheckerX
                 AppendColorText(kvp.Key.ToString().PadLeft(4) + " ", Color.Yellow, false);
 
                 if (s.ReplyAddress != null)
-                    AppendColorText(s.ReplyAddress.ToString().PadRight(20) + " ", Color.Yellow, false);
+                {
+                    bool isTarget = s.ReplyAddress.ToString() == targetIp;
+                    AppendColorText(s.ReplyAddress.ToString().PadRight(20) + " ", isTarget ? Color.LightGreen : Color.Yellow, false);
+                }
                 else
                     AppendColorText("-                    ", Color.Orange, false);
 
@@ -1632,9 +1972,8 @@ namespace NetInfoCheckerX
                     if (geoChecked && s.GeoInfo != null)
                     {
                         richTextBox1.SelectionFont = defaultFont;
-                        AppendColorText("      " + "".PadRight(20), Color.White, false);
                         richTextBox1.SelectionFont = smallFont;
-                        AppendColorText("-> " + s.GeoInfo, ColorTranslator.FromHtml("#a8a5ff"), false);
+                        AppendColorText("             -> " + s.GeoInfo, ColorTranslator.FromHtml("#a8a5ff"), false);
                         richTextBox1.SelectionFont = defaultFont;
                         AppendColorText("\n", Color.White, false);
                     }
@@ -1644,12 +1983,20 @@ namespace NetInfoCheckerX
                     foreach (var altIp in altIPs)
                     {
                         richTextBox1.SelectionFont = defaultFont;
-                        string altIpPadded = altIp.ToString().PadRight(20);
-                        AppendColorText("      " + altIpPadded, Color.Yellow, false);
+                        string altIpStr = altIp.ToString();
+                        s.FirstSeenRound.TryGetValue(altIpStr, out int firstRnd);
+                        s.IpAppearCount.TryGetValue(altIpStr, out int appearCnt);
+                        string roundTag = "";
+                        if (appearCnt > 1 && firstRnd > 0)
+                            roundTag = $" ({firstRnd}/{appearCnt})";
+                        bool isTargetAlt = altIpStr == targetIp;
+                        AppendColorText("      " + altIpStr.PadRight(20), isTargetAlt ? Color.LightGreen : Color.Yellow, false);
+                        if (roundTag.Length > 0)
+                            AppendColorText(roundTag, Color.Gray, false);
                         if (geoChecked && s.IpGeoCache.TryGetValue(altIp.ToString(), out var altGeo))
                         {
                             richTextBox1.SelectionFont = smallFont;
-                            AppendColorText("-> " + altGeo, ColorTranslator.FromHtml("#a8a5ff"), false);
+                            AppendColorText(" -> " + altGeo, ColorTranslator.FromHtml("#a8a5ff"), false);
                         }
                         richTextBox1.SelectionFont = defaultFont;
                         AppendColorText("\n", Color.White, false);
