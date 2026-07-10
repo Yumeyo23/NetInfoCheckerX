@@ -17,7 +17,6 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using IP2Region.Net.XDB;
 
-
 namespace NetInfoCheckerX
 {
     public partial class Trace : Form
