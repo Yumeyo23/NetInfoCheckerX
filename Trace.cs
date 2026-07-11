@@ -17,6 +17,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using IP2Region.Net.XDB;
 
+
 namespace NetInfoCheckerX
 {
     public partial class Trace : Form
@@ -790,15 +791,15 @@ namespace NetInfoCheckerX
                     finalPort = String.Empty;
                 }
                 // --- 统一输出提示信息 ---
-                AppendColorText($"开测时间: {DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")}\n", Color.LightPink, false);
-                AppendColorText($"开始 {selectedMethod} Tracert 到 {finalTargetIp} {finalPort} ...\n", Color.Lime, false);
+                string portInfo = (selectedMethod == "TCP" || selectedMethod == "UDP") ? $" 端口:{txtTargetPort.Text}" : "";
+                AppendColorText($">> [Trace] 目标: {finalTargetIp} | {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n", Color.Lime, false);
                 if (comboLocalEnd.Text.Contains("ICMP兼容模式"))
                 {
-                    AppendColorText($"使用接口: {comboLocalEnd.Text} 跳数:{maxHops} 超时:{maxDelayMs}ms\n\n", Color.LightSkyBlue, false);
+                    AppendColorText($"   使用接口: {comboLocalEnd.Text} 跳数:{maxHops} 超时:{maxDelayMs}ms 协议:{selectedMethod}{portInfo} | NICX By Yumeyo\n\n", Color.LightSkyBlue, false);
                 }
                 else
                 {
-                    AppendColorText($"使用接口: {localExportIp} 跳数:{maxHops} 超时:{maxDelayMs}ms\n\n", Color.LightSkyBlue, false);
+                    AppendColorText($"   使用接口: {localExportIp} 跳数:{maxHops} 超时:{maxDelayMs}ms 协议:{selectedMethod}{portInfo} | NICX By Yumeyo\n\n", Color.LightSkyBlue, false);
                 }
 
                 if (checkMTR.Checked)
@@ -1151,6 +1152,95 @@ namespace NetInfoCheckerX
             return (ushort)(~sum);
         }
 
+        private static ushort ComputeChecksumRange(byte[] data, int offset, int length)
+        {
+            uint sum = 0;
+            int index = offset;
+            int count = length;
+            while (count > 1)
+            {
+                sum += (uint)((data[index] << 8) | data[index + 1]);
+                index += 2;
+                count -= 2;
+            }
+            if (count > 0) sum += (uint)(data[index] << 8);
+            sum = (sum >> 16) + (sum & 0xffff);
+            sum += (sum >> 16);
+            return (ushort)(~sum);
+        }
+
+        // 构造完整 IP+UDP 包，用于 raw socket 发送，避免 Windows 将 ICMP 错误
+        // 关联到 UDP socket 而导致 raw ICMP receiver 收不到响应
+        // 当目标端口为 53(DNS) 时，构造合法 DNS 查询 payload 以通过 DPI 检测
+        private static readonly byte[] DnsQueryPayload = new byte[] {
+            0x00, 0x01, // Transaction ID
+            0x01, 0x00, // Flags: standard query, RD
+            0x00, 0x01, // Questions: 1
+            0x00, 0x00, // Answer RRs
+            0x00, 0x00, // Authority RRs
+            0x00, 0x00, // Additional RRs
+            // Query: "test.local" type A, class IN
+            0x04, 0x74, 0x65, 0x73, 0x74, // "test"
+            0x05, 0x6c, 0x6f, 0x63, 0x61, 0x6c, // "local"
+            0x00, // root label
+            0x00, 0x01, // Type A
+            0x00, 0x01  // Class IN
+        };
+
+        private static byte[] GetUdpPayload(int dstPort)
+        {
+            if (dstPort == 53) return DnsQueryPayload;
+            return new byte[0];
+        }
+
+        private static byte[] BuildUdpTracePacket(IPAddress srcIp, IPAddress dstIp,
+            int srcPort, int dstPort, int ttl, Random rng)
+        {
+            byte[] packet = new byte[28]; // 20 IP header + 8 UDP header, no payload
+            byte[] src = srcIp.GetAddressBytes();
+            byte[] dst = dstIp.GetAddressBytes();
+
+            // --- IP Header (20 bytes) ---
+            packet[0] = 0x45; // Version=4, IHL=5 (20 bytes)
+            packet[1] = 0x00; // DSCP/ECN = default
+            packet[2] = 0x00; packet[3] = 28; // Total Length = 28 (big-endian)
+            ushort id = (ushort)(rng != null ? rng.Next(1, 65535) : 1);
+            packet[4] = (byte)(id >> 8); packet[5] = (byte)(id & 0xFF);
+            packet[6] = 0x00; packet[7] = 0x00; // Flags=0, Fragment=0
+            packet[8] = (byte)ttl;
+            packet[9] = 17; // Protocol = UDP
+            packet[10] = 0x00; packet[11] = 0x00; // Checksum placeholder
+            Buffer.BlockCopy(src, 0, packet, 12, 4);
+            Buffer.BlockCopy(dst, 0, packet, 16, 4);
+            // Compute IP header checksum
+            ushort ipCksum = ComputeChecksumRange(packet, 0, 20);
+            packet[10] = (byte)(ipCksum >> 8);
+            packet[11] = (byte)(ipCksum & 0xFF);
+
+            // --- UDP Header (8 bytes) at offset 20 ---
+            packet[20] = (byte)(srcPort >> 8);
+            packet[21] = (byte)(srcPort & 0xFF);
+            packet[22] = (byte)(dstPort >> 8);
+            packet[23] = (byte)(dstPort & 0xFF);
+            packet[24] = 0x00; packet[25] = 8; // UDP Length = 8 (no payload)
+
+            // Compute UDP checksum over pseudo-header + UDP header
+            // Pseudo-header: src IP (4) + dst IP (4) + zero (1) + protocol (1) + UDP len (2) = 12 bytes
+            byte[] udpCksumData = new byte[12 + 8];
+            Buffer.BlockCopy(src, 0, udpCksumData, 0, 4);
+            Buffer.BlockCopy(dst, 0, udpCksumData, 4, 4);
+            udpCksumData[8] = 0;
+            udpCksumData[9] = 17; // Protocol = UDP
+            udpCksumData[10] = 0x00; udpCksumData[11] = 8; // UDP length = 8
+            // UDP header (with checksum field = 0)
+            Buffer.BlockCopy(packet, 20, udpCksumData, 12, 8);
+            ushort udpCksum = ComputeChecksum(udpCksumData);
+            packet[26] = (byte)(udpCksum >> 8);
+            packet[27] = (byte)(udpCksum & 0xFF);
+
+            return packet;
+        }
+
         // ==========================================
         // 第二部分：构造 ICMP 报文 (使用 InstanceID)
         // ==========================================
@@ -1309,8 +1399,19 @@ namespace NetInfoCheckerX
 
             using (Socket receiver = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.Icmp))
             {
-                try { receiver.Bind(new IPEndPoint(localIp, 0)); receiver.IOControl(IOControlCode.ReceiveAll, new byte[] { 1, 0, 0, 0 }, new byte[] { 1, 0, 0, 0 }); } catch { }
+                receiver.Bind(new IPEndPoint(localIp, 0));
+                try { receiver.IOControl(IOControlCode.ReceiveAll, new byte[] { 1, 0, 0, 0 }, new byte[] { 1, 0, 0, 0 }); } catch { }
                 receiver.ReceiveBufferSize = 65536;
+
+                // 固定源端口：避免ECMP哈希因端口变化导致路径不一致/跳数抖动
+                int fixedSourcePort;
+                using (var tmpSocket = new Socket(AddressFamily.InterNetwork,
+                    isTcp ? SocketType.Stream : SocketType.Dgram,
+                    isTcp ? ProtocolType.Tcp : ProtocolType.Udp))
+                {
+                    tmpSocket.Bind(new IPEndPoint(localIp, 0));
+                    fixedSourcePort = ((IPEndPoint)tmpSocket.LocalEndPoint).Port;
+                }
 
                 var receiveCts = new CancellationTokenSource();
                 int expectedProtocol = isTcp ? 6 : 17;
@@ -1355,7 +1456,7 @@ namespace NetInfoCheckerX
                     var result = new HopResult(ttl);
                     try
                     {
-                        for (int i = 0; i < 4; i++)
+                        for (int i = 0; i < 3; i++)
                         {
                             if (hopToken.IsCancellationRequested) break;
                             if (i > 0) await Task.Delay(40, hopToken);
@@ -1365,8 +1466,9 @@ namespace NetInfoCheckerX
                             {
                                 try
                                 {
-                                    senderSocket.Bind(new IPEndPoint(localIp, 0));
-                                    int myPort = ((IPEndPoint)senderSocket.LocalEndPoint).Port;
+                                    senderSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                                    int myPort = fixedSourcePort + ttl;
+                                    senderSocket.Bind(new IPEndPoint(localIp, myPort));
                                     senderSocket.Ttl = (short)ttl;
                                     var icmpTcs = new TaskCompletionSource<IPAddress>();
                                     portTcsStore[myPort] = icmpTcs;
@@ -1388,24 +1490,8 @@ namespace NetInfoCheckerX
                                     }
                                     else
                                     {
-                                        senderSocket.SendTo(Encoding.ASCII.GetBytes("Yume"), new IPEndPoint(targetIp, customPort));
-                                        // UDP响应监听：目标端口开放时(如DNS 53)，目标可能直接回复UDP而不发ICMP
-                                        var udpTcs = new TaskCompletionSource<IPAddress>();
-                                        tcpResultTask = udpTcs.Task;
-                                        var _ = Task.Run(() =>
-                                        {
-                                            try
-                                            {
-                                                byte[] buf = new byte[512];
-                                                EndPoint from = new IPEndPoint(IPAddress.Any, 0);
-                                                senderSocket.ReceiveTimeout = timeout;
-                                                int n = senderSocket.ReceiveFrom(buf, ref from);
-                                                var fromAddr = ((IPEndPoint)from).Address;
-                                                if (fromAddr.Equals(targetIp))
-                                                    udpTcs.TrySetResult(fromAddr);
-                                            }
-                                            catch { }
-                                        });
+                                        senderSocket.SendTo(GetUdpPayload(customPort), new IPEndPoint(targetIp, customPort));
+                                        senderSocket.Close();
                                     }
 
                                     Task completed;
@@ -1447,27 +1533,22 @@ namespace NetInfoCheckerX
                     results[ttl] = result;
                 }
 
-                // 并发启动所有跳
-                var hopTasks = new Dictionary<int, Task>();
-                for (int ttl = 1; ttl <= maxHops; ttl++)
-                {
-                    int ct = ttl;
-                    hopTasks[ttl] = Task.Run(() => ProbeHop(ct, token), token);
-                }
-
-                // 顺序收集显示：等待每跳的Task完成，不会因为启发式超时而跳过未完成的跳
+                // 逐跳探测：每跳发起→等待→立即显示，间隔100ms再发下一跳
                 int hopTimeout = timeout * 4 + 200;
                 bool reachedTarget = false;
                 for (int ttl = 1; ttl <= maxHops; ttl++)
                 {
                     if (token.IsCancellationRequested || this.IsDisposed) break;
 
-                    Task hopTask = hopTasks[ttl];
+                    var hopTask = Task.Run(() => ProbeHop(ttl, token), token);
                     try { await Task.WhenAny(hopTask, Task.Delay(hopTimeout, token)); } catch { }
 
                     HopResult hop = results.TryGetValue(ttl, out var h) ? h : new HopResult(ttl);
-                    DisplaySingleHop(hop, geoChecked);
+                    DisplaySingleHop(hop, geoChecked, probeCount: 3);
                     if (hop.TargetReached) { reachedTarget = true; break; }
+
+                    if (ttl < maxHops)
+                        await Task.Delay(100, token);
                 }
 
                 receiveCts.Cancel();
@@ -1500,8 +1581,22 @@ namespace NetInfoCheckerX
 
             using (Socket receiver = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.Icmp))
             {
-                try { receiver.Bind(new IPEndPoint(localIp, 0)); receiver.IOControl(IOControlCode.ReceiveAll, new byte[] { 1, 0, 0, 0 }, new byte[] { 1, 0, 0, 0 }); } catch { }
+                receiver.Bind(new IPEndPoint(localIp, 0));
+                try { receiver.IOControl(IOControlCode.ReceiveAll, new byte[] { 1, 0, 0, 0 }, new byte[] { 1, 0, 0, 0 }); } catch { }
                 receiver.ReceiveBufferSize = 65536;
+
+                // 固定源端口：避免ECMP哈希因端口变化导致路径不一致/跳数抖动（TCP/UDP）
+                int mtrFixedPort = 0;
+                if (protocol != "ICMP")
+                {
+                    using (var tmpSocket = new Socket(AddressFamily.InterNetwork,
+                        protocol == "TCP" ? SocketType.Stream : SocketType.Dgram,
+                        protocol == "TCP" ? ProtocolType.Tcp : ProtocolType.Udp))
+                    {
+                        tmpSocket.Bind(new IPEndPoint(localIp, 0));
+                        mtrFixedPort = ((IPEndPoint)tmpSocket.LocalEndPoint).Port;
+                    }
+                }
 
                 while (!token.IsCancellationRequested && !this.IsDisposed)
                 {
@@ -1558,13 +1653,17 @@ namespace NetInfoCheckerX
                         }
                     }, roundCts.Token);
 
-                    // 并发探测（每轮每跳 1 个探针）
+                    // 逐跳探测（每轮每跳 1 个探针，间隔100ms错开发起）
                     bool isIcmpProto = (protocol == "ICMP");
-                    var tasks = new List<Task>();
+                    var lastDraw = Stopwatch.StartNew();
+                    int roundTargetHop = 0;
+
                     for (int ttl = 1; ttl <= effectiveMaxHops; ttl++)
                     {
+                        if (token.IsCancellationRequested) break;
                         int ct = ttl;
-                        tasks.Add(Task.Run(async () =>
+
+                        await Task.Run(async () =>
                         {
                             var result = new HopResult(ct);
                             try
@@ -1610,8 +1709,9 @@ namespace NetInfoCheckerX
                                         protocol == "TCP" ? SocketType.Stream : SocketType.Dgram,
                                         protocol == "TCP" ? ProtocolType.Tcp : ProtocolType.Udp))
                                     {
-                                        sendSocket.Bind(new IPEndPoint(localIp, 0));
-                                        int myPort = ((IPEndPoint)sendSocket.LocalEndPoint).Port;
+                                        sendSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                                        int myPort = mtrFixedPort + ct;
+                                        sendSocket.Bind(new IPEndPoint(localIp, myPort));
                                         sendSocket.Ttl = (short)ct;
                                         if (token.IsCancellationRequested) { roundResults[ct] = result; return; }
                                         var tcs = new TaskCompletionSource<IPAddress>();
@@ -1634,23 +1734,8 @@ namespace NetInfoCheckerX
                                             }
                                             else
                                             {
-                                                sendSocket.SendTo(Encoding.ASCII.GetBytes("Yume"), new IPEndPoint(targetIp, targetPort));
-                                                var udpTcs = new TaskCompletionSource<IPAddress>();
-                                                tcpResultTask = udpTcs.Task;
-                                                var _ = Task.Run(() =>
-                                                {
-                                                    try
-                                                    {
-                                                        byte[] buf = new byte[512];
-                                                        EndPoint from = new IPEndPoint(IPAddress.Any, 0);
-                                                        sendSocket.ReceiveTimeout = timeout;
-                                                        int n = sendSocket.ReceiveFrom(buf, ref from);
-                                                        var fromAddr = ((IPEndPoint)from).Address;
-                                                        if (fromAddr.Equals(targetIp))
-                                                            udpTcs.TrySetResult(fromAddr);
-                                                    }
-                                                    catch { }
-                                                });
+                                                sendSocket.SendTo(GetUdpPayload(targetPort), new IPEndPoint(targetIp, targetPort));
+                                                sendSocket.Close();
                                             }
                                             Task completed;
                                             if (tcpResultTask != null)
@@ -1686,26 +1771,12 @@ namespace NetInfoCheckerX
                             }
                             catch (OperationCanceledException) { }
                             roundResults[ct] = result;
-                        }, token));
-                    }
+                        }, token);
 
-                    // 实时收集：每完成一跳即更新统计并节流重绘
-                    var pendingTasks = new List<Task>(tasks);
-                    var processedHops = new HashSet<int>();
-                    var lastDraw = Stopwatch.StartNew();
-
-                    while (pendingTasks.Count > 0)
-                    {
-                        var done = await Task.WhenAny(pendingTasks);
-                        pendingTasks.Remove(done);
-
-                        for (int ttl = 1; ttl <= effectiveMaxHops; ttl++)
+                        // 即时更新统计
+                        if (roundResults.TryGetValue(ct, out var hop))
                         {
-                            if (processedHops.Contains(ttl)) continue;
-                            if (!roundResults.TryGetValue(ttl, out var hop)) continue;
-
-                            processedHops.Add(ttl);
-                            var stat = stats[ttl];
+                            var stat = stats[ct];
                             stat.Sent += 1;
                             if (hop.HasAnyResponse)
                             {
@@ -1727,7 +1798,7 @@ namespace NetInfoCheckerX
                                         && _enrichPending.TryAdd(ipStr, 0)
                                         && string.IsNullOrEmpty(IanaReservedIP.Check(ipStr)))
                                     {
-                                        int capTtl = ttl;
+                                        int capTtl = ct;
                                         string capIp = ipStr;
                                         _ = Task.Run(() => EnrichGeoOnlineAsync(capIp, capTtl, stats, token), token);
                                     }
@@ -1738,30 +1809,28 @@ namespace NetInfoCheckerX
                                 if (geoChecked && _enrichPending.TryAdd(ipStr, 0)
                                     && string.IsNullOrEmpty(IanaReservedIP.Check(ipStr)))
                                 {
-                                    int captureTtl = ttl;
+                                    int captureTtl = ct;
                                     string captureIp = ipStr;
                                     _ = Task.Run(() => EnrichGeoOnlineAsync(captureIp, captureTtl, stats, token), token);
                                 }
                             }
+                            if (hop.TargetReached && roundTargetHop == 0)
+                                roundTargetHop = ct;
                         }
 
-                        if (!isFirstRound && (lastDraw.ElapsedMilliseconds >= 100 || pendingTasks.Count == 0))
+                        if (lastDraw.ElapsedMilliseconds >= 100)
                         {
-                            DrawMtrTable(stats, targetLabel, localIp, maxHops, timeout, protocol, round, geoChecked, targetEverReached, effectiveMaxHops);
+                            int displayHops = isFirstRound ? ct : effectiveMaxHops;
+                            DrawMtrTable(stats, targetLabel, localIp, maxHops, timeout, protocol, round, geoChecked, targetEverReached, displayHops);
                             lastDraw.Restart();
                         }
+
+                        if (roundTargetHop > 0) break;
+
+                        if (ttl < effectiveMaxHops)
+                            await Task.Delay(100, token);
                     }
 
-                    // 全部跳完成后，扫描最小目标命中 TTL → 截断
-                    int roundTargetHop = 0;
-                    for (int ttl = 1; ttl <= effectiveMaxHops; ttl++)
-                    {
-                        if (roundResults.TryGetValue(ttl, out var hop) && hop.TargetReached)
-                        {
-                            roundTargetHop = ttl;
-                            break;
-                        }
-                    }
                     if (roundTargetHop > 0 && confirmedTargetHop == 0)
                     {
                         confirmedTargetHop = roundTargetHop;
@@ -1849,7 +1918,7 @@ namespace NetInfoCheckerX
             catch { return null; }
         }
 
-        private void DisplaySingleHop(HopResult result, bool geoChecked, bool isV6 = false)
+        private void DisplaySingleHop(HopResult result, bool geoChecked, bool isV6 = false, int probeCount = 4)
         {
             if (this.IsDisposed || richTextBox1.IsDisposed) return;
 
@@ -1877,7 +1946,7 @@ namespace NetInfoCheckerX
                 AppendColorText("  -              ", Color.Orange, false);
             }
 
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < probeCount; i++)
             {
                 double rtt = result.RTTs[i];
                 if (rtt >= 0)
@@ -1929,8 +1998,8 @@ namespace NetInfoCheckerX
 
             richTextBox1.Clear();
 
-            AppendColorText($">> [MTR模式] 第 {round} 轮 | 目标: {targetIp} | {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n", Color.Lime, false);
-            AppendColorText($"   使用接口: {localIp}  跳数:{maxHops}  超时:{timeout}ms  协议:{protocol} | NICX By Yumeyo\n", Color.LightSkyBlue, false);
+            AppendColorText($">> [MTR] 第 {round} 轮 | 目标: {targetIp} | {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n", Color.Lime, false);
+            AppendColorText($"   使用接口: {localIp} 跳数:{maxHops} 超时:{timeout}ms 协议:{protocol} | NICX By Yumeyo\n", Color.LightSkyBlue, false);
 
             AppendColorText("\n   # IP                    Loss%   Sent  Rcvd   Last   Avg   Best   Worst\n", Color.Cyan, false);
             //AppendColorText("──── ──────────────── ────── ──── ──── ───── ───── ───── ─────\n", Color.Gray, false);
@@ -2004,7 +2073,7 @@ namespace NetInfoCheckerX
             }
 
             string status = targetReached ? "(目标已达)" : "";
-            AppendColorText($"\n>> 第 {round} 轮完成 {status}, 按[停止]结束 | {Global.exeName}", Color.LightGreen, true);
+            AppendColorText($"\n>> 第 {round} 轮完成 {status}, 按[停止]结束 | {Global.exeName}", Color.Green, true);
 
             SendMessage(richTextBox1.Handle, WM_SETREDRAW, 1, 0);
             richTextBox1.Invalidate();
@@ -2286,7 +2355,8 @@ namespace NetInfoCheckerX
 
                 // 默认文件名
                 string saveTime = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                sfd.FileName = $"NICX_Trace_{pingType}_{comboTargetIP.Text}_{saveTime}.txt";
+                string mtrPrefix = checkMTR.Checked ? "_MTR" : "";
+                sfd.FileName = $"NICX_Trace{mtrPrefix}_{pingType}_{comboTargetIP.Text}_{saveTime}.txt";
 
                 if (sfd.ShowDialog() == DialogResult.OK)
                 {
