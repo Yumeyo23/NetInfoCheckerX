@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Text;
 using System.IO;
 using System.Linq;
 using System.Media;
@@ -23,6 +24,7 @@ namespace NetInfoCheckerX
         public PingPP()
         {
             InitializeComponent();
+            this.MinimumSize = this.Size;
             _limitTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             _limitTimer.Tick += LimitTimer_Tick;
         }
@@ -49,6 +51,7 @@ namespace NetInfoCheckerX
         private DateTime _sessionStartTime;
         private string _startTimeStr;
         private int _shardIndex;
+        private int _lastShardSec;
         private double _baselineTps;
         private int _nextCheckSec;
         private double _scheduleDelaySum;
@@ -60,6 +63,7 @@ namespace NetInfoCheckerX
         private int _remainingSeconds;
         private PingChart _chartForm;
         private bool _chartDisabled;
+        private PrivateFontCollection _privateFonts;
 
         // 高频输出缓冲
         private readonly List<(string text, Color color, bool newLine)> _outputBuffer = new List<(string text, Color color, bool newLine)>();
@@ -205,6 +209,7 @@ namespace NetInfoCheckerX
             _baselineTps = 0; _nextCheckSec = 0; _rateDegradationCount = 0;
             _scheduleDelaySum = 0; _scheduleDelayCount = 0;
             _loopIterationCount = 0; _rateDegradationCount = 0; _baselineIterations = 0;
+            _lastShardSec = 0;
             isSettingsPrinted = false;
             if (_chartForm != null && !_chartForm.IsDisposed)
             {
@@ -625,14 +630,34 @@ namespace NetInfoCheckerX
         private void PingPP_Load(object sender, EventArgs e)
         {
             CleanupTempFiles();
-            this.MinimumSize = this.Size;
             AppendColorText("✧ 正在检查系统环境，请稍候 ✧\n", Color.White, true);
             using (Graphics g = this.CreateGraphics())
             {
                 if (g.DpiX > 96)
                 {
-                    Font modernFont = new Font("Cascadia Mono", 9F, FontStyle.Regular);
-                    richTextBox1.Font = modernFont;
+                    Font modernFont = null;
+                    string fontPath = Path.Combine(Application.StartupPath, "CascadiaMono.ttf");
+
+                    if (File.Exists(fontPath))
+                    {
+                        try
+                        {
+                            _privateFonts = new PrivateFontCollection();
+                            _privateFonts.AddFontFile(fontPath);
+                            if (_privateFonts.Families.Length > 0)
+                                modernFont = new Font(_privateFonts.Families[0], 9F, FontStyle.Regular);
+                        }
+                        catch { _privateFonts?.Dispose(); _privateFonts = null; }
+                    }
+
+                    if (modernFont == null)
+                    {
+                        try { modernFont = new Font("Cascadia Mono", 9F, FontStyle.Regular); }
+                        catch { }
+                    }
+
+                    if (modernFont != null)
+                        richTextBox1.Font = modernFont;
                 }
             }
 
@@ -767,6 +792,7 @@ namespace NetInfoCheckerX
             _limitTimer?.Stop();
             if (_activeTests <= 1) CleanupTempFiles();
             try { _chartForm?.Shutdown(); _chartForm?.Dispose(); } catch { }
+            try { _privateFonts?.Dispose(); } catch { }
         }
 
         private async void btnStart_Click(object sender, EventArgs e)
@@ -2043,10 +2069,18 @@ namespace NetInfoCheckerX
 
         private void CheckDegradation()
         {
+            int currentSec = (int)(DateTime.Now - _sessionStartTime).TotalSeconds;
+
+            // 时间分片：每301秒(5分01秒)自动分片，不受tick速率/行数影响
+            if (!_suppressOutput && currentSec - _lastShardSec >= 301)
+            {
+                AutoSaveAndClear();
+                _lastShardSec = currentSec;
+                return;
+            }
+
             int freq = GetPingFrequency();
             if (freq < 4) return;
-
-            int currentSec = (int)(DateTime.Now - _sessionStartTime).TotalSeconds;
 
             // 基准采集：取前2秒的调度延迟基准 和 迭代速率基准
             if (_baselineTps == 0 && _nextCheckSec == 0 && currentSec >= 2)
