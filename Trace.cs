@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Text;
 using System.IO;
 using System.Linq;
 using System.Media;
@@ -25,6 +26,7 @@ namespace NetInfoCheckerX
         private CancellationTokenSource cts; // 取消令牌
         private bool isRunning = false;      // 运行状态标识
         private Random random = new Random();
+        private PrivateFontCollection _privateFonts;
 
         // 防火墙逻辑变量
         private bool isManualChanged = false;     // 标记本次运行是否手动改过状态
@@ -333,21 +335,31 @@ namespace NetInfoCheckerX
             // --- 字体优化逻辑开始 ---
             using (Graphics g = this.CreateGraphics())
             {
-                // 96 DPI 是 Windows 的标准 100% 缩放
-                // 如果大于 96，说明缩放比例超过了 100%
                 if (g.DpiX > 96)
                 {
-                    // 定义夢酱喜欢的现代感字体
-                    // 微软雅黑适合中文，Segoe UI 适合英文数字，Consolas 或者 Cascadia Mono，C# 会自动回退匹配
-                    Font modernFont = new Font("Cascadia Mono", 9F, FontStyle.Regular);
+                    Font modernFont = null;
+                    string fontPath = Path.Combine(Application.StartupPath, "CascadiaMono.ttf");
 
-                    // 应用到文本框和下拉框
-                    richTextBox1.Font = modernFont;
-                }
-                else
-                {
-                    // 100% 缩放时保持默认，或者显式指定为新宋体
-                    //richTextBox1.Font = new Font("NSimSun", 10.5F, FontStyle.Regular);
+                    if (File.Exists(fontPath))
+                    {
+                        try
+                        {
+                            _privateFonts = new PrivateFontCollection();
+                            _privateFonts.AddFontFile(fontPath);
+                            if (_privateFonts.Families.Length > 0)
+                                modernFont = new Font(_privateFonts.Families[0], 9F, FontStyle.Regular);
+                        }
+                        catch { _privateFonts?.Dispose(); _privateFonts = null; }
+                    }
+
+                    if (modernFont == null)
+                    {
+                        try { modernFont = new Font("Cascadia Mono", 9F, FontStyle.Regular); }
+                        catch { }
+                    }
+
+                    if (modernFont != null)
+                        richTextBox1.Font = modernFont;
                 }
             }
             AppendColorText("✧ 正在检查系统环境，请稍候... ✧\n", Color.White, true);
@@ -2073,7 +2085,7 @@ namespace NetInfoCheckerX
             }
 
             string status = targetReached ? "(目标已达)" : "";
-            AppendColorText($"\n>> 第 {round} 轮完成 {status}, 按[停止]结束 | {Global.exeName}", Color.Green, true);
+            AppendColorText($"\n>> 第 {round} 轮完成 {status}, 按[停止]结束 | {Global.exeName}", Color.Lime, true);
 
             SendMessage(richTextBox1.Handle, WM_SETREDRAW, 1, 0);
             richTextBox1.Invalidate();
@@ -2182,8 +2194,10 @@ namespace NetInfoCheckerX
                 flashTimer = null;
                 _ip2regionSearcherV4?.Dispose();
                 _ip2regionSearcherV6?.Dispose();
+                _privateFonts?.Dispose();
                 _ip2regionSearcherV4 = null;
                 _ip2regionSearcherV6 = null;
+                _privateFonts = null;
             }
             catch { }
         }
