@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Runtime.InteropServices;
@@ -65,8 +66,6 @@ namespace NetInfoCheckerX
             }
             catch { }
         }
-        private string _tempBatPath = null;
-
         public iPerfGUI()
         {
             string appPath = Application.StartupPath;
@@ -92,70 +91,91 @@ namespace NetInfoCheckerX
             EnsureClientNICValid();
 
             string iperfPath = Path.Combine(Application.StartupPath, "iperf3.exe");
+            if (!File.Exists(iperfPath))
+            {
+                MessageBox.Show("找不到 iperf3.exe ", "启动错误了", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            string serverIp = txtClientIP.Text.Trim();
+            if (!IsValidHost(serverIp))
+            {
+                MessageBox.Show("服务器地址格式无效。", "启动错误了", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                txtClientIP.Focus();
+                return;
+            }
+
+            if (!TryGetPort(txtClientPort.Text, 5201, out int clientPort))
+            {
+                MessageBox.Show("客户端端口必须是 1 到 65535 之间的整数。", "启动错误了",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                txtClientPort.Focus();
+                return;
+            }
+
+            string normalizedLimit = null;
+            if (!string.IsNullOrWhiteSpace(txtLimit.Text))
+            {
+                if (!decimal.TryParse(txtLimit.Text.Trim(), NumberStyles.AllowDecimalPoint,
+                        CultureInfo.InvariantCulture, out decimal limitValue) || limitValue <= 0)
+                {
+                    MessageBox.Show("限速必须是大于 0 的数字，单位为 Mbps。", "启动错误了",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    txtLimit.Focus();
+                    return;
+                }
+
+                normalizedLimit = limitValue.ToString(CultureInfo.InvariantCulture);
+            }
 
             StringBuilder arguments = new StringBuilder();
-            arguments.Append("-c ").Append(txtClientIP.Text.Trim());
+            arguments.Append("-c ").Append(serverIp);
 
             string bindNIC = GetSelectedIP(comboClientNIC);
             if (!string.IsNullOrEmpty(bindNIC))
                 arguments.Append(" -B ").Append(bindNIC);
 
-            if (!string.IsNullOrEmpty(txtClientPort.Text))
-                arguments.Append(" -p ").Append(txtClientPort.Text.Trim());
+            arguments.Append(" -p ").Append(clientPort);
 
             if (!chkTCP.Checked) arguments.Append(" -u");
 
-            if (numTime.Value > 0) arguments.Append(" -t ").Append(numTime.Value);
+            if (numTime.Value > 0)
+                arguments.Append(" -t ").Append(numTime.Value.ToString(CultureInfo.InvariantCulture));
 
-            if (numThread.Value > 1) arguments.Append(" -P ").Append(numThread.Value);
+            if (numThread.Value > 1)
+                arguments.Append(" -P ").Append(numThread.Value.ToString(CultureInfo.InvariantCulture));
 
             if (chkWay.Checked) arguments.Append(" -R");
 
-            if (!string.IsNullOrEmpty(txtLimit.Text))
-                arguments.Append(" -b ").Append(txtLimit.Text.Trim()).Append("M");
+            if (!string.IsNullOrEmpty(normalizedLimit))
+                arguments.Append(" -b ").Append(normalizedLimit).Append("M");
 
             string iperfArguments = arguments.ToString();
 
             string direction = chkWay.Checked ? "下载" : "上传";
             string protocol = chkTCP.Checked ? "TCP" : "UDP";
-            string threads = numThread.Value.ToString();
-            string limit = string.IsNullOrEmpty(txtLimit.Text.Trim()) ? "无" : txtLimit.Text.Trim();
-            string time = numTime.Value.ToString();
-            string serverIp = txtClientIP.Text.Trim();
-            string port = string.IsNullOrEmpty(txtClientPort.Text.Trim()) ? "5201" : txtClientPort.Text.Trim();
+            string threads = numThread.Value.ToString(CultureInfo.InvariantCulture);
+            string limit = string.IsNullOrEmpty(normalizedLimit) ? "无" : normalizedLimit;
+            string time = numTime.Value.ToString(CultureInfo.InvariantCulture);
+            string port = clientPort.ToString(CultureInfo.InvariantCulture);
             string nicDisplay = string.IsNullOrEmpty(bindNIC) ? "系统默认" : bindNIC;
 
-            string tempBat = Path.Combine(Path.GetTempPath(), $"nicx_iperf_{Environment.TickCount}.cmd");
-            string esc = "\x1b";
-            string colorOn = $"{esc}[38;2;255;255;0m";
-            string colorOff = $"{esc}[0m";
-
-            StringBuilder bat = new StringBuilder();
-            bat.AppendLine("@echo off");
-            bat.AppendLine("chcp 65001 >nul 2>&1");
-            bat.AppendLine($"echo {colorOn}^>^>^>本次iperf运行参数：{colorOff}");
-            bat.AppendLine($"echo {colorOn}● 服务器[{serverIp}]  端口[{port}]  使用网卡[{nicDisplay}]{colorOff}");
-            bat.AppendLine($"echo {colorOn}方向[{direction}]  协议[{protocol}]  线程[{threads}]  限速[{limit}]Mbps  时长[{time}]秒{colorOff}");
-            bat.AppendLine($"echo {colorOn}……………………………………………………………………………………{colorOff}");
-            bat.AppendLine($"\"{iperfPath}\" {iperfArguments} -f m");
-            bat.AppendLine($"echo {colorOn}……………………………………………………………………………………{colorOff}");
-            bat.AppendLine($"echo {colorOn}^>^>^>测试完毕，按回车键关闭{colorOff}");
-            bat.AppendLine("set /p dummy=");
+            string command = string.Join(" & ", new[]
+            {
+                "chcp 65001 >nul 2>&1",
+                "echo ^>^>^>本次iperf运行参数：",
+                $"echo ● 服务器[{serverIp}]  端口[{port}]  使用网卡[{nicDisplay}]",
+                $"echo 方向[{direction}]  协议[{protocol}]  线程[{threads}]  限速[{limit}]Mbps  时长[{time}]秒",
+                "echo ……………………………………………………………………………………",
+                $"\"{iperfPath}\" {iperfArguments} -f m",
+                "echo ……………………………………………………………………………………",
+                "echo ^>^>^>测试完毕，按回车键关闭",
+                "pause >nul"
+            });
 
             try
             {
-                File.WriteAllText(tempBat, bat.ToString(), new UTF8Encoding(false));
-                _tempBatPath = tempBat;
-
-                ProcessStartInfo startInfo = new ProcessStartInfo
-                {
-                    FileName = "cmd.exe",
-                    Arguments = $"/c \"{tempBat}\"",
-                    UseShellExecute = true,
-                    WorkingDirectory = Application.StartupPath
-                };
-
-                using (Process.Start(startInfo)) { }
+                StartCommandWindow(command, keepOpen: false);
             }
             catch (Exception ex)
             {
@@ -182,25 +202,22 @@ namespace NetInfoCheckerX
             if (!string.IsNullOrEmpty(bindIP))
                 arguments.Append(" -B ").Append(bindIP);
 
-            if (!string.IsNullOrEmpty(txtServerPort.Text))
-                arguments.Append(" -p ").Append(txtServerPort.Text.Trim());
+            if (!TryGetPort(txtServerPort.Text, 5201, out int serverPort))
+            {
+                MessageBox.Show("服务器端口必须是 1 到 65535 之间的整数。", "启动错误了",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                txtServerPort.Focus();
+                return;
+            }
+
+            arguments.Append(" -p ").Append(serverPort);
 
             arguments.Append(" -V");
 
             string iperfArguments = arguments.ToString();
-            string finalCmdArguments = $"/k \"\"{iperfPath}\" {iperfArguments}\"";
-
             try
             {
-                ProcessStartInfo startInfo = new ProcessStartInfo
-                {
-                    FileName = "cmd.exe",
-                    Arguments = finalCmdArguments,
-                    UseShellExecute = true,
-                    WorkingDirectory = Application.StartupPath
-                };
-
-                using (Process.Start(startInfo)) { }
+                StartCommandWindow($"\"{iperfPath}\" {iperfArguments}", keepOpen: true);
             }
             catch (Exception ex)
             {
@@ -211,6 +228,47 @@ namespace NetInfoCheckerX
         private void chkTCP_CheckedChanged(object sender, EventArgs e)
         {
             chkTCP.Text = chkTCP.Checked ? "TCP" : "UDP";
+        }
+
+        private static bool TryGetPort(string text, int defaultPort, out int port)
+        {
+            string value = text?.Trim();
+            if (string.IsNullOrEmpty(value))
+            {
+                port = defaultPort;
+                return true;
+            }
+
+            return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out port) &&
+                   port >= 1 && port <= 65535;
+        }
+
+        private static bool IsValidHost(string host)
+        {
+            if (string.IsNullOrWhiteSpace(host) || host.Length > 253) return false;
+            if (IPAddress.TryParse(host, out _)) return true;
+
+            foreach (char c in host)
+            {
+                if (!(char.IsLetterOrDigit(c) || c == '.' || c == '-' || c == '_'))
+                    return false;
+            }
+
+            return true;
+        }
+
+        private static void StartCommandWindow(string command, bool keepOpen)
+        {
+            string mode = keepOpen ? "/k" : "/c";
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+                Arguments = $"/d /s {mode} \"{command}\"",
+                UseShellExecute = true,
+                WorkingDirectory = Application.StartupPath
+            };
+
+            using (Process.Start(startInfo)) { }
         }
 
         private void chkWay_CheckedChanged(object sender, EventArgs e)
@@ -390,18 +448,6 @@ namespace NetInfoCheckerX
         private void iPerfGUI_FormClosing(object sender, FormClosingEventArgs e)
         {
             SaveSettings();
-            try
-            {
-                if (!string.IsNullOrEmpty(_tempBatPath) && File.Exists(_tempBatPath))
-                {
-                    File.Delete(_tempBatPath);
-                    _tempBatPath = null;
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[iPerfGUI] 删除临时文件失败: {ex.Message}");
-            }
         }
     }
 }
