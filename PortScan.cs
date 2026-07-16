@@ -208,8 +208,7 @@ namespace NetInfoCheckerX
 
         private void btnPaste_Click(object sender, EventArgs e)
         {
-            string clipText = Clipboard.GetText();
-            if (string.IsNullOrWhiteSpace(clipText)) return;
+            if (!ClipboardHelper.TryGetText(out string clipText) || string.IsNullOrWhiteSpace(clipText)) return;
 
             // 正则清洗：只保留字母、数字、点、冒号
             string cleaned = Regex.Replace(clipText, @"[^a-zA-Z0-9\.\:\-]", "");
