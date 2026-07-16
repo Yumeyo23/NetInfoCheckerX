@@ -357,8 +357,7 @@ namespace NetInfoCheckerX
 
         private void btnPaste_Click(object sender, EventArgs e)
         {
-            string clipText = Clipboard.GetText();
-            if (!string.IsNullOrEmpty(clipText))
+            if (ClipboardHelper.TryGetText(out string clipText) && !string.IsNullOrEmpty(clipText))
             {
                 txtIP.Text = clipText;
                 string formatted = GetFormattedIP();
