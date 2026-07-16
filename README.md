@@ -81,6 +81,7 @@ release的程序完整包使用到了以下依赖及NuGet，在此致谢：
 | [IP2Region](https://www.nuget.org/packages/IP2Region.Net/)   | 程序内置的IP地理位置数据库(主窗口、手动查询IP、Trace+使用)   | 同上                                  |
 | [MaxMind.Db](https://www.nuget.org/packages/MaxMind.DB)      | 程序内置的IP地理位置数据库(主窗口、手动查询IP、Trace+使用)   | 同上，数据库使用[GeoCN](https://github.com/ljxi/GeoCN)       |
 | [DnsClient](https://www.nuget.org/packages/DnsClient/)       | DNS劫持测试                                                  | 同上                                                         |
+| [WinDivert](https://github.com/basil00/WinDivert)            | Trace+高精度测试                                             | 同上                                                         |
 | [obfuscar](https://www.nuget.org/packages/Obfuscar)          | 备用混淆器, 发布版目前使用[ConfuserEx](https://github.com/mkaring/ConfuserEx) | 同上                                                         |
 
 ## To do list
