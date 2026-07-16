@@ -45,8 +45,7 @@ namespace NetInfoCheckerX
         private ConcurrentDictionary<string, string> _geoCache = new ConcurrentDictionary<string, string>();
         private int _activeGeoOnlineIndex = 0;
         // 在线增强最多同时 3 个请求，并在整个进程内平滑限制为每秒最多启动 5 个。
-        // UI 最多等待后台增强 5 秒；这只影响“Trace 完成”的等待，不会取消 API 请求。
-        private const int GeoEnrichmentUiWaitMs = 5000;
+        // 请求超时完全由各 Provider 使用的 HttpHelper 负责。
         private const int GeoMaxStartsPerSecond = 5;
         private SemaphoreSlim _geoEnrichSemaphore = new SemaphoreSlim(3, 3);
         private static readonly SemaphoreSlim GeoRateGate = new SemaphoreSlim(1, 1);
@@ -73,10 +72,27 @@ namespace NetInfoCheckerX
         // WinDivert 2.x 原生接口。项目固定为 x64，运行目录需同时包含
         // WinDivert.dll 与 WinDivert64.sys。
         private const ulong WinDivertFlagSniff = 0x0001;
+        private const ulong WinDivertFlagRecvOnly = 0x0004;
+        private const ulong WinDivertFlagNoInstall = 0x0010;
         private const int WinDivertLayerNetwork = 0;
+        private const int WinDivertLayerReflect = 4;
+        private const int WinDivertShutdownRecv = 0x1;
         private const int WinDivertShutdownBoth = 0x3;
         private const int WinDivertAddressSize = 80;
         private static readonly IntPtr InvalidWinDivertHandle = new IntPtr(-1);
+        private static readonly ConcurrentDictionary<int, WinDivertTraceSession>
+            ActiveWinDivertSessions =
+                new ConcurrentDictionary<int, WinDivertTraceSession>();
+        private static int _nextWinDivertSessionId;
+        private static int _winDivertLifecycleHooked;
+        private static int _winDivertProcessCleanupStarted;
+
+        private const uint ScManagerConnect = 0x0001;
+        private const uint ServiceQueryStatus = 0x0004;
+        private const uint ServiceStop = 0x0020;
+        private const uint DeleteAccess = 0x00010000;
+        private const uint ServiceControlStop = 0x00000001;
+        private const uint ServiceStopped = 0x00000001;
 
         [DllImport("WinDivert.dll", CallingConvention = CallingConvention.Cdecl,
             CharSet = CharSet.Ansi, SetLastError = true)]
@@ -112,6 +128,44 @@ namespace NetInfoCheckerX
             [In, Out] byte[] packet, uint packetLength, [In, Out] byte[] address,
             ulong flags);
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ServiceStatus
+        {
+            public uint ServiceType;
+            public uint CurrentState;
+            public uint ControlsAccepted;
+            public uint Win32ExitCode;
+            public uint ServiceSpecificExitCode;
+            public uint CheckPoint;
+            public uint WaitHint;
+        }
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr OpenSCManager(string machineName,
+            string databaseName, uint desiredAccess);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr OpenService(IntPtr serviceControlManager,
+            string serviceName, uint desiredAccess);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool ControlService(IntPtr service, uint control,
+            ref ServiceStatus serviceStatus);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool QueryServiceStatus(IntPtr service,
+            ref ServiceStatus serviceStatus);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool DeleteService(IntPtr service);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseServiceHandle(IntPtr serviceHandle);
+
         private string IniPath => Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
         private const string IniSection = "Trace";
 
@@ -122,9 +176,127 @@ namespace NetInfoCheckerX
         public Trace()
         {
             InitializeComponent();
+            EnsureWinDivertLifecycleHooks();
             this.MinimumSize = this.Size;
             // 初始化一个随机的标识符 (使用时间戳和随机数混合)
             _instanceIdentifier = (ushort)(DateTime.Now.Ticks % 60000 + new Random().Next(100, 5000));
+        }
+
+        private static void EnsureWinDivertLifecycleHooks()
+        {
+            if (Interlocked.Exchange(ref _winDivertLifecycleHooked, 1) != 0) return;
+            Application.ApplicationExit += (sender, args) =>
+                ReleaseWinDivertForProcessExit();
+            AppDomain.CurrentDomain.ProcessExit += (sender, args) =>
+                ReleaseWinDivertForProcessExit();
+        }
+
+        private static void ReleaseWinDivertForProcessExit()
+        {
+            if (Interlocked.Exchange(ref _winDivertProcessCleanupStarted, 1) != 0)
+                return;
+
+            foreach (WinDivertTraceSession session in ActiveWinDivertSessions.Values.ToArray())
+                session.RequestStop();
+
+            // WinDivertClose 只释放用户态 handle；官方驱动默认仍会留在内核中。
+            // 仅当没有其他进程的 WinDivert handle 时才卸载，避免干扰其他软件。
+            TryUnloadWinDivertDriver();
+        }
+
+        private static void StopWinDivertSessionsOwnedBy(Trace owner)
+        {
+            foreach (WinDivertTraceSession session in ActiveWinDivertSessions.Values.ToArray())
+            {
+                if (ReferenceEquals(session.Owner, owner)) session.RequestStop();
+            }
+        }
+
+        private static bool HasExternalWinDivertHandles()
+        {
+            IntPtr reflectHandle = InvalidWinDivertHandle;
+            try
+            {
+                int processId = Process.GetCurrentProcess().Id;
+                string filter = $"processId != {processId} and event == OPEN";
+                reflectHandle = WinDivertOpen(filter, WinDivertLayerReflect, 0,
+                    WinDivertFlagSniff | WinDivertFlagRecvOnly | WinDivertFlagNoInstall);
+                if (reflectHandle == IntPtr.Zero || reflectHandle == InvalidWinDivertHandle)
+                    return true; // 无法确认时选择不卸载。
+
+                // REFLECT 会先排入当前已存在的 handle；停止接收新事件后清点队列。
+                WinDivertShutdown(reflectHandle, WinDivertShutdownRecv);
+                byte[] filterObject = new byte[4096];
+                byte[] address = new byte[WinDivertAddressSize];
+                return WinDivertRecv(reflectHandle, filterObject,
+                    (uint)filterObject.Length, out _, address);
+            }
+            catch
+            {
+                return true;
+            }
+            finally
+            {
+                if (reflectHandle != IntPtr.Zero &&
+                    reflectHandle != InvalidWinDivertHandle)
+                {
+                    try { WinDivertClose(reflectHandle); } catch { }
+                }
+            }
+        }
+
+        private static void TryUnloadWinDivertDriver()
+        {
+            if (!ActiveWinDivertSessions.IsEmpty) return;
+            if (HasExternalWinDivertHandles())
+            {
+                Debug.WriteLine("[WinDivert-Cleanup] 检测到其他进程仍在使用 WinDivert，跳过卸载。");
+                return;
+            }
+
+            IntPtr manager = IntPtr.Zero;
+            IntPtr service = IntPtr.Zero;
+            try
+            {
+                manager = OpenSCManager(null, null, ScManagerConnect);
+                if (manager == IntPtr.Zero) return;
+                service = OpenService(manager, "WinDivert",
+                    ServiceQueryStatus | ServiceStop | DeleteAccess);
+                if (service == IntPtr.Zero) return;
+
+                var status = new ServiceStatus();
+                if (!QueryServiceStatus(service, ref status)) return;
+                if (status.CurrentState != ServiceStopped)
+                {
+                    ControlService(service, ServiceControlStop, ref status);
+                    Stopwatch wait = Stopwatch.StartNew();
+                    while (wait.ElapsedMilliseconds < 2000)
+                    {
+                        Thread.Sleep(50);
+                        if (!QueryServiceStatus(service, ref status)) return;
+                        if (status.CurrentState == ServiceStopped) break;
+                    }
+                }
+
+                if (status.CurrentState == ServiceStopped &&
+                    ActiveWinDivertSessions.IsEmpty)
+                {
+                    bool deleted = DeleteService(service);
+                    Debug.WriteLine(deleted
+                        ? "[WinDivert-Cleanup] 驱动服务已停止并删除。"
+                        : "[WinDivert-Cleanup] 驱动已停止，删除服务失败：" +
+                          Marshal.GetLastWin32Error());
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[WinDivert-Cleanup] " + ex.Message);
+            }
+            finally
+            {
+                if (service != IntPtr.Zero) CloseServiceHandle(service);
+                if (manager != IntPtr.Zero) CloseServiceHandle(manager);
+            }
         }
 
         private void SaveSettings()
@@ -1362,16 +1534,8 @@ namespace NetInfoCheckerX
             {
                 if (hasPending)
                     AppendColorText("\n正在查询地理位置...", Color.FromArgb(168, 165, 255), false);
-                using (var cts = new CancellationTokenSource(GeoEnrichmentUiWaitMs))
-                using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, cts.Token))
-                {
-                    try
-                    {
-                        while (_enrichPending.Count > 0 && !linked.Token.IsCancellationRequested)
-                            await Task.Delay(100, linked.Token);
-                    }
-                    catch { }
-                }
+                while (_enrichPending.Count > 0)
+                    await Task.Delay(100, token);
             }
 
             // 同步应用所有已完成的在线查询结果到 RichTextBox
@@ -1987,10 +2151,13 @@ namespace NetInfoCheckerX
             private readonly ConcurrentDictionary<int, WinDivertPendingProbe> _pending =
                 new ConcurrentDictionary<int, WinDivertPendingProbe>();
             private readonly Task _receiveTask;
+            private readonly int _sessionId;
             private int _pendingKey;
-            private int _stopped;
+            private int _stopRequested;
+            private int _cleanupCompleted;
 
             public int SourcePort { get; private set; }
+            public Trace Owner => _owner;
 
             private WinDivertTraceSession(Trace owner, IPAddress targetIp,
                 IPAddress localIp, string protocol, int targetPort, int sourcePort,
@@ -2005,6 +2172,8 @@ namespace NetInfoCheckerX
                 SourcePort = sourcePort;
                 _portReservation = portReservation;
                 _handle = handle;
+                _sessionId = Interlocked.Increment(ref _nextWinDivertSessionId);
+                ActiveWinDivertSessions[_sessionId] = this;
                 _receiveTask = Task.Run(ReceiveLoop);
             }
 
@@ -2241,15 +2410,24 @@ namespace NetInfoCheckerX
                 return result;
             }
 
-            public async Task StopAsync()
+            public void RequestStop()
             {
-                if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
-                _receiveCts.Cancel();
+                if (Interlocked.Exchange(ref _stopRequested, 1) != 0) return;
+                try { _receiveCts.Cancel(); } catch { }
                 try { WinDivertShutdown(_handle, WinDivertShutdownBoth); } catch { }
-                try { await _receiveTask; } catch { }
                 try { WinDivertClose(_handle); } catch { }
                 try { _portReservation?.Dispose(); } catch { }
-                _receiveCts.Dispose();
+                ActiveWinDivertSessions.TryRemove(_sessionId, out _);
+            }
+
+            public async Task StopAsync()
+            {
+                RequestStop();
+                try { await _receiveTask; } catch { }
+                if (Interlocked.Exchange(ref _cleanupCompleted, 1) == 0)
+                {
+                    try { _receiveCts.Dispose(); } catch { }
+                }
             }
         }
 
@@ -2586,21 +2764,22 @@ namespace NetInfoCheckerX
         }
 
         private async Task<HopResult> ProbeIPv6Hop(IPAddress targetIp, IPAddress localIp,
-            int ttl, int timeout, int probeCount, bool geoChecked, CancellationToken token)
+            int ttl, int timeout, int probeCount, bool geoChecked,
+            CancellationToken probeToken, CancellationToken geoToken)
         {
             var hop = new HopResult(ttl);
             for (int probe = 0; probe < probeCount; probe++)
             {
-                token.ThrowIfCancellationRequested();
-                if (probe > 0) await Task.Delay(40, token);
+                probeToken.ThrowIfCancellationRequested();
+                if (probe > 0) await Task.Delay(40, probeToken);
 
                 ushort sequence = NextUdpProbeId();
                 ProbeAttemptResult attempt = await ProbeIcmpV6Once(targetIp, localIp,
-                    ttl, timeout, sequence, token);
+                    ttl, timeout, sequence, probeToken);
                 if (attempt.Address != null)
                 {
                     if (hop.ReplyAddress == null && geoChecked)
-                        hop.GeoInfo = ResolveGeoInfo(attempt.Address.ToString(), token);
+                        hop.GeoInfo = ResolveGeoInfo(attempt.Address.ToString(), geoToken);
                     hop.ReplyAddress = attempt.Address;
                     hop.RTTs[probe] = attempt.RoundTripTime;
                     hop.TargetReached |= attempt.TargetReached;
@@ -2615,21 +2794,21 @@ namespace NetInfoCheckerX
 
         private async Task<HopResult> ProbeWinDivertHop(WinDivertTraceSession session,
             int ttl, int timeout, int probeCount, bool geoChecked,
-            CancellationToken token)
+            CancellationToken probeToken, CancellationToken geoToken)
         {
             var hop = new HopResult(ttl);
             for (int probe = 0; probe < probeCount; probe++)
             {
-                token.ThrowIfCancellationRequested();
-                if (probe > 0) await Task.Delay(40, token);
+                probeToken.ThrowIfCancellationRequested();
+                if (probe > 0) await Task.Delay(40, probeToken);
 
                 ushort probeId = NextUdpProbeId();
                 ProbeAttemptResult attempt = await session.ProbeAsync(ttl, timeout,
-                    probeId, token);
+                    probeId, probeToken);
                 if (attempt.Address != null)
                 {
                     if (hop.ReplyAddress == null && geoChecked)
-                        hop.GeoInfo = ResolveGeoInfo(attempt.Address.ToString(), token);
+                        hop.GeoInfo = ResolveGeoInfo(attempt.Address.ToString(), geoToken);
                     hop.ReplyAddress = attempt.Address;
                     hop.RTTs[probe] = attempt.RoundTripTime;
                     hop.TargetReached |= attempt.TargetReached;
@@ -2659,7 +2838,7 @@ namespace NetInfoCheckerX
                     {
                         if (delay > 0) await Task.Delay(delay, pipelineCts.Token);
                         return await ProbeIPv6Hop(targetIp, localIp, capturedTtl, timeout,
-                            4, geoChecked, pipelineCts.Token);
+                            4, geoChecked, pipelineCts.Token, token);
                     }, pipelineCts.Token);
                 }
 
@@ -2708,7 +2887,7 @@ namespace NetInfoCheckerX
                         {
                             if (delay > 0) await Task.Delay(delay, pipelineCts.Token);
                             return await ProbeWinDivertHop(session, capturedTtl,
-                                timeout, 3, geoChecked, pipelineCts.Token);
+                                timeout, 3, geoChecked, pipelineCts.Token, token);
                         }, pipelineCts.Token);
                     }
 
@@ -3002,7 +3181,7 @@ namespace NetInfoCheckerX
                                 {
                                     IPAddress addr = await icmpTcs.Task;
                                     if (result.ReplyAddress == null && geoChecked)
-                                        result.GeoInfo = ResolveGeoInfo(addr.ToString(), hopToken);
+                                        result.GeoInfo = ResolveGeoInfo(addr.ToString(), token);
                                     result.ReplyAddress = addr;
                                     result.RTTs[i] = sw.Elapsed.TotalMilliseconds;
                                     if (addr.Equals(targetIp))
@@ -3011,7 +3190,7 @@ namespace NetInfoCheckerX
                                 else if (tcpResultTask != null && completed == tcpResultTask)
                                 {
                                     if (result.ReplyAddress == null && geoChecked)
-                                        result.GeoInfo = ResolveGeoInfo(targetIp.ToString(), hopToken);
+                                        result.GeoInfo = ResolveGeoInfo(targetIp.ToString(), token);
                                     result.ReplyAddress = targetIp;
                                     result.RTTs[i] = sw.Elapsed.TotalMilliseconds;
                                     result.TargetReached = true;
@@ -3821,17 +4000,7 @@ namespace NetInfoCheckerX
         private void Trace_FormClosing(object sender, FormClosingEventArgs e)
         {
             SaveSettings();
-            // 1. 停止测试任务
-            if (isRunning)
-            {
-                isRunning = false;
-                SetUIState(false);
-                cts?.Cancel();
-            }
-            cts?.Dispose();
-            cts = null;
-
-            // 2. 检查是否需要还原防火墙设置
+            // 先确认窗口确实会关闭，避免用户在防火墙确认框点“取消”时误停测试。
             if (isManualChanged)
             {
                 bool curOn = IsFirewallEnabled();
@@ -3874,6 +4043,15 @@ namespace NetInfoCheckerX
                     return; // 梦酱注意：如果是取消，直接返回，不要执行后面的 Dispose
                 }
             }
+
+            // 停止属于当前窗口的测试与 WinDivert 会话。RequestStop 会立即关闭
+            // 原生 handle，不依赖异步 Trace 方法稍后执行 finally。
+            isRunning = false;
+            SetUIState(false);
+            try { cts?.Cancel(); } catch { }
+            StopWinDivertSessionsOwnedBy(this);
+            cts?.Dispose();
+            cts = null;
 
             try
             {
