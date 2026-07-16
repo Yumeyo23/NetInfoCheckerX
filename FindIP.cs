@@ -431,6 +431,11 @@ namespace NetInfoCheckerX
                 PingPP secondForm = new PingPP();
                 secondForm.Show();
             }
+            else if (e.Button == MouseButtons.Right)
+            {
+                string command = NetworkTestSettingsDialog.ShowPing(this, GetFormattedIP());
+                if (!string.IsNullOrEmpty(command)) RunCmd(command);
+            }
         }
 
         private void btnTra_MouseDown(object sender, MouseEventArgs e)
@@ -439,6 +444,11 @@ namespace NetInfoCheckerX
             {
                 Trace secondForm = new Trace();
                 secondForm.Show();
+            }
+            else if (e.Button == MouseButtons.Right)
+            {
+                string command = NetworkTestSettingsDialog.ShowTrace(this, GetFormattedIP());
+                if (!string.IsNullOrEmpty(command)) RunCmd(command);
             }
         }
 
