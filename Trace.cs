@@ -667,10 +667,9 @@ namespace NetInfoCheckerX
             string fontPath = Path.Combine(Application.StartupPath, "CascadiaMono.ttf");
             bool hasLocalFont = File.Exists(fontPath);
 
-            // 明确在程序旁放置了字体，即视为希望 Trace 使用它；
-            // 这样也能在 100% 缩放的开发机上直接验证。没有本地
-            // 字体时则仍保持原行为：只在高 DPI 下尝试系统 Cascadia。
-            if (!hasLocalFont && dpi <= 96F) return;
+            // 100% 缩放（96 DPI）保留设计器中的新宋体；只有缩放
+            // 高于 100% 时才尝试应用 Cascadia Mono。
+            if (dpi <= 96F) return;
 
             // 优先使用主程序旁的 TTF。AddFontResourceEx(FR_PRIVATE) 只在
             // 本进程内注册，不会安装到 Windows 字体目录。
@@ -1640,7 +1639,7 @@ namespace NetInfoCheckerX
                     if (_geoCache.ContainsKey(ip)) { Debug.WriteLine($"[GEO-Trace] 跳过(已缓存) ip={ip}"); return; }
                     var provider = Api2.GeoCN_Providers[_activeGeoOnlineIndex];
                     await WaitForGeoRequestSlotAsync(token);
-                    GeoResult geoResult = await provider.GetGeoTask(ip, token);
+                    GeoResult geoResult = await provider.GetGeoTaskIgnoringPrivacy(ip, token);
                     sw.Stop();
                     string enriched = GetOnlineGeoOrLocalFallback(ip, geoResult,
                         out bool usedOnlineResult);
@@ -1794,7 +1793,7 @@ namespace NetInfoCheckerX
                 }
                 var provider = Api2.GeoCN_Providers[_activeGeoOnlineIndex];
                 await WaitForGeoRequestSlotAsync(token);
-                GeoResult geoResult = await provider.GetGeoTask(ip, token);
+                GeoResult geoResult = await provider.GetGeoTaskIgnoringPrivacy(ip, token);
                 sw.Stop();
                 string enriched = GetOnlineGeoOrLocalFallback(ip, geoResult,
                     out bool usedOnlineResult);
