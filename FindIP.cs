@@ -237,7 +237,7 @@ namespace NetInfoCheckerX
 
                 var provider = Api2.GeoCN_Providers[index];
 
-                var queryTask = provider.GetGeoTask(ip, cts.Token);
+                var queryTask = provider.GetGeoTaskIgnoringPrivacy(ip, cts.Token);
 
                 lock (_queryLock)
                 {
