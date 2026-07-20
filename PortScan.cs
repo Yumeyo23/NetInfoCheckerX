@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -44,6 +46,7 @@ namespace NetInfoCheckerX
                 WritePrivateProfileString(IniSection, "Port", CleanPortsText(txtPort.Text), IniPath);
                 WritePrivateProfileString(IniSection, "Threads", txtThreads.Text.Replace("\r\n", "").Replace("\n", ""), IniPath);
                 WritePrivateProfileString(IniSection, "Timeout", txtTimeout.Text.Replace("\r\n", "").Replace("\n", ""), IniPath);
+                WritePrivateProfileString(IniSection, "TuningVersion", "2", IniPath);
             }
             catch { }
         }
@@ -54,20 +57,49 @@ namespace NetInfoCheckerX
             {
                 var sb = new StringBuilder(256);
                 string val;
+                GetPrivateProfileString(IniSection, "TuningVersion", "", sb, sb.Capacity, IniPath);
+                bool needsTuningMigration = sb.ToString() != "2";
                 GetPrivateProfileString(IniSection, "Target", "", sb, sb.Capacity, IniPath);
                 if (!string.IsNullOrEmpty(val = sb.ToString())) txtTarget.Text = val;
                 GetPrivateProfileString(IniSection, "Port", "", sb, sb.Capacity, IniPath);
                 if (!string.IsNullOrEmpty(val = sb.ToString())) txtPort.Text = val;
                 GetPrivateProfileString(IniSection, "Threads", "", sb, sb.Capacity, IniPath);
-                if (!string.IsNullOrEmpty(val = sb.ToString())) txtThreads.Text = val;
+                if (!string.IsNullOrEmpty(val = sb.ToString()))
+                    txtThreads.Text = needsTuningMigration && (val == "256" || val == "100") ? "64" : val;
                 GetPrivateProfileString(IniSection, "Timeout", "", sb, sb.Capacity, IniPath);
-                if (!string.IsNullOrEmpty(val = sb.ToString())) txtTimeout.Text = val;
+                if (!string.IsNullOrEmpty(val = sb.ToString()))
+                    txtTimeout.Text = needsTuningMigration && (val == "300" || val == "30") ? "500" : val;
             }
             catch { }
         }
         private readonly string commonPorts = "21-23,53,80,110,123,143,443,445,465,587,1433,1900,3306,3389,4000,5000,5201,5900,6000,7890-7895,8000,8080,8888,8989,9000,9090,9833,9987,9999";
         private CancellationTokenSource _cts;
-        private bool _isScanning = false;      // 记录当前是否正在扫描
+        private bool _isScanning = false;
+
+        private enum PortScanState
+        {
+            Open,
+            Closed,
+            TimedOut,
+            Cancelled,
+            Error
+        }
+
+        private sealed class ScanProgressInfo
+        {
+            public int Completed { get; set; }
+            public int? OpenPort { get; set; }
+        }
+
+        private sealed class ScanSummary
+        {
+            public int Completed;
+            public int Open;
+            public int Closed;
+            public int TimedOut;
+            public int Errors;
+            public readonly ConcurrentBag<int> OpenPorts = new ConcurrentBag<int>();
+        }
 
         public PortScan()
         {
@@ -78,7 +110,7 @@ namespace NetInfoCheckerX
         {
             string selectedText = comboLocalEnd.Text;
             if (string.IsNullOrEmpty(selectedText)) return;
-            if (selectedText.Contains("Any") || selectedText.StartsWith("0.0.0.0") || selectedText.StartsWith("::")) return;
+            if (selectedText.Contains("Any") || selectedText.StartsWith("0.0.0.0", StringComparison.Ordinal)) return;
 
             InitNetworkInterfaces();
 
@@ -230,7 +262,7 @@ namespace NetInfoCheckerX
 
         private void btnFull_Click(object sender, EventArgs e)
         {
-            txtPort.Text = "0-65535";
+            txtPort.Text = "1-65535";
         }
 
         private void btnSave_Click(object sender, EventArgs e)
@@ -266,44 +298,82 @@ namespace NetInfoCheckerX
                 }
             }
         }
-        private List<int> ParsePorts(string input)
+        private bool TryParsePorts(string input, out List<int> ports, out string error)
         {
-            string cleaned = Regex.Replace(input.Replace("，", ","), @"[^0-9,\-]", "");
-            List<int> portList = new List<int>();
-
-            try
+            ports = new List<int>();
+            error = null;
+            if (string.IsNullOrWhiteSpace(input))
             {
-                string[] parts = cleaned.Split(',');
-                foreach (var part in parts)
+                error = "请输入要扫描的端口。";
+                return false;
+            }
+
+            var uniquePorts = new SortedSet<int>();
+            string normalized = input.Replace("，", ",")
+                .Replace("\r\n", ",").Replace("\n", ",").Replace("\r", ",");
+
+            foreach (string rawPart in normalized.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string part = rawPart.Trim();
+                int separator = part.IndexOf('-');
+                if (separator >= 0)
                 {
-                    if (part.Contains("-"))
+                    if (separator != part.LastIndexOf('-') ||
+                        !int.TryParse(part.Substring(0, separator).Trim(), out int start) ||
+                        !int.TryParse(part.Substring(separator + 1).Trim(), out int end))
                     {
-                        var range = part.Split('-');
-                        if (range.Length == 2 && int.TryParse(range[0], out int start) && int.TryParse(range[1], out int end))
-                        {
-                            for (int i = Math.Min(start, end); i <= Math.Max(start, end); i++)
-                                if (i >= 0 && i <= 65535) portList.Add(i);
-                        }
+                        error = $"无法识别端口范围：{part}";
+                        return false;
                     }
-                    else if (int.TryParse(part, out int port))
+
+                    int first = Math.Min(start, end);
+                    int last = Math.Max(start, end);
+                    if (first < 1 || last > 65535)
                     {
-                        if (port >= 0 && port <= 65535) portList.Add(port);
+                        error = $"端口必须在 1-65535 之间：{part}";
+                        return false;
                     }
+
+                    for (int port = first; port <= last; port++) uniquePorts.Add(port);
+                }
+                else
+                {
+                    if (!int.TryParse(part, out int port) || port < 1 || port > 65535)
+                    {
+                        error = $"端口必须在 1-65535 之间：{part}";
+                        return false;
+                    }
+                    uniquePorts.Add(port);
                 }
             }
-            catch { }
-            return portList.Distinct().ToList();
+
+            ports = uniquePorts.ToList();
+            if (ports.Count == 0)
+            {
+                error = "没有找到有效的端口。";
+                return false;
+            }
+            return true;
         }
 
-        private string GetFormattedIP()
+        private string GetFormattedTarget()
         {
             string raw = txtTarget.Text.Trim();
-
-            raw = Regex.Replace(raw, @"[^a-zA-Z0-9\.\:\-]", "");
-
             if (string.IsNullOrEmpty(raw))
             {
                 SystemSounds.Beep.Play();
+                return String.Empty;
+            }
+
+            // 兼容从浏览器复制的 URL，以及带方括号的 IPv6 地址。
+            if (Uri.TryCreate(raw, UriKind.Absolute, out Uri uri) && !string.IsNullOrEmpty(uri.Host))
+                raw = uri.Host;
+            if (raw.Length > 2 && raw[0] == '[' && raw[raw.Length - 1] == ']')
+                raw = raw.Substring(1, raw.Length - 2);
+
+            if (raw.Any(char.IsWhiteSpace) || raw.IndexOfAny(new[] { '/', '\\', '?', '#', '@' }) >= 0)
+            {
+                MessageBox.Show("目标地址格式不正确。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return String.Empty;
             }
 
@@ -312,36 +382,51 @@ namespace NetInfoCheckerX
 
         private async void btnOK_Click(object sender, EventArgs e)
         {
-            // 自动刷新网卡（若当前选中的网卡已不存在）
+            if (_isScanning)
+            {
+                btnOK.Text = "正在停止";
+                _cts?.Cancel();
+                return;
+            }
+
             EnsureSelectedNICValid();
-
-            if (_isScanning) { _cts?.Cancel(); return; }
-
-            string target = GetFormattedIP();
+            string target = GetFormattedTarget();
             if (string.IsNullOrEmpty(target)) return;
 
-            IPAddress targetIp;
-            try
+            if (!TryParsePorts(txtPort.Text, out List<int> ports, out string portError))
             {
-                targetIp = Dns.GetHostAddresses(target).FirstOrDefault();
-                if (targetIp == null) throw new Exception();
+                MessageBox.Show(portError, "端口格式不正确", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
             }
-            catch
+            if (!int.TryParse(txtThreads.Text, out int concurrency) || concurrency < 1)
             {
-                MessageBox.Show("无法解析目标地址");
+                MessageBox.Show("并发数请输入大于 0 的整数。", "扫描设置不正确", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (concurrency > 1000)
+            {
+                concurrency = 1000;
+                txtThreads.Text = "1000";
+            }
+            if (!int.TryParse(txtTimeout.Text, out int timeout) || timeout < 10 || timeout > 60000)
+            {
+                MessageBox.Show("超时时间请输入 10-60000 毫秒。", "扫描设置不正确", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             IPAddress selectedIp = GetSelectedLocalIP();
-            IPAddress actualLocalIp = GetActualLocalIP(target, selectedIp);
-
-            if (actualLocalIp.AddressFamily != targetIp.AddressFamily)
+            IPAddress targetIp;
+            try
             {
-                string localVer = actualLocalIp.AddressFamily == AddressFamily.InterNetwork ? "IPv4" : "IPv6";
-                string targetVer = targetIp.AddressFamily == AddressFamily.InterNetwork ? "IPv4" : "IPv6";
-                MessageBox.Show($"本地 {localVer}, 目标 {targetVer}。", "协议不太对");
+                targetIp = await ResolveTargetAsync(target, selectedIp.AddressFamily);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"无法解析目标地址：{ex.Message}", "解析失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+
+            IPAddress actualLocalIp = GetActualLocalIP(targetIp, selectedIp);
 
             if (selectedIp.Equals(IPAddress.Any) || selectedIp.Equals(IPAddress.IPv6Any))
             {
@@ -364,96 +449,72 @@ namespace NetInfoCheckerX
                 }
             }
 
-            string finalLocalInfo = comboLocalEnd.SelectedItem.ToString();
-            List<int> ports = ParsePorts(txtPort.Text);
-            if (!int.TryParse(txtThreads.Text, out int threadCount)) threadCount = 100;
-            if (!int.TryParse(txtTimeout.Text, out int timeout)) timeout = 30;
-
+            string finalLocalInfo = comboLocalEnd.SelectedItem?.ToString() ?? actualLocalIp.ToString();
+            var scanCts = new CancellationTokenSource();
+            _cts = scanCts;
             _isScanning = true;
-            _cts = new CancellationTokenSource();
             btnOK.Text = "停止";
             SetControlsEnabled(false);
             richResult.Clear();
 
-            richResult.AppendText($"[扫描目标] {target} 的 {txtPort.Text.Trim()} 端口\n");
+            richResult.AppendText($"[扫描目标] {target} ({targetIp}) / {ports.Count} 个端口\n");
             richResult.AppendText($"[使用网卡] {finalLocalInfo}\n");
-            richResult.AppendText($"[扫描设置] 线程 {threadCount} / 超时 {timeout}ms\n");
+            richResult.AppendText($"[扫描设置] 并发 {concurrency} / 超时 {timeout}ms\n");
             richResult.AppendText($"[开始时间] {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n");
             richResult.AppendText("[TCP端口] ");
             richResult.ScrollToCaret();
 
             List<int> foundPortsList = new List<int>();
-            var progress = new Progress<int>(port =>
+            int displayedCompleted = 0;
+            var progress = new Progress<ScanProgressInfo>(info =>
             {
-                if (!this.IsDisposed && this.IsHandleCreated)
-                {
-                    foundPortsList.Add(port);
-                    foundPortsList.Sort(); // 实时排序
+                if (IsDisposed || !IsHandleCreated) return;
 
-                    StringBuilder sb = new StringBuilder();
-                    sb.Append("[TCP端口] ");
-                    foreach (int p in foundPortsList)
-                    {
-                        string note = portNotes.ContainsKey(p) ? $"({portNotes[p]})" : "";
-                        sb.Append($"{p}{note}, ");
-                    }
-                    UpdateTcpPortLine(sb.ToString()); // 替换旧行实现整齐输出
+                displayedCompleted = Math.Max(displayedCompleted, info.Completed);
+                if (_isScanning) btnOK.Text = $"{displayedCompleted}/{ports.Count}";
+
+                if (info.OpenPort.HasValue && !foundPortsList.Contains(info.OpenPort.Value))
+                {
+                    foundPortsList.Add(info.OpenPort.Value);
+                    UpdateTcpPortLine(BuildOpenPortsLine(foundPortsList));
                 }
             });
 
-            await Task.Run(async () =>
+            var watch = Stopwatch.StartNew();
+            ScanSummary summary = null;
+            try
             {
-                try
+                summary = await Task.Run(() => ScanPortsAsync(targetIp, actualLocalIp, ports, concurrency,
+                    timeout, progress, scanCts.Token));
+            }
+            catch (Exception ex)
+            {
+                if (!IsDisposed)
+                    richResult.AppendText($"\n[扫描异常] {ex.Message}");
+            }
+            finally
+            {
+                watch.Stop();
+                if (!IsDisposed)
                 {
-                    using (var semaphore = new SemaphoreSlim(threadCount))
+                    if (summary != null)
                     {
-                        var tasks = new List<Task>();
-                        foreach (int port in ports)
-                        {
-                            if (_cts.Token.IsCancellationRequested) break;
-                            await semaphore.WaitAsync(_cts.Token);
-
-                            tasks.Add(Task.Run(async () =>
-                            {
-                                try
-                                {
-                                    int result = await ScanPortFast(target, port, actualLocalIp, timeout, _cts.Token);
-                                    if (result != -1)
-                                    {
-                                        ((IProgress<int>)progress).Report(result);
-                                    }
-
-                                    // 更新按钮进度提示
-                                    if (port % 100 == 0)
-                                    {
-                                        this.BeginInvoke(new Action(() => { if (!this.IsDisposed) btnOK.Text = $"P:{port}"; }));
-                                    }
-                                }
-                                finally
-                                {
-                                    semaphore.Release();
-                                }
-                            }));
-                        }
-                        await Task.WhenAll(tasks);
+                        UpdateTcpPortLine(BuildOpenPortsLine(summary.OpenPorts));
+                        richResult.AppendText($"\n[扫描统计] 本次扫描 {summary.Completed}/{ports.Count}，扫到{summary.Open}，" +
+                            $"超时{summary.TimedOut}，错误{summary.Errors}");
                     }
+                    richResult.AppendText(scanCts.IsCancellationRequested
+                        ? $"\n[停止扫描] 用时 {watch.Elapsed.TotalSeconds:F1} 秒"
+                        : $"\n[扫描完成] {DateTime.Now:yyyy-MM-dd HH:mm:ss} / 用时 {watch.Elapsed.TotalSeconds:F1} 秒");
+                    btnOK.Text = "开扫";
+                    SetControlsEnabled(true);
+                    richResult.ScrollToCaret();
                 }
-                catch (OperationCanceledException)
-                {
-                    this.BeginInvoke(new Action(() => { richResult.AppendText("\n[用户手动停止扫描]"); }));
-                }
-                finally
-                {
-                    this.BeginInvoke(new Action(() =>
-                    {
-                        _isScanning = false;
-                        btnOK.Text = "开扫";
-                        SetControlsEnabled(true);
-                        richResult.AppendText($"\n[扫描完成] {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-                        richResult.ScrollToCaret();
-                    }));
-                }
-            });
+
+                _isScanning = false;
+                if (ReferenceEquals(_cts, scanCts)) _cts = null;
+                scanCts.Dispose();
+            }
         }
 
         // 辅助方法：精准替换最后一行扫描结果，防止刷屏
@@ -462,20 +523,31 @@ namespace NetInfoCheckerX
             int start = richResult.Find("[TCP端口]");
             if (start >= 0)
             {
-                // 选中从"[TCP端口]"开始到结尾的所有文本
-                richResult.Select(start, richResult.TextLength - start);
-                // 替换为排序后的新文本
+                int lineEnd = richResult.Text.IndexOf('\n', start);
+                int length = (lineEnd < 0 ? richResult.TextLength : lineEnd) - start;
+                richResult.Select(start, length);
                 richResult.SelectedText = newLineText;
             }
         }
+
+        private string BuildOpenPortsLine(IEnumerable<int> openPorts)
+        {
+            var sb = new StringBuilder("[TCP端口] ");
+            foreach (int port in openPorts.Distinct().OrderBy(p => p))
+            {
+                string note = portNotes.TryGetValue(port, out string value) ? $"({value})" : "";
+                sb.Append($"{port}{note}, ");
+            }
+            return sb.ToString();
+        }
+
         private IPAddress GetSelectedLocalIP()
         {
-            string selectedItem = "";
-            // 跨线程访问 UI 加上 Invoke
-            this.Invoke(new Action(() => { selectedItem = comboLocalEnd.SelectedItem?.ToString() ?? ""; }));
+            string selectedItem = comboLocalEnd.SelectedItem?.ToString() ?? "";
 
-            if (selectedItem.Contains("0.0.0.0")) return IPAddress.Any;
-            if (selectedItem.Contains("::")) return IPAddress.IPv6Any;
+            if (selectedItem.StartsWith("0.0.0.0", StringComparison.Ordinal)) return IPAddress.Any;
+            if (selectedItem.StartsWith(":: (IPv6 Any)", StringComparison.Ordinal) || selectedItem == "::")
+                return IPAddress.IPv6Any;
 
             string ipPart = selectedItem.Split(' ')[0];
             if (IPAddress.TryParse(ipPart, out IPAddress ip)) return ip;
@@ -566,44 +638,172 @@ namespace NetInfoCheckerX
             {9090, "Prometheus/WebUI"}
         };
 
-        // 极速扫描核心方法
-        private async Task<int> ScanPortFast(string host, int port, IPAddress localIp, int timeout, CancellationToken ct)
+        private async Task<IPAddress> ResolveTargetAsync(string target, AddressFamily addressFamily)
         {
-            using (Socket socket = new Socket(localIp.AddressFamily, SocketType.Stream, ProtocolType.Tcp))
+            if (IPAddress.TryParse(target, out IPAddress literalAddress))
             {
-                try
+                if (literalAddress.AddressFamily != addressFamily)
+                    throw new InvalidOperationException($"当前出口网卡使用 {(addressFamily == AddressFamily.InterNetwork ? "IPv4" : "IPv6")}，与目标地址不匹配");
+                return literalAddress;
+            }
+
+            IPAddress[] addresses = await Task.Run(() => Dns.GetHostAddresses(target)).ConfigureAwait(false);
+            IPAddress result = addresses.FirstOrDefault(ip => ip.AddressFamily == addressFamily);
+            if (result == null)
+                throw new InvalidOperationException($"域名没有可用的 {(addressFamily == AddressFamily.InterNetwork ? "IPv4" : "IPv6")} 地址");
+            return result;
+        }
+
+        private async Task<ScanSummary> ScanPortsAsync(IPAddress targetIp, IPAddress localIp,
+            IList<int> ports, int concurrency, int timeout, IProgress<ScanProgressInfo> progress,
+            CancellationToken cancellationToken)
+        {
+            var summary = new ScanSummary();
+            int nextIndex = -1;
+            int workerCount = Math.Min(concurrency, ports.Count);
+            var cancellationSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            using (cancellationToken.Register(() => cancellationSignal.TrySetResult(true)))
+            {
+                Func<Task> worker = async () =>
                 {
-                    // 优化：让 Socket 关闭后立即释放端口，不进入 TIME_WAIT 状态
-                    socket.LingerState = new LingerOption(true, 0);
-                    socket.NoDelay = true; // 禁用 Nagle 算法，减少延迟
-
-                    socket.Bind(new IPEndPoint(localIp, 0));
-
-                    // 使用 TaskCompletionSource 把回调转为 await，性能更强
-                    var tcs = new TaskCompletionSource<bool>();
-                    using (ct.Register(() => tcs.TrySetCanceled()))
+                    while (!cancellationToken.IsCancellationRequested)
                     {
-                        var args = new SocketAsyncEventArgs { RemoteEndPoint = new IPEndPoint(IPAddress.Parse(host), port) };
-                        args.Completed += (s, e) => tcs.TrySetResult(e.SocketError == SocketError.Success);
+                        int index = Interlocked.Increment(ref nextIndex);
+                        if (index >= ports.Count) break;
 
-                        if (!socket.ConnectAsync(args)) tcs.TrySetResult(args.SocketError == SocketError.Success);
+                        int port = ports[index];
+                        PortScanState firstState = await ScanPortAsync(targetIp, port, localIp, timeout,
+                            cancellationSignal.Task).ConfigureAwait(false);
+                        if (firstState == PortScanState.Cancelled) break;
 
-                        var timeoutTask = Task.Delay(timeout, ct);
-                        if (await Task.WhenAny(tcs.Task, timeoutTask) == tcs.Task && await tcs.Task)
+                        // 每个端口首轮结束后立即重新建立一次独立连接，不区分端口号和扫描规模。
+                        PortScanState secondState = await ScanPortAsync(targetIp, port, localIp, timeout,
+                            cancellationSignal.Task).ConfigureAwait(false);
+                        if (secondState == PortScanState.Cancelled) break;
+
+                        PortScanState finalState = CombineScanStates(firstState, secondState);
+                        IncrementSummaryState(summary, finalState);
+                        int? openPort = null;
+                        if (finalState == PortScanState.Open)
                         {
-                            return port;
+                            summary.OpenPorts.Add(port);
+                            openPort = port;
                         }
+                        int completed = Interlocked.Increment(ref summary.Completed);
+                        if (openPort.HasValue || completed % 128 == 0 || completed == ports.Count)
+                            progress?.Report(new ScanProgressInfo { Completed = completed, OpenPort = openPort });
                     }
-                }
-                catch { }
-                return -1;
+                };
+
+                var workers = new Task[workerCount];
+                for (int i = 0; i < workers.Length; i++) workers[i] = worker();
+                await Task.WhenAll(workers).ConfigureAwait(false);
+            }
+
+            return summary;
+        }
+
+        private static PortScanState CombineScanStates(PortScanState first, PortScanState second)
+        {
+            if (first == PortScanState.Open || second == PortScanState.Open) return PortScanState.Open;
+            if (first == PortScanState.Closed || second == PortScanState.Closed) return PortScanState.Closed;
+            if (first == PortScanState.TimedOut || second == PortScanState.TimedOut) return PortScanState.TimedOut;
+            return PortScanState.Error;
+        }
+
+        private static void IncrementSummaryState(ScanSummary summary, PortScanState state)
+        {
+            switch (state)
+            {
+                case PortScanState.Open:
+                    Interlocked.Increment(ref summary.Open);
+                    break;
+                case PortScanState.Closed:
+                    Interlocked.Increment(ref summary.Closed);
+                    break;
+                case PortScanState.TimedOut:
+                    Interlocked.Increment(ref summary.TimedOut);
+                    break;
+                default:
+                    Interlocked.Increment(ref summary.Errors);
+                    break;
             }
         }
 
-        //获取出口IP的方法
-        private IPAddress GetActualLocalIP(string targetHost, IPAddress selectedIp)
+        private async Task<PortScanState> ScanPortAsync(IPAddress targetIp, int port,
+            IPAddress localIp, int timeout, Task cancellationTask)
         {
-            // 如果梦酱选的是明确的 IP，直接返回
+            using (var socket = new Socket(targetIp.AddressFamily, SocketType.Stream, ProtocolType.Tcp))
+            using (var args = new SocketAsyncEventArgs())
+            using (var timeoutCts = new CancellationTokenSource())
+            {
+                var completion = new TaskCompletionSource<SocketError>(TaskCreationOptions.RunContinuationsAsynchronously);
+                EventHandler<SocketAsyncEventArgs> completedHandler = (sender, eventArgs) =>
+                    completion.TrySetResult(eventArgs.SocketError);
+                args.Completed += completedHandler;
+                args.RemoteEndPoint = new IPEndPoint(targetIp, port);
+
+                try
+                {
+                    // RST 关闭已连接的探测 Socket，避免全端口扫描积累大量 TIME_WAIT。
+                    socket.LingerState = new LingerOption(true, 0);
+                    socket.Bind(new IPEndPoint(localIp, 0));
+
+                    if (!socket.ConnectAsync(args)) completion.TrySetResult(args.SocketError);
+
+                    Task timeoutTask = Task.Delay(timeout, timeoutCts.Token);
+                    Task winner = await Task.WhenAny(completion.Task, timeoutTask, cancellationTask).ConfigureAwait(false);
+                    if (winner != completion.Task)
+                    {
+                        try { socket.Close(); } catch { }
+                        try { await completion.Task.ConfigureAwait(false); } catch { }
+                        if (winner == cancellationTask) return PortScanState.Cancelled;
+                        return PortScanState.TimedOut;
+                    }
+
+                    timeoutCts.Cancel();
+                    SocketError socketError = await completion.Task.ConfigureAwait(false);
+                    return ClassifySocketError(socketError);
+                }
+                catch (SocketException ex)
+                {
+                    return ClassifySocketError(ex.SocketErrorCode);
+                }
+                catch (ObjectDisposedException)
+                {
+                    return cancellationTask.IsCompleted ? PortScanState.Cancelled : PortScanState.Error;
+                }
+                catch
+                {
+                    return PortScanState.Error;
+                }
+                finally
+                {
+                    args.Completed -= completedHandler;
+                }
+            }
+        }
+
+        private static PortScanState ClassifySocketError(SocketError socketError)
+        {
+            switch (socketError)
+            {
+                case SocketError.Success:
+                    return PortScanState.Open;
+                case SocketError.ConnectionRefused:
+                case SocketError.ConnectionReset:
+                    return PortScanState.Closed;
+                case SocketError.TimedOut:
+                    return PortScanState.TimedOut;
+                default:
+                    return PortScanState.Error;
+            }
+        }
+
+        // 获取系统路由到目标地址时实际使用的本地 IP。
+        private IPAddress GetActualLocalIP(IPAddress targetIp, IPAddress selectedIp)
+        {
             if (!selectedIp.Equals(IPAddress.Any) && !selectedIp.Equals(IPAddress.IPv6Any))
             {
                 return selectedIp;
@@ -611,14 +811,9 @@ namespace NetInfoCheckerX
 
             try
             {
-                // 尝试解析目标地址（处理域名或IP）
-                IPAddress targetIp = Dns.GetHostAddresses(targetHost).FirstOrDefault();
-                if (targetIp == null) return selectedIp;
-
-                // 利用 UDP 的 Connect 不产生流量的特性，探测系统路由表
                 using (Socket socket = new Socket(targetIp.AddressFamily, SocketType.Dgram, ProtocolType.Udp))
                 {
-                    socket.Connect(targetIp, 1); // 端口是多少不重要
+                    socket.Connect(targetIp, 1);
                     return ((IPEndPoint)socket.LocalEndPoint).Address;
                 }
             }
@@ -631,10 +826,8 @@ namespace NetInfoCheckerX
             SaveSettings();
             if (_isScanning)
             {
-                _cts?.Cancel(); // 告诉扫描任务赶紧停下
+                _cts?.Cancel();
             }
-            _cts?.Dispose();
-            _cts = null;
         }
 
         private void txtTarget_KeyDown(object sender, KeyEventArgs e)
