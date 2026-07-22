@@ -79,11 +79,11 @@ namespace NetInfoCheckerX
         private const int StatsIntervalMs = 200;
         private bool _forceStats;
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern int WritePrivateProfileString(string section, string key, string value, string filePath);
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern int GetPrivateProfileString(string section, string key, string defaultValue,
-            StringBuilder buffer, int size, string filePath);
+        private static int WritePrivateProfileString(string section, string key, string value, string filePath)
+            => IniFileHelper.WritePrivateProfileString(section, key, value, filePath);
+        private static int GetPrivateProfileString(string section, string key, string defaultValue,
+            StringBuilder buffer, int size, string filePath)
+            => IniFileHelper.GetPrivateProfileString(section, key, defaultValue, buffer, size, filePath);
         [DllImport("winmm.dll")]
         private static extern int timeBeginPeriod(uint uPeriod);
         [DllImport("winmm.dll")]
@@ -247,6 +247,8 @@ namespace NetInfoCheckerX
             {
                 try
                 {
+                    if (targetAddr.AddressFamily == AddressFamily.InterNetwork)
+                        socket.DontFragment = true;
                     socket.Bind(GetLocalEndPoint());
                     socket.ReceiveTimeout = timeout;
 
@@ -965,22 +967,21 @@ namespace NetInfoCheckerX
 
                     if (radioICMP.Checked)
                     {
-                        using (Ping warmUpPing = new Ping())
+                        try
                         {
-                            var firstTask = warmUpPing.SendPingAsync(finalIP, 100);
-                            if (await Task.WhenAny(firstTask, Task.Delay(100, warmupCts.Token)) == firstTask)
+                            IPAddress warmupAddr;
+                            if (!IPAddress.TryParse(finalIP, out warmupAddr))
+                                warmupAddr = (await Dns.GetHostAddressesAsync(finalIP)).FirstOrDefault();
+                            if (warmupAddr != null)
                             {
-                                await firstTask;
-                            }
-
-                            await Task.Delay(10, warmupCts.Token);
-
-                            var secondTask = warmUpPing.SendPingAsync(finalIP, timeout);
-                            if (await Task.WhenAny(secondTask, Task.Delay(200, warmupCts.Token)) == secondTask)
-                            {
-                                await secondTask;
+                                using (Ping warmUpPing = new Ping())
+                                {
+                                    await warmUpPing.SendPingAsync(warmupAddr, Math.Min(timeout, 1000),
+                                        new byte[32], new PingOptions(128, true));
+                                }
                             }
                         }
+                        catch { }
                     }
                     else if (radioTCP.Checked)
                     {
@@ -1239,66 +1240,80 @@ namespace NetInfoCheckerX
             byte[] buffer = new byte[bufferSize];
             FillRandomBytes(buffer);
 
+            IPAddress targetAddr;
+            if (!IPAddress.TryParse(targetIp, out targetAddr))
+            {
+                try { targetAddr = (await Dns.GetHostAddressesAsync(targetIp)).FirstOrDefault(); }
+                catch { lossCount++; UpdateStats(); return; }
+            }
+            if (targetAddr == null) { lossCount++; UpdateStats(); return; }
+
+            var options = new PingOptions(128, true);
+
             using (Ping pingSender = new Ping())
             {
+                string timeStr = GetTimeStr();
+                int currentTotal = successCount + lossCount + 1;
+
                 try
                 {
-                    string timeStr = GetTimeStr();
-                    int currentTotal = successCount + lossCount + 1;
+                    PingReply reply = await pingSender.SendPingAsync(targetAddr, timeout, buffer, options);
 
-                    Task<PingReply> pingTask = pingSender.SendPingAsync(targetIp, timeout, buffer);
-                    var completedTask = await Task.WhenAny(pingTask, Task.Delay(timeout, token));
-
-                    if (completedTask == pingTask)
+                    if (reply.Status == IPStatus.Success)
                     {
-                        PingReply reply = await pingTask;
+                        double rtt = reply.RoundtripTime;
+                        if (rtt < 0.1) rtt = 0.1;
 
-                        if (reply.Status == IPStatus.Success)
-                        {
-                            double rtt = reply.RoundtripTime;
-                            if (rtt < 0.1) rtt = 0.1;
-
-                            if (rtt > timeout)
-                            {
-                                lossCount++;
-                                AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
-                                AppendColorText($"ICMP失败: 实际延迟{FormatRtt(rtt)}ms > 超时{timeout}ms", Color.Red, true);
-                            }
-                            else
-                            {
-                                successCount++;
-                                UpdateDelay(rtt);
-                                PrintTestSettings("系统默认 (ICMP兼容模式)");
-
-                                Color rowColor = GetRttColor(rtt);
-                                AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
-                                string ttlInfo = "";
-                                if (reply.Address.AddressFamily == AddressFamily.InterNetwork)
-                                {
-                                    ttlInfo = $" TTL={reply.Options?.Ttl}";
-                                }
-                                if (rtt == 0.1)
-                                {
-                                    AppendColorText($"ICMP成功: {reply.Address} <1ms{ttlInfo}", rowColor, true);
-                                }
-                                else
-                                {
-                                    AppendColorText($"ICMP成功: {reply.Address} ={FormatRtt(rtt)}ms{ttlInfo}", rowColor, true);
-                                }
-                            }
-                        }
-                        else
+                        if (rtt > timeout)
                         {
                             lossCount++;
                             AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
-                            AppendColorText($"ICMP失败: {reply.Status}", Color.Red, true);
+                            AppendColorText($"ICMP失败: 实际延迟{FormatRtt(rtt)}ms > 超时{timeout}ms", Color.Red, true);
+                        }
+                        else
+                        {
+                            successCount++;
+                            UpdateDelay(rtt);
+                            PrintTestSettings("系统默认 (ICMP兼容模式)");
+
+                            Color rowColor = GetRttColor(rtt);
+                            AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
+                            string ttlInfo = "";
+                            if (reply.Address.AddressFamily == AddressFamily.InterNetwork)
+                            {
+                                ttlInfo = $" TTL={reply.Options?.Ttl}";
+                            }
+                            if (rtt == 0.1)
+                            {
+                                AppendColorText($"ICMP成功: {reply.Address} <1ms{ttlInfo}", rowColor, true);
+                            }
+                            else
+                            {
+                                AppendColorText($"ICMP成功: {reply.Address} ={FormatRtt(rtt)}ms{ttlInfo}", rowColor, true);
+                            }
                         }
                     }
                     else
                     {
                         lossCount++;
                         AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
-                        AppendColorText($"ICMP失败: 请求超时({timeout}ms)", Color.Red, true);
+                        AppendColorText($"ICMP失败: {reply.Status}", Color.Red, true);
+                    }
+                }
+                catch (PingException pex)
+                {
+                    if (pex.InnerException is OperationCanceledException) { }
+                    else if (!token.IsCancellationRequested)
+                    {
+                        if (IsRepeatingException(pex.Message))
+                        {
+                            _fatalError = true;
+                            _fatalErrorMessage = $"[ICMP] {pex.Message}";
+                            return;
+                        }
+                        lossCount++;
+                        AppendColorText($"[{GetTimeStr()}] ", GetTimestampColor(), false);
+                        AppendColorText($"ICMP错误: {pex.Message}", Color.Yellow, true);
                     }
                 }
                 catch (Exception ex)
@@ -1349,6 +1364,7 @@ namespace NetInfoCheckerX
                 try
                 {
                     raw = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.Icmp);
+                    raw.DontFragment = true;
                     raw.Bind(localEndPoint);
 
                     try
@@ -1369,47 +1385,46 @@ namespace NetInfoCheckerX
                     int currentTotal = successCount + lossCount + 1;
                     Stopwatch sw = Stopwatch.StartNew();
 
-                    byte[] recvBuffer = new byte[4096];
-                    EndPoint receiveEP = new IPEndPoint(IPAddress.Any, 0);
-
                     bool receivedMatch = false;
                     double rtt = 0;
                     int ttl = 0;
                     IPAddress replyAddress = null;
 
-                    while (!token.IsCancellationRequested && sw.ElapsedMilliseconds < timeout)
+                    using (token.Register(() => { try { raw.Close(); } catch { } }))
                     {
-                        int remaining = (int)(timeout - sw.ElapsedMilliseconds);
-                        if (remaining <= 0) break;
-
-                        int recvTimeout = Math.Min(remaining, 200);
-                        var receiveTask = Task.Factory.FromAsync(
-                            (callback, state) => raw.BeginReceiveFrom(recvBuffer, 0, recvBuffer.Length, SocketFlags.None, ref receiveEP, callback, state),
-                            (ar) => raw.EndReceiveFrom(ar, ref receiveEP),
-                            null);
-                        var completed = await Task.WhenAny(receiveTask, Task.Delay(recvTimeout, token));
-                        if (completed == receiveTask)
+                        await Task.Run(() =>
                         {
-                            int received = await receiveTask;
-                            int ipHeaderLen = (recvBuffer[0] & 0x0F) * 4;
-                            if (received >= ipHeaderLen + 8)
+                            byte[] buf = new byte[4096];
+                            EndPoint ep = new IPEndPoint(IPAddress.Any, 0);
+                            while (sw.ElapsedMilliseconds < timeout)
                             {
-                                int icmpOffset = ipHeaderLen;
-                                byte icmpType = recvBuffer[icmpOffset];
-                                ushort respId = (ushort)((recvBuffer[icmpOffset + 4] << 8) | recvBuffer[icmpOffset + 5]);
-                                ushort respSeq = (ushort)((recvBuffer[icmpOffset + 6] << 8) | recvBuffer[icmpOffset + 7]);
-
-                                if (icmpType == 0 && respId == identifier && respSeq == _globalIcmpSequence)
+                                int rem = (int)(timeout - sw.ElapsedMilliseconds);
+                                if (rem <= 0) break;
+                                raw.ReceiveTimeout = Math.Min(rem, 200);
+                                try
                                 {
-                                    sw.Stop();
-                                    rtt = sw.Elapsed.TotalMilliseconds;
-                                    ttl = recvBuffer[8];
-                                    replyAddress = ((IPEndPoint)receiveEP).Address;
-                                    receivedMatch = true;
-                                    break;
+                                    int len = raw.ReceiveFrom(buf, ref ep);
+                                    int ipHdrLen = (buf[0] & 0x0F) * 4;
+                                    if (len >= ipHdrLen + 8)
+                                    {
+                                        byte t = buf[ipHdrLen];
+                                        ushort rid = (ushort)((buf[ipHdrLen + 4] << 8) | buf[ipHdrLen + 5]);
+                                        ushort rseq = (ushort)((buf[ipHdrLen + 6] << 8) | buf[ipHdrLen + 7]);
+                                        if (t == 0 && rid == identifier && rseq == _globalIcmpSequence)
+                                        {
+                                            sw.Stop();
+                                            rtt = sw.Elapsed.TotalMilliseconds;
+                                            ttl = buf[8];
+                                            replyAddress = ((IPEndPoint)ep).Address;
+                                            receivedMatch = true;
+                                            return;
+                                        }
+                                    }
                                 }
+                                catch (SocketException) { continue; }
+                                catch (ObjectDisposedException) { return; }
                             }
-                        }
+                        });
                     }
 
                     if (receivedMatch)
@@ -1526,40 +1541,42 @@ namespace NetInfoCheckerX
                     int currentTotal = successCount + lossCount + 1;
                     Stopwatch sw = Stopwatch.StartNew();
 
-                    byte[] recvBuffer = new byte[4096];
-                    EndPoint receiveEP = new IPEndPoint(IPAddress.IPv6Any, 0);
                     bool receivedMatch = false;
                     double rtt = 0;
 
-                    while (!token.IsCancellationRequested && sw.ElapsedMilliseconds < timeout)
+                    using (token.Register(() => { try { raw6.Close(); } catch { } }))
                     {
-                        int remaining = (int)(timeout - sw.ElapsedMilliseconds);
-                        if (remaining <= 0) break;
-                        int recvTimeout = Math.Min(remaining, 200);
-                        var receiveTask = Task.Factory.FromAsync(
-                            (callback, state) => raw6.BeginReceiveFrom(recvBuffer, 0, recvBuffer.Length, SocketFlags.None, ref receiveEP, callback, state),
-                            (ar) => raw6.EndReceiveFrom(ar, ref receiveEP),
-                            null);
-                        var completed = await Task.WhenAny(receiveTask, Task.Delay(recvTimeout, token));
-                        if (completed == receiveTask)
+                        await Task.Run(() =>
                         {
-                            int received = await receiveTask;
-                            int icmpOffset = (received > 40 && (recvBuffer[0] >> 4) == 6) ? 40 : 0;
-                            if (received >= icmpOffset + 8)
+                            byte[] buf = new byte[4096];
+                            EndPoint ep = new IPEndPoint(IPAddress.IPv6Any, 0);
+                            while (sw.ElapsedMilliseconds < timeout)
                             {
-                                byte respType = recvBuffer[icmpOffset];
-                                ushort respId = (ushort)((recvBuffer[icmpOffset + 4] << 8) | recvBuffer[icmpOffset + 5]);
-                                ushort respSeq = (ushort)((recvBuffer[icmpOffset + 6] << 8) | recvBuffer[icmpOffset + 7]);
-
-                                if (respType == 129 && respId == identifier && respSeq == _globalIcmpSequence)
+                                int rem = (int)(timeout - sw.ElapsedMilliseconds);
+                                if (rem <= 0) break;
+                                raw6.ReceiveTimeout = Math.Min(rem, 200);
+                                try
                                 {
-                                    sw.Stop();
-                                    rtt = sw.Elapsed.TotalMilliseconds;
-                                    receivedMatch = true;
-                                    break;
+                                    int len = raw6.ReceiveFrom(buf, ref ep);
+                                    int icmpOff = (len > 40 && (buf[0] >> 4) == 6) ? 40 : 0;
+                                    if (len >= icmpOff + 8)
+                                    {
+                                        byte rt = buf[icmpOff];
+                                        ushort rid = (ushort)((buf[icmpOff + 4] << 8) | buf[icmpOff + 5]);
+                                        ushort rseq = (ushort)((buf[icmpOff + 6] << 8) | buf[icmpOff + 7]);
+                                        if (rt == 129 && rid == identifier && rseq == _globalIcmpSequence)
+                                        {
+                                            sw.Stop();
+                                            rtt = sw.Elapsed.TotalMilliseconds;
+                                            receivedMatch = true;
+                                            return;
+                                        }
+                                    }
                                 }
+                                catch (SocketException) { continue; }
+                                catch (ObjectDisposedException) { return; }
                             }
-                        }
+                        });
                     }
 
                     if (receivedMatch)
