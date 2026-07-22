@@ -2209,10 +2209,10 @@ namespace NetInfoCheckerX
             secondForm.Show();
         }
 
-        [DllImport("kernel32", CharSet = CharSet.Unicode)]
-        private static extern long WritePrivateProfileString(string section, string key, string val, string filePath);
-        [DllImport("kernel32", CharSet = CharSet.Unicode)]
-        private static extern int GetPrivateProfileString(string section, string key, string def, System.Text.StringBuilder retVal, int size, string filePath);
+        private static long WritePrivateProfileString(string section, string key, string val, string filePath)
+            => IniFileHelper.WritePrivateProfileString(section, key, val, filePath);
+        private static int GetPrivateProfileString(string section, string key, string def, System.Text.StringBuilder retVal, int size, string filePath)
+            => IniFileHelper.GetPrivateProfileString(section, key, def, retVal, size, filePath);
 
         // 程序旁边的 ini 文件完整路径
         private string iniPath = System.IO.Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
