@@ -5,7 +5,6 @@ using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Net;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -14,11 +13,11 @@ namespace NetInfoCheckerX
 {
     public partial class iPerfGUI : Form
     {
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern int WritePrivateProfileString(string section, string key, string value, string filePath);
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern int GetPrivateProfileString(string section, string key, string defaultValue,
-            StringBuilder buffer, int size, string filePath);
+        private static int WritePrivateProfileString(string section, string key, string value, string filePath)
+            => IniFileHelper.WritePrivateProfileString(section, key, value, filePath);
+        private static int GetPrivateProfileString(string section, string key, string defaultValue,
+            StringBuilder buffer, int size, string filePath)
+            => IniFileHelper.GetPrivateProfileString(section, key, defaultValue, buffer, size, filePath);
         private string IniPath => Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
         private const string IniSection = "iPerfGUI";
 
