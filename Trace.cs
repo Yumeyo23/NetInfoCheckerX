@@ -70,11 +70,11 @@ namespace NetInfoCheckerX
 
 
         // INI 读写
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern int WritePrivateProfileString(string section, string key, string value, string filePath);
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern int GetPrivateProfileString(string section, string key, string defaultValue,
-            StringBuilder buffer, int size, string filePath);
+        private static int WritePrivateProfileString(string section, string key, string value, string filePath)
+            => IniFileHelper.WritePrivateProfileString(section, key, value, filePath);
+        private static int GetPrivateProfileString(string section, string key, string defaultValue,
+            StringBuilder buffer, int size, string filePath)
+            => IniFileHelper.GetPrivateProfileString(section, key, defaultValue, buffer, size, filePath);
 
         [DllImport("user32.dll")]
         private static extern int SendMessage(IntPtr hWnd, int msg, int wParam, int lParam);
