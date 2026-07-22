@@ -31,10 +31,10 @@ namespace NetInfoCheckerX
         private static object _cachedSearcher;
         private static readonly object _reflectionLock = new object();
 
-        [System.Runtime.InteropServices.DllImport("kernel32", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
-        private static extern long WritePrivateProfileString(string section, string key, string val, string filePath);
-        [System.Runtime.InteropServices.DllImport("kernel32", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
-        private static extern int GetPrivateProfileString(string section, string key, string def, System.Text.StringBuilder retVal, int size, string filePath);
+        private static long WritePrivateProfileString(string section, string key, string val, string filePath)
+            => IniFileHelper.WritePrivateProfileString(section, key, val, filePath);
+        private static int GetPrivateProfileString(string section, string key, string def, System.Text.StringBuilder retVal, int size, string filePath)
+            => IniFileHelper.GetPrivateProfileString(section, key, def, retVal, size, filePath);
 
         private string _iniPath = Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
 
