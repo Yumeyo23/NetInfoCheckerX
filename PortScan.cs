@@ -8,7 +8,6 @@ using System.Linq;
 using System.Media;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -19,11 +18,11 @@ namespace NetInfoCheckerX
 {
     public partial class PortScan : Form
     {
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern int WritePrivateProfileString(string section, string key, string value, string filePath);
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern int GetPrivateProfileString(string section, string key, string defaultValue,
-            StringBuilder buffer, int size, string filePath);
+        private static int WritePrivateProfileString(string section, string key, string value, string filePath)
+            => IniFileHelper.WritePrivateProfileString(section, key, value, filePath);
+        private static int GetPrivateProfileString(string section, string key, string defaultValue,
+            StringBuilder buffer, int size, string filePath)
+            => IniFileHelper.GetPrivateProfileString(section, key, defaultValue, buffer, size, filePath);
         private string IniPath => Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
         private const string IniSection = "PortScan";
 
