@@ -13,7 +13,6 @@ namespace NetInfoCheckerX
 {
     public partial class HWInfoWMI : Form
     {
-        //自由拖拽1
         [DllImport("user32.dll")]
         public static extern bool ReleaseCapture();
 
@@ -24,7 +23,6 @@ namespace NetInfoCheckerX
         private const int SC_MOVE = 0xF010;
         private const int HTCAPTION = 0x0002;
 
-        // EnumDisplayDevices — 仅枚举当前已连接的显示器
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern bool EnumDisplayDevices(
             string lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
@@ -42,6 +40,57 @@ namespace NetInfoCheckerX
             public string DeviceID;
             [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
             public string DeviceKey;
+        }
+
+        // DXGI — 获取准确的 64 位显存大小 (WMI AdapterRAM 是 uint32，≥4GB 会溢出)
+        [DllImport("dxgi.dll")]
+        private static extern int CreateDXGIFactory1(ref Guid riid, out IntPtr ppFactory);
+
+        [ComImport, Guid("770aae78-f26f-4dba-a829-253c83d1b387")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IDXGIFactory1
+        {
+            void _IDXGIObject_SetPrivateData(ref Guid Name, uint DataSize, IntPtr pData);
+            void _IDXGIObject_SetPrivateDataInterface(ref Guid Name, IntPtr pUnknown);
+            void _IDXGIObject_GetPrivateData(ref Guid Name, ref uint pDataSize, IntPtr pData);
+            void _IDXGIObject_GetParent(ref Guid riid, out IntPtr ppParent);
+            void EnumAdapters(uint Adapter, out IntPtr ppAdapter);
+            void MakeWindowAssociation(IntPtr WindowHandle, uint Flags);
+            void GetWindowAssociation(out IntPtr pWindowHandle);
+            void CreateSwapChain(IntPtr pDevice, ref IntPtr pDesc, out IntPtr ppSwapChain);
+            void CreateSoftwareAdapter(IntPtr Module, out IntPtr ppAdapter);
+            [PreserveSig] int EnumAdapters1(uint Adapter, out IntPtr ppAdapter);
+            [return: MarshalAs(UnmanagedType.Bool)]
+            bool IsCurrent();
+        }
+
+        [ComImport, Guid("29038f61-42bf-4f4c-8c44-63bfd64bd47d")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IDXGIAdapter1
+        {
+            void _IDXGIObject_SetPrivateData(ref Guid Name, uint DataSize, IntPtr pData);
+            void _IDXGIObject_SetPrivateDataInterface(ref Guid Name, IntPtr pUnknown);
+            void _IDXGIObject_GetPrivateData(ref Guid Name, ref uint pDataSize, IntPtr pData);
+            void _IDXGIObject_GetParent(ref Guid riid, out IntPtr ppParent);
+            void EnumOutputs(uint Output, out IntPtr ppOutput);
+            void GetDesc(out IntPtr pDesc);
+            [PreserveSig] int GetDesc1(out DXGI_ADAPTER_DESC1 pDesc);
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct DXGI_ADAPTER_DESC1
+        {
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+            public string Description;
+            public uint VendorId;
+            public uint DeviceId;
+            public uint SubSysId;
+            public uint Revision;
+            public IntPtr DedicatedVideoMemory;
+            public IntPtr DedicatedSystemMemory;
+            public IntPtr SharedSystemMemory;
+            public long AdapterLuid;
+            public uint Flags;
         }
 
         private void MyMouseDown(object sender, MouseEventArgs e)
@@ -78,7 +127,7 @@ namespace NetInfoCheckerX
 
             this.BackColor = isLight ? Global.themeLight : Global.themeBlack;
 
-            Color yumeyoColor = isLight ? ColorTranslator.FromHtml("#8e8cd8") : ColorTranslator.FromHtml("#a8a5ff");
+            Color yumeyoColor = isLight ? Global.Yumeyo : Global.Yumeyo2;
             Label[] yumeyoLabels = { lblPCName, lblExeName };
             foreach (var lbl in yumeyoLabels) { if (lbl != null) lbl.ForeColor = yumeyoColor; }
 
@@ -94,11 +143,6 @@ namespace NetInfoCheckerX
             }
         }
 
-        // ==================== WMI 硬件检测核心方法 ====================
-
-        /// <summary>
-        /// 获取系统信息
-        /// </summary>
         private (string caption, string build, string osType) GetSystemInfo()
         {
             try
@@ -116,7 +160,6 @@ namespace NetInfoCheckerX
                 }
                 else
                 {
-                    // 回退：从注册表读取
                     try
                     {
                         caption = Registry.GetValue(
@@ -132,7 +175,6 @@ namespace NetInfoCheckerX
                 string osType = "未知";
                 try
                 {
-                    // 方案1: Win32_SystemEnclosure.ChassisTypes
                     var chassisList = new ManagementObjectSearcher(
                         "SELECT ChassisTypes FROM Win32_SystemEnclosure")
                         .Get().Cast<ManagementObject>().ToList();
@@ -151,7 +193,6 @@ namespace NetInfoCheckerX
                         }
                     }
 
-                    // 方案2: 如果方案1失败，尝试 Win32_ComputerSystem.PCSystemType
                     if (osType == "未知")
                     {
                         var cs = new ManagementObjectSearcher(
@@ -188,9 +229,6 @@ namespace NetInfoCheckerX
             }
         }
 
-        /// <summary>
-        /// 获取 CPU 信息
-        /// </summary>
         private List<(string name, int cores, int threads)> GetCPUInfo()
         {
             try
@@ -204,7 +242,6 @@ namespace NetInfoCheckerX
                 foreach (var cpu in cpus)
                 {
                     string name = cpu["Name"]?.ToString()?.Trim() ?? "未知";
-                    // 清理 CPU 名称中多余的空格
                     name = System.Text.RegularExpressions.Regex.Replace(name, @"\s+", " ");
 
                     int cores = 0;
@@ -224,9 +261,6 @@ namespace NetInfoCheckerX
             }
         }
 
-        /// <summary>
-        /// 获取主板和 BIOS 信息
-        /// </summary>
         private (string boardModel, string boardBrand, string biosVersion) GetMainboardInfo()
         {
             try
@@ -253,9 +287,6 @@ namespace NetInfoCheckerX
             }
         }
 
-        /// <summary>
-        /// 获取内存信息
-        /// </summary>
         private (int totalGB, List<(string capacity, string speed, string brand)> details) GetMemoryInfo()
         {
             try
@@ -277,13 +308,11 @@ namespace NetInfoCheckerX
                     string speed = mem["Speed"]?.ToString() ?? "未知";
                     string manufacturer = mem["Manufacturer"]?.ToString()?.Trim() ?? "未知";
 
-                    // 如果制造商为通用名，尝试用 PartNumber 中的信息
                     if (manufacturer == "未知" || manufacturer == "0000" || manufacturer == "Undefined")
                     {
                         string part = mem["PartNumber"]?.ToString()?.Trim() ?? "";
                         if (!string.IsNullOrEmpty(part))
                         {
-                            // 尝试从 PartNumber 提取品牌
                             manufacturer = ExtractBrandFromPartNumber(part);
                         }
                     }
@@ -299,38 +328,74 @@ namespace NetInfoCheckerX
             }
         }
 
-        /// <summary>
-        /// 获取显卡信息
-        /// </summary>
+        private long LookupMemoryByName(Dictionary<string, long> dict, string gpuName)
+        {
+            if (dict.TryGetValue(gpuName, out long val) && val > 0) return val;
+            foreach (var kv in dict)
+            {
+                if (gpuName.Contains(kv.Key) || kv.Key.Contains(gpuName))
+                    return kv.Value;
+            }
+            return 0;
+        }
+
         private List<(string name, string memory, string driver)> GetGPUInfo()
         {
             try
             {
                 var gpus = new ManagementObjectSearcher(
-                    "SELECT Name, AdapterRAM, DriverVersion FROM Win32_VideoController")
+                    "SELECT Name, AdapterRAM, DriverVersion, PNPDeviceID FROM Win32_VideoController")
                     .Get().Cast<ManagementObject>().ToList();
 
+                var dxgiMemory = GetGPUMemoryFromDXGI();
+                var dxgiList = dxgiMemory.ToList();
+                Dictionary<string, long> regMemory = null;
+
                 var result = new List<(string, string, string)>();
+                int enumIndex = 0; // WMI 枚举位置 (用于与 DXGI 同顺序索引匹配)
 
                 foreach (var gpu in gpus)
                 {
                     string name = gpu["Name"]?.ToString()?.Trim() ?? "未知显卡";
-                    long.TryParse(gpu["AdapterRAM"]?.ToString(), out long bytes);
+                    string pnpId = gpu["PNPDeviceID"]?.ToString()?.Trim() ?? "";
+
+                    if (IsVirtualDevice(name, pnpId)) { enumIndex++; continue; }
+
+                    long.TryParse(gpu["AdapterRAM"]?.ToString(), out long wmiBytes);
                     string driver = gpu["DriverVersion"]?.ToString() ?? "未知";
 
                     string memory;
-                    if (bytes > 0)
+                    if (wmiBytes > 0)
                     {
-                        long mb = bytes / 1024 / 1024;
-                        memory = $"{mb}MB";
+                        long wmiMB = wmiBytes / 1024 / 1024;
+
+                        // 显存 ≥ 4090MB 视为 uint32 溢出 (WMI AdapterRAM 最大值 ~4095MB)
+                        if (wmiMB >= 4090)
+                        {
+                            long actualBytes = TryGetActualVRAM(dxgiMemory, dxgiList,
+                                ref regMemory, name, enumIndex);
+
+                            if (actualBytes > 0)
+                                memory = $"{actualBytes / 1024 / 1024}MB";
+                            else
+                                memory = ">4GB";
+                        }
+                        else
+                        {
+                            memory = $"{wmiMB}MB";
+                        }
                     }
                     else
                     {
-                        // 共享显存或无独立显存
-                        memory = "共享";
+                        long actualBytes = TryGetActualVRAM(dxgiMemory, dxgiList,
+                            ref regMemory, name, enumIndex);
+                        memory = actualBytes > 0
+                            ? $"{actualBytes / 1024 / 1024}MB"
+                            : "共享";
                     }
 
                     result.Add((name, memory, driver));
+                    enumIndex++;
                 }
 
                 return result;
@@ -342,8 +407,34 @@ namespace NetInfoCheckerX
         }
 
         /// <summary>
-        /// 获取显示器信息 (含 EDID 解析)
+        /// 按优先级尝试获取实际显存: 索引匹配 → 名称精确匹配 → 名称模糊匹配 → 注册表
         /// </summary>
+        private long TryGetActualVRAM(Dictionary<string, long> dxgiDict,
+            List<KeyValuePair<string, long>> dxgiList,
+            ref Dictionary<string, long> regMemory,
+            string gpuName, int gpuIndex)
+        {
+            long bytes;
+
+            // 1. DXGI 索引匹配 (WMI 和 DXGI 均按 PCI 顺序枚举)
+            if (gpuIndex < dxgiList.Count)
+            {
+                bytes = dxgiList[gpuIndex].Value;
+                if (bytes > 0) return bytes;
+            }
+
+            // 2. DXGI 名称匹配
+            bytes = LookupMemoryByName(dxgiDict, gpuName);
+            if (bytes > 0) return bytes;
+
+            // 3. 注册表
+            if (regMemory == null)
+                regMemory = GetGPUMemoryFromRegistry();
+            bytes = LookupMemoryByName(regMemory, gpuName);
+
+            return bytes;
+        }
+
         private List<(string name, string mfrAndId, string size, string date)> GetMonitorInfo()
         {
             var result = new List<(string, string, string, string)>();
@@ -351,11 +442,10 @@ namespace NetInfoCheckerX
 
             try
             {
-                // 方案1: 从注册表枚举 DISPLAY 设备获取 EDID
                 var edidMonitors = GetMonitorsFromRegistryEDID(seenHardwareIds);
                 result.AddRange(edidMonitors);
 
-                // 方案2: 如果注册表没找到，尝试 WMI DesktopMonitor（仅已连接）
+                // 回退：尝试 WMI DesktopMonitor
                 if (result.Count == 0)
                 {
                     var monitors = new ManagementObjectSearcher(
@@ -379,7 +469,6 @@ namespace NetInfoCheckerX
                         else
                         {
                             string name = mon["Name"]?.ToString()?.Trim() ?? "未知显示器";
-                            // 如果 WMI 返回的是通用名且有硬件ID，用硬件ID
                             string displayName = (name == "通用即插即用监视器" || name == "Generic PnP Monitor")
                                 ? hwId : name;
                             result.Add((displayName, hwId, "未知", "未知"));
@@ -387,7 +476,6 @@ namespace NetInfoCheckerX
                     }
                 }
 
-                // 方案3: Win32_PnPEntity (Monitor 类, 仅已连接)
                 if (result.Count == 0)
                 {
                     var pnpMonitors = new ManagementObjectSearcher(
@@ -421,15 +509,12 @@ namespace NetInfoCheckerX
             return result;
         }
 
-        /// <summary>
-        /// 获取硬盘信息
-        /// </summary>
         private List<(string model, string size)> GetDiskInfo()
         {
             try
             {
                 var disks = new ManagementObjectSearcher(
-                    "SELECT Model, Size FROM Win32_DiskDrive")
+                    "SELECT Model, Size, PNPDeviceID FROM Win32_DiskDrive")
                     .Get().Cast<ManagementObject>().ToList();
 
                 var result = new List<(string, string)>();
@@ -437,7 +522,12 @@ namespace NetInfoCheckerX
                 foreach (var disk in disks)
                 {
                     string model = disk["Model"]?.ToString()?.Trim() ?? "未知硬盘";
+                    string pnpId = disk["PNPDeviceID"]?.ToString()?.Trim() ?? "";
                     long.TryParse(disk["Size"]?.ToString(), out long bytes);
+
+                    if (bytes <= 0) continue;
+
+                    if (IsVirtualDevice(model, pnpId)) continue;
 
                     string size = "未知";
                     if (bytes > 0)
@@ -445,9 +535,6 @@ namespace NetInfoCheckerX
                         double gb = bytes / 1024.0 / 1024.0 / 1024.0;
                         size = $"{gb:F0}GB";
                     }
-
-                    // 跳过可移动设备 (Size=0 的通常是读卡器)
-                    if (bytes <= 0) continue;
 
                     result.Add((model, size));
                 }
@@ -460,27 +547,21 @@ namespace NetInfoCheckerX
             }
         }
 
-        /// <summary>
-        /// 获取网卡信息 (含类型判断和实时握手速率)
-        /// </summary>
         private List<(string name, string type, string mac, string speed)> GetNetworkAdapterInfo()
         {
             try
             {
-                // 获取网络适配器列表 (物理适配器)
                 var adapters = new ManagementObjectSearcher(
                     "SELECT Name, AdapterType, Speed, Index, PNPDeviceID, NetConnectionID, GUID " +
                     "FROM Win32_NetworkAdapter " +
                     "WHERE PhysicalAdapter = true")
                     .Get().Cast<ManagementObject>().ToList();
 
-                // 获取网络适配器配置 (MAC地址)
                 var configs = new ManagementObjectSearcher(
                     "SELECT Index, MACAddress, IPEnabled FROM Win32_NetworkAdapterConfiguration")
                     .Get().Cast<ManagementObject>()
                     .ToDictionary(c => Convert.ToInt32(c["Index"]), c => c);
 
-                // 尝试从 StandardCimv2 获取实时链路速率
                 Dictionary<int, long> linkSpeeds = null;
                 try
                 {
@@ -510,11 +591,10 @@ namespace NetInfoCheckerX
                     string connId = adapter["NetConnectionID"]?.ToString()?.Trim() ?? "";
                     string hwName = adapter["Name"]?.ToString()?.Trim() ?? "";
 
-                    // 跳过蓝牙、虚拟设备
                     string lowerName = hwName.ToLower();
                     if (lowerName.Contains("bluetooth") || lowerName.Contains("蓝牙")) continue;
+                    if (IsVirtualDevice(hwName, pnpId)) continue;
 
-                    // 获取 MAC 地址
                     string mac = "未知";
                     if (configs.ContainsKey(index))
                     {
@@ -523,7 +603,6 @@ namespace NetInfoCheckerX
 
                     if (string.IsNullOrEmpty(mac) || mac == "未知") continue;
 
-                    // 使用硬件名称 (Name) 作为显示名，NetConnectionID 作为回退
                     string name = hwName;
                     if (string.IsNullOrEmpty(name))
                         name = connId;
@@ -531,10 +610,8 @@ namespace NetInfoCheckerX
                         name = "未知网卡";
 
                     string adapterType = adapter["AdapterType"]?.ToString()?.Trim() ?? "";
-                    // 类型判断: 综合 AdapterType、硬件名、连接名、PNPID
                     string type = GetAdapterTypeName(adapterType, pnpId, hwName, connId);
 
-                    // 速度: 优先用 MSFT_NetAdapter 的实时速率，然后回退 Win32_NetworkAdapter.Speed
                     string speed = "未知";
                     if (linkSpeeds != null && linkSpeeds.ContainsKey(index))
                     {
@@ -557,15 +634,12 @@ namespace NetInfoCheckerX
             }
         }
 
-        /// <summary>
-        /// 获取声卡信息 (仅 Status=OK 的设备)
-        /// </summary>
         private List<string> GetSoundCardInfo()
         {
             try
             {
                 var soundcards = new ManagementObjectSearcher(
-                    "SELECT Name FROM Win32_SoundDevice WHERE Status = 'OK'")
+                    "SELECT Name, PNPDeviceID FROM Win32_SoundDevice WHERE Status = 'OK'")
                     .Get().Cast<ManagementObject>().ToList();
 
                 var result = new List<string>();
@@ -573,10 +647,14 @@ namespace NetInfoCheckerX
                 foreach (var sc in soundcards)
                 {
                     string name = sc["Name"]?.ToString()?.Trim() ?? "未知声卡";
-                    if (!string.IsNullOrEmpty(name))
-                    {
-                        result.Add(name);
-                    }
+                    string pnpId = sc["PNPDeviceID"]?.ToString()?.Trim() ?? "";
+
+                    if (string.IsNullOrEmpty(name)) continue;
+
+                    // 跳过虚拟声卡
+                    if (IsVirtualDevice(name, pnpId)) continue;
+
+                    result.Add(name);
                 }
 
                 return result;
@@ -587,12 +665,6 @@ namespace NetInfoCheckerX
             }
         }
 
-        // ==================== 辅助方法 ====================
-
-        /// <summary>
-        /// 将 SMBIOS 机箱类型代码转换为友好名称
-        /// 参考: DMTF SMBIOS Reference Specification, Type 3 (System Enclosure)
-        /// </summary>
         private string GetChassisTypeName(ushort type)
         {
             switch (type)
@@ -657,11 +729,6 @@ namespace NetInfoCheckerX
             }
         }
 
-        /// <summary>
-        /// 使用 EnumDisplayDevices API 获取当前已连接显示器的硬件ID集合
-        /// 用于过滤注册表中残留的已断开显示器记录
-        /// DeviceID 格式: "MONITOR\BOE0A92\{GUID}\0001"，取第2段即硬件ID
-        /// </summary>
         private HashSet<string> GetConnectedMonitorHardwareIds()
         {
             var connected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -695,10 +762,6 @@ namespace NetInfoCheckerX
             return connected;
         }
 
-        /// <summary>
-        /// 从注册表 DISPLAY 枚举读取 EDID 获取显示器信息
-        /// (仅返回当前已连接的显示器)
-        /// </summary>
         private List<(string name, string mfrAndId, string size, string date)> GetMonitorsFromRegistryEDID(
             HashSet<string> seenHardwareIds)
         {
@@ -756,14 +819,10 @@ namespace NetInfoCheckerX
             return result;
         }
 
-        /// <summary>
-        /// 从注册表读取 EDID
-        /// </summary>
         private byte[] ReadEDIDFromRegistry(string pnpDeviceId)
         {
             try
             {
-                // PNPDeviceID 如: DISPLAY\BOE0A92\5&1234567&0&UID_12345
                 string regPath = @"SYSTEM\CurrentControlSet\Enum\" + pnpDeviceId + @"\Device Parameters";
                 using (var key = Registry.LocalMachine.OpenSubKey(regPath))
                 {
@@ -908,9 +967,6 @@ namespace NetInfoCheckerX
             return null;
         }
 
-        /// <summary>
-        /// 将 EDID 制造商3字母代码映射为中文名
-        /// </summary>
         private string GetMonitorManufacturerName(string code)
         {
             switch (code)
@@ -957,9 +1013,6 @@ namespace NetInfoCheckerX
             }
         }
 
-        /// <summary>
-        /// 从 PNPDeviceID 提取硬件ID (如 "DISPLAY\BOE0A92\..." -> "BOE0A92")
-        /// </summary>
         private string ExtractHardwareId(string pnpDeviceId)
         {
             if (string.IsNullOrEmpty(pnpDeviceId)) return "";
@@ -969,18 +1022,12 @@ namespace NetInfoCheckerX
             return pnpDeviceId;
         }
 
-        /// <summary>
-        /// 判断网卡类型
-        /// </summary>
         private string GetAdapterTypeName(string adapterType, string pnpDeviceId,
             string hardwareName, string connId)
         {
-            // 综合判断: 硬件名权重最高，然后连接名，再 AdapterType
-
             string hwLower = (hardwareName ?? "").ToLower();
             string connLower = (connId ?? "").ToLower();
 
-            // 硬件名或连接名明确包含无线标识
             if (hwLower.Contains("wireless") || hwLower.Contains("wlan") ||
                 hwLower.Contains("wi-fi") || hwLower.Contains("wifi") ||
                 hwLower.Contains("802.11") ||
@@ -1026,9 +1073,6 @@ namespace NetInfoCheckerX
             return "以太网";
         }
 
-        /// <summary>
-        /// 格式化网络速率
-        /// </summary>
         private string FormatSpeed(long bps)
         {
             if (bps >= 1000000000)
@@ -1041,9 +1085,6 @@ namespace NetInfoCheckerX
                 return $"{bps}bps";
         }
 
-        /// <summary>
-        /// 从内存 PartNumber 提取品牌
-        /// </summary>
         private string ExtractBrandFromPartNumber(string partNumber)
         {
             if (string.IsNullOrEmpty(partNumber)) return "未知";
@@ -1093,11 +1134,163 @@ namespace NetInfoCheckerX
             return partNumber.Trim();
         }
 
-        // ==================== WMI 服务检测 ====================
+        /// <summary>
+        /// 通过 DXGI 获取准确的显存大小 (64位，无 4GB 溢出问题)
+        /// 返回 Dictionary&lt;GPU名称, 显存bytes&gt;
+        /// </summary>
+        private Dictionary<string, long> GetGPUMemoryFromDXGI()
+        {
+            var result = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                Guid factoryGuid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387");
+                int hr = CreateDXGIFactory1(ref factoryGuid, out IntPtr factoryPtr);
+                if (hr < 0 || factoryPtr == IntPtr.Zero) return result;
+
+                try
+                {
+                    IDXGIFactory1 factory = (IDXGIFactory1)Marshal.GetObjectForIUnknown(factoryPtr);
+                    for (uint i = 0; ; i++)
+                    {
+                        hr = factory.EnumAdapters1(i, out IntPtr adapterPtr);
+                        if (hr < 0 || adapterPtr == IntPtr.Zero) break;
+
+                        try
+                        {
+                            IDXGIAdapter1 adapter = (IDXGIAdapter1)Marshal.GetObjectForIUnknown(adapterPtr);
+                            hr = adapter.GetDesc1(out DXGI_ADAPTER_DESC1 desc);
+                            if (hr < 0) continue;
+
+                            long vram = desc.DedicatedVideoMemory.ToInt64();
+                            string name = desc.Description?.Trim() ?? "";
+
+                            if (vram > 0 && !string.IsNullOrEmpty(name) && !result.ContainsKey(name))
+                                result[name] = vram;
+                        }
+                        finally
+                        {
+                            if (adapterPtr != IntPtr.Zero) Marshal.Release(adapterPtr);
+                        }
+                    }
+                }
+                finally
+                {
+                    Marshal.Release(factoryPtr);
+                }
+            }
+            catch { }
+            return result;
+        }
 
         /// <summary>
-        /// 检测 WMI 服务是否可用
+        /// 从注册表读取显卡实际显存大小 (解决 WMI AdapterRAM uint32 4GB溢出问题)
+        /// 返回 Dictionary&lt;DriverDesc, 显存bytes&gt;
         /// </summary>
+        private Dictionary<string, long> GetGPUMemoryFromRegistry()
+        {
+            var result = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                using (var classKey = Registry.LocalMachine.OpenSubKey(
+                    @"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"))
+                {
+                    if (classKey == null) return result;
+
+                    foreach (string subkeyName in classKey.GetSubKeyNames())
+                    {
+                        if (!System.Text.RegularExpressions.Regex.IsMatch(subkeyName, @"^\d{4}$"))
+                            continue;
+
+                        using (var adapterKey = classKey.OpenSubKey(subkeyName))
+                        {
+                            if (adapterKey == null) continue;
+
+                            string driverDesc = adapterKey.GetValue("DriverDesc")?.ToString()?.Trim();
+                            if (string.IsNullOrEmpty(driverDesc)) continue;
+
+                            long memorySize = 0;
+                            // 方案1: HardwareInformation 子键
+                            using (var hwKey = adapterKey.OpenSubKey("HardwareInformation"))
+                            {
+                                if (hwKey != null)
+                                {
+                                    long.TryParse(hwKey.GetValue("qwMemorySize")?.ToString(), out memorySize);
+                                    if (memorySize <= 0)
+                                        long.TryParse(hwKey.GetValue("MemorySize")?.ToString(), out memorySize);
+                                    // 遍历所有值名，匹配包含 "Memory" 的键
+                                    if (memorySize <= 0)
+                                    {
+                                        foreach (string vn in hwKey.GetValueNames())
+                                        {
+                                            if (vn.ToLower().Contains("memory"))
+                                            {
+                                                long.TryParse(hwKey.GetValue(vn)?.ToString(), out memorySize);
+                                                if (memorySize > 0) break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // 方案2: 直接以点号命名的值
+                            if (memorySize <= 0)
+                            {
+                                long.TryParse(
+                                    adapterKey.GetValue("HardwareInformation.qwMemorySize")?.ToString(),
+                                    out memorySize);
+                            }
+                            if (memorySize <= 0)
+                            {
+                                long.TryParse(
+                                    adapterKey.GetValue("HardwareInformation.MemorySize")?.ToString(),
+                                    out memorySize);
+                            }
+
+                            if (memorySize > 0 && !result.ContainsKey(driverDesc))
+                                result[driverDesc] = memorySize;
+                        }
+                    }
+                }
+            }
+            catch { }
+            return result;
+        }
+
+        private bool IsVirtualDevice(string name, string pnpDeviceId)
+        {
+            string lowerName = (name ?? "").ToLower();
+            string lowerPnp = (pnpDeviceId ?? "").ToLower();
+
+            if (lowerName.Contains("virtual") || lowerName.Contains("虚拟"))
+                return true;
+
+            string[] virtualKeywords = {
+                "vmware", "virtualbox", "hyper-v", "hyperv",
+                "qemu", "kvm", "xen", "parallels",
+                "remote desktop", "rdpud", "rdpdd", "vrdd",
+                "microsoft remote", "microsoft rdp",
+                "citrix", "teradici", "pcovirtual",
+                "remote display", "remote audio", "remote sound",
+                "indirect display", "iddcx",
+                "microsoft basic display", "microsoft basic render",
+                "microsoft hyper-v video", "microsoft virtual",
+                "oray", "向日葵",
+                "netease", "网易",
+                "virtual audio cable", "vb-audio", "voicemeeter",
+                "screaming bee", "wdm2vst",
+                "vmware audio", "virtualbox audio",
+                "citrix audio", "cable input", "cable output",
+                "tap","teredo","tunnel","VPN",
+            };
+
+            foreach (var keyword in virtualKeywords)
+            {
+                if (lowerName.Contains(keyword) || lowerPnp.Contains(keyword))
+                    return true;
+            }
+
+            return false;
+        }
+
         private bool IsWmiAvailable()
         {
             try
@@ -1115,8 +1308,6 @@ namespace NetInfoCheckerX
             }
         }
 
-        // ==================== 窗体事件 ====================
-
         private async void HWInfoWMI_Load(object sender, EventArgs e)
         {
             _ = ApplyHWInfoThemeAsync();
@@ -1126,18 +1317,15 @@ namespace NetInfoCheckerX
 
             lblExeName.Text = Global.exeName + " " + Global.Version;
 
-            txtPCINFO.Text = "🔰   正在读取配置(纯WMI实现)   🔰\r\n" +
-                             "Tips: 本工具直接使用系统 WMI 服务获取硬件信息，无外部依赖，不会被杀毒软件误判。";
+            txtPCINFO.Text = "              🔰   正在读取配置(纯WMI实现)   🔰\r\n" +
+                             "Tips: 本工具直接使用系统 WMI 服务获取硬件信息，无外部依赖，理论上不会被杀毒软件误判。";
 
             lblPCName.Text = Environment.MachineName;
 
-            // 已运行时长
             UpdateUptimeDisplay();
 
-            // 配置检测时间
             lblCheckTime.Text = "检测时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
-            // 系统安装时间
             try
             {
                 var os = new ManagementObjectSearcher(
@@ -1152,7 +1340,6 @@ namespace NetInfoCheckerX
                 lblSysInsTime.Text = "系统安装: 无法获取(WMI服务未开启)";
             }
 
-            // 检测 WMI 服务是否可用
             if (!IsWmiAvailable())
             {
                 txtPCINFO.Text = "          🔴 硬件检测失败 🔴\r\n" +
@@ -1168,26 +1355,20 @@ namespace NetInfoCheckerX
             }
 
 
-            // 异步加载硬件信息
             await Task.Run(() => LoadHardwareInfo());
         }
 
-        /// <summary>
-        /// 加载所有硬件信息并格式化显示
-        /// </summary>
         private void LoadHardwareInfo()
         {
             try
             {
                 StringBuilder sb = new StringBuilder();
 
-                // === 1. 系统信息 ===
                 {
                     var (caption, build, osType) = GetSystemInfo();
                     sb.AppendLine($"系统:\t{caption} [{build}/{osType}]");
                 }
 
-                // === 2. CPU信息 ===
                 {
                     var cpus = GetCPUInfo();
                     if (cpus.Count == 1)
@@ -1211,13 +1392,11 @@ namespace NetInfoCheckerX
                     }
                 }
 
-                // === 3. 主板信息 ===
                 {
                     var (boardModel, boardBrand, biosVersion) = GetMainboardInfo();
                     sb.AppendLine($"主板:\t{boardModel} [{boardBrand}/{biosVersion}]");
                 }
 
-                // === 4. 内存信息 ===
                 {
                     var (totalGB, details) = GetMemoryInfo();
                     if (details.Count > 0 && totalGB > 0)
@@ -1234,7 +1413,6 @@ namespace NetInfoCheckerX
                     }
                 }
 
-                // === 5. 显卡信息 ===
                 {
                     var gpus = GetGPUInfo();
                     if (gpus.Count == 1)
@@ -1257,7 +1435,6 @@ namespace NetInfoCheckerX
                     }
                 }
 
-                // === 6. 屏幕信息 ===
                 {
                     var monitors = GetMonitorInfo();
                     if (monitors.Count == 1)
@@ -1280,7 +1457,6 @@ namespace NetInfoCheckerX
                     }
                 }
 
-                // === 7. 硬盘信息 ===
                 {
                     var disks = GetDiskInfo();
                     if (disks.Count == 1)
@@ -1303,7 +1479,6 @@ namespace NetInfoCheckerX
                     }
                 }
 
-                // === 8. 网卡信息 ===
                 {
                     var nics = GetNetworkAdapterInfo();
                     if (nics.Count == 1)
@@ -1328,7 +1503,6 @@ namespace NetInfoCheckerX
                     }
                 }
 
-                // === 9. 声卡信息 ===
                 {
                     var soundcards = GetSoundCardInfo();
                     if (soundcards.Count == 1)
@@ -1351,7 +1525,6 @@ namespace NetInfoCheckerX
                     }
                 }
 
-                // 更新UI
                 this.Invoke((Action)(() =>
                 {
                     txtPCINFO.Text = sb.ToString();
