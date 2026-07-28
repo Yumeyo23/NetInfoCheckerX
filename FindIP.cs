@@ -100,7 +100,7 @@ namespace NetInfoCheckerX
             bool isLight = Global.isThemelight;
             Color contrastColor = isLight ? Color.Black : Color.White;
             Color textBack = isLight ? Global.colorWhite : Global.themeBlack;
-            Color yumeyoColor = isLight ? ColorTranslator.FromHtml("#8e8cd8") : ColorTranslator.FromHtml("#a8a5ff");
+            Color yumeyoColor = isLight ? Global.Yumeyo : Global.Yumeyo2;
             Color btnDarkBack = Color.FromArgb(60, 60, 60);
 
             this.BackColor = isLight ? Global.themeLight : Global.themeBlack;
@@ -147,7 +147,7 @@ namespace NetInfoCheckerX
                         btn.BackColor = btnDarkBack;
                         btn.FlatStyle = FlatStyle.Flat;
                         btn.FlatAppearance.BorderColor = Color.DimGray;
-                        btn.FlatAppearance.MouseOverBackColor = ColorTranslator.FromHtml("#8e8cd8");
+                        btn.FlatAppearance.MouseOverBackColor = Global.Yumeyo;
                     }
                 }
             }
