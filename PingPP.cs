@@ -549,7 +549,7 @@ namespace NetInfoCheckerX
             {
                 if (autoClear)
                 {
-                    AppendColorText("     ==== 欢迎使用 Ping+ ❤ 网络综合查询器X by Yumeyo ====", ColorTranslator.FromHtml("#a8a5ff"), true);
+                    AppendColorText("     ==== 欢迎使用 Ping+ ❤ 网络综合查询器X by Yumeyo ====", Global.Yumeyo2, true);
                     AppendColorText("当前选中 ICMP 协议，请先阅读下列提示：", Color.Lime, true);
                     AppendColorText("    🔰 ICMP Ping 已更新Socket指定网卡测试 (精度0.1ms) 💦", Color.White, true);
                     AppendColorText("        ❤若指定网卡时频繁意外丢包, 影响判断, 请选\"ICMP兼容模式\"网卡, ", Color.Yellow, true);
@@ -569,7 +569,7 @@ namespace NetInfoCheckerX
             {
                 if (autoClear)
                 {
-                    AppendColorText("     ==== 欢迎使用 Ping+ ❤ 网络综合查询器X by Yumeyo ====", ColorTranslator.FromHtml("#a8a5ff"), true);
+                    AppendColorText("     ==== 欢迎使用 Ping+ ❤ 网络综合查询器X by Yumeyo ====", Global.Yumeyo2, true);
                     AppendColorText("当前选中 UDP 协议，请先阅读下列提示：", Color.Lime, true);
                     AppendColorText("  针对 🔥DNS(53) NTP(123) STUN(3478/3489/19302)🔥 端口已优化测试方法；", Color.LightPink, true);
                     AppendColorText("    🔰 其他端口将发送随机字节数据测试 💦", Color.White, true);
@@ -590,7 +590,7 @@ namespace NetInfoCheckerX
             {
                 if (autoClear)
                 {
-                    AppendColorText("     ==== 欢迎使用 Ping+ ❤ 网络综合查询器X by Yumeyo ====", ColorTranslator.FromHtml("#a8a5ff"), true);
+                    AppendColorText("     ==== 欢迎使用 Ping+ ❤ 网络综合查询器X by Yumeyo ====", Global.Yumeyo2, true);
                     AppendColorText("当前选中 TCP 协议，请先阅读下列提示：", Color.Lime, true);
                     AppendColorText("    通过 🔰 TcpClient 🔰 尝试握手连接；包大小无影响延迟已禁用设置 💦", Color.White, true);
                     AppendColorText("      ❤ 通常用于探测 🔥 80/443 🔥 等端口是否开放\n", Color.White, true);
@@ -802,7 +802,7 @@ namespace NetInfoCheckerX
             if (isRunning)
             {
                 AppendColorText($"[{GetTimeStr()}] ", GetTimestampColor(), false);
-                AppendColorText("正在停止上次测试", ColorTranslator.FromHtml("#a8a5ff"), true);
+                AppendColorText("正在停止上次测试", Global.Yumeyo2, true);
                 _cts?.Cancel();
                 await Task.Delay(10);
                 _cts?.Cancel();
@@ -2152,7 +2152,7 @@ namespace NetInfoCheckerX
             var labels = new[] { "     ≤15ms ", " 30ms  ", " 50ms  ", " 100ms ", " 200ms ", " 500ms ", " >错误" };
             var arrows = new[] { "     >>>>>>>", ">>>>>>>", ">>>>>>>", ">>>>>>>", ">>>>>>>", ">>>>>>>", ">>>>>>>" };
 
-            AppendColorText("    ===========================================================", ColorTranslator.FromHtml("#a8a5ff"), true);
+            AppendColorText("    ===========================================================", Global.Yumeyo2, true);
 
             for (int i = 0; i < labels.Length; i++)
             {
@@ -2168,7 +2168,7 @@ namespace NetInfoCheckerX
             }
             richTextBox1.AppendText("\n");
 
-            AppendColorText("    ===========================================================", ColorTranslator.FromHtml("#a8a5ff"), true);
+            AppendColorText("    ===========================================================", Global.Yumeyo2, true);
         }
 
         private string GetActualLocalIp(string targetIp)
@@ -2299,10 +2299,10 @@ namespace NetInfoCheckerX
         private Color GetTimestampColor()
         {
             if (GetPingFrequency() <= 1)
-                return ColorTranslator.FromHtml("#a8a5ff");
+                return Global.Yumeyo2;
 
             int secBucket = (int)(DateTime.Now - _sessionStartTime).TotalSeconds;
-            return (secBucket % 2 == 0) ? ColorTranslator.FromHtml("#a8a5ff") : ColorTranslator.FromHtml("#ffa5cf");
+            return (secBucket % 2 == 0) ? Global.Yumeyo2 : ColorTranslator.FromHtml("#ffa5cf");
         }
 
         private string FormatRtt(double rtt)
