@@ -18,7 +18,7 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 
 > [!NOTE]
 >
-> 1. 本程序是 [**网络综合查询器**](https://github.com/Yumeyo23/NetInfoChecker)(易语言版，简称**旧版查询器**) 的**C#重制版**，简称 **查询器X** .
+> 1. 本程序是 [**网络综合查询器** ](https://github.com/Yumeyo23/NetInfoChecker)(易语言版，简称**旧版查询器**) 的**C#重制版**，简称 **查询器X (NetInfoCheckerX / NICX)**  .
 > 2. 本程序已经正式公测. 由于是个人软件，没有严格的开发、测试流程，介绍、实际功能等可能随时改变.
 
 > [!IMPORTANT]
