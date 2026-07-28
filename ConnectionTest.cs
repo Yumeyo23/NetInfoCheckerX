@@ -7,7 +7,6 @@ using System.Linq;
 using System.Media;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -18,11 +17,11 @@ namespace NetInfoCheckerX
 {
     public partial class ConnectionTest : Form
     {
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern int WritePrivateProfileString(string section, string key, string value, string filePath);
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern int GetPrivateProfileString(string section, string key, string defaultValue,
-            StringBuilder buffer, int size, string filePath);
+        private static int WritePrivateProfileString(string section, string key, string value, string filePath)
+            => IniFileHelper.WritePrivateProfileString(section, key, value, filePath);
+        private static int GetPrivateProfileString(string section, string key, string defaultValue,
+            StringBuilder buffer, int size, string filePath)
+            => IniFileHelper.GetPrivateProfileString(section, key, defaultValue, buffer, size, filePath);
         private string IniPath => Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
         private const string IniSection = "ConnectionTest";
 
@@ -35,6 +34,7 @@ namespace NetInfoCheckerX
                 WritePrivateProfileString(IniSection, "MaxFail", txtMaxFail.Text, IniPath);
                 WritePrivateProfileString(IniSection, "Thread", txtThread.Text, IniPath);
                 WritePrivateProfileString(IniSection, "TimeReset", txtTimeReset.Text, IniPath);
+                WritePrivateProfileString(IniSection, "HoldConnections", chkHold.Checked ? "1" : "0", IniPath);
                 if (!string.IsNullOrEmpty(comboServer.Text))
                     WritePrivateProfileString(IniSection, "Server", comboServer.Text, IniPath);
             }
@@ -57,6 +57,9 @@ namespace NetInfoCheckerX
                 if (!string.IsNullOrEmpty(val = sb.ToString())) txtThread.Text = val;
                 GetPrivateProfileString(IniSection, "TimeReset", "", sb, sb.Capacity, IniPath);
                 if (!string.IsNullOrEmpty(val = sb.ToString())) txtTimeReset.Text = val;
+                GetPrivateProfileString(IniSection, "HoldConnections", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString()))
+                    chkHold.Checked = val == "1" || val.Equals("true", StringComparison.OrdinalIgnoreCase);
                 GetPrivateProfileString(IniSection, "Server", "", sb, sb.Capacity, IniPath);
                 string server = sb.ToString();
                 if (!string.IsNullOrEmpty(server) && comboServer.Items.Count > 0)
@@ -74,18 +77,38 @@ namespace NetInfoCheckerX
         private long successCount = 0;
         private long failCount = 0;
         private long totalTried = 0;
-        private bool isTesting = false;
+        private volatile bool isTesting = false;
+        private volatile bool isHoldingConnections = false;
+        private bool holdConnectionsAfterLimit = false;
+        private volatile bool isReleasingConnections = false;
+        private readonly object testStateLock = new object();
+        private long testRunId = 0;
+        private Task currentTestTask = Task.CompletedTask;
         private long lastLoggedSuccess = 0;
         private long lastLoggedFail = 0;
         private ConcurrentBag<Socket> socketPool = new ConcurrentBag<Socket>();
+        private string detectedLocalEndPoint;
+        private bool detectedLocalEndPointDisplayed = false;
         private Stopwatch testStopwatch = new Stopwatch();
+        private Font holdTimeBoldFont;
+        private Font holdTimeRegularFont;
+        private Font holdButtonBoldFont;
+        private Font holdButtonRegularFont;
+        private bool holdTimeUseBoldFont = true;
         private long lastProgressSuccessCount = 0;
         private DateTime stallStartTime = DateTime.MinValue;
         private DateTime lastStallWarning = DateTime.MinValue;
+        private System.Windows.Forms.Timer titleTimer;
 
         public ConnectionTest()
         {
             InitializeComponent();
+            holdTimeBoldFont = lblTime2.Font;
+            holdTimeRegularFont = new Font(lblTime2.Font, FontStyle.Regular);
+            holdButtonBoldFont = btnStart.Font;
+            holdButtonRegularFont = new Font(btnStart.Font, FontStyle.Regular);
+            titleTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            titleTimer.Tick += titleTimer_Tick;
             txtServerPort.KeyPress += TextBoxDigitsOnly_KeyPress;
             txtMaxTry.KeyPress += TextBoxDigitsOnly_KeyPress;
             txtMaxFail.KeyPress += TextBoxDigitsOnly_KeyPress;
@@ -99,12 +122,12 @@ namespace NetInfoCheckerX
             txtTimeReset.Leave += TextBoxClampValue_Leave;
         }
 
-        private async Task ApplyConnectionThemeAsync()
+        private void ApplyConnectionTheme()
         {
             bool isLight = Global.isThemelight;
             Color contrastColor = isLight ? Color.Black : Color.White;
             Color textBack = isLight ? Global.colorWhite : Global.themeBlack;
-            Color yumeyoColor = isLight ? ColorTranslator.FromHtml("#8e8cd8") : ColorTranslator.FromHtml("#a8a5ff");
+            Color yumeyoColor = isLight ? Global.Yumeyo : Global.Yumeyo2;
             Color btnDarkBack = Color.FromArgb(60, 60, 60);
 
             this.BackColor = isLight ? Global.themeLight : Global.themeBlack;
@@ -115,7 +138,7 @@ namespace NetInfoCheckerX
             foreach (var c in yumeyoControls) { if (c != null) c.ForeColor = yumeyoColor; }
 
             Control[] contrastControls = {
-        lblMaxTry, lblMaxFail, lblThread, lblTimeRest, label1, lblNIC,
+        lblMaxTry, lblMaxFail, lblThread, lblTimeRest, label1, lblNIC, chkHold,
     };
             foreach (var c in contrastControls)
             {
@@ -164,7 +187,7 @@ namespace NetInfoCheckerX
                         btn.BackColor = btnDarkBack;
                         btn.FlatStyle = FlatStyle.Flat;
                         btn.FlatAppearance.BorderColor = Color.DimGray;
-                        btn.FlatAppearance.MouseOverBackColor = ColorTranslator.FromHtml("#8e8cd8");
+                        btn.FlatAppearance.MouseOverBackColor = Global.Yumeyo;
                     }
                 }
             }
@@ -200,7 +223,7 @@ namespace NetInfoCheckerX
         private void ConnectionTest_Load(object sender, EventArgs e)
         {
             this.MinimumSize = this.Size;
-            _ = ApplyConnectionThemeAsync();
+            ApplyConnectionTheme();
             var portStatus = GetSystemDynamicPortRange();
             InitNICList();
             lblVersion.Text = Global.exeName + " " + Global.Version + " | " + Others.GetCurrentTime();
@@ -208,14 +231,14 @@ namespace NetInfoCheckerX
             CloudControl.LoadConnectionServers(comboServer);
             CloudControl.ApplyDevTitle(this);
             timer1.Start();
+            titleTimer.Start();
             CloudControl.UsedTimesCounter("连接数测试");
             LoadSettings();
         }
 
         private void EnsureSelectedNICValid()
         {
-            string selectedText = "";
-            this.Invoke(new Action(() => { selectedText = comboNIC.Text; }));
+            string selectedText = comboNIC.Text;
             if (string.IsNullOrEmpty(selectedText)) return;
             if (selectedText.Contains("Any") || selectedText.StartsWith("0.0.0.0") || selectedText.StartsWith("::")) return;
 
@@ -310,12 +333,16 @@ namespace NetInfoCheckerX
             txtMaxFail.Enabled = state;
             txtThread.Enabled = state;
             txtTimeReset.Enabled = state;
+            chkHold.Enabled = state;
 
+            btnStart.Font = holdButtonBoldFont;
             btnStart.Text = state ? "开测" : "停止";
         }
 
         private async void btnStart_Click(object sender, EventArgs e)
         {
+            if (isReleasingConnections) return;
+
             EnsureSelectedNICValid();
 
             if (isTesting)
@@ -371,8 +398,7 @@ namespace NetInfoCheckerX
                 targetIP = resolvedIP;
             }
 
-            string localIPText = "";
-            this.Invoke(new Action(() => { localIPText = comboNIC.Text.Trim(); }));
+            string localIPText = comboNIC.Text.Trim();
 
             string cleanLocalIP = localIPText.Split(' ')[0]
                                              .Replace("[", "")
@@ -381,12 +407,17 @@ namespace NetInfoCheckerX
             IPAddress.TryParse(targetIP, out IPAddress targetAddr);
             IPAddress.TryParse(cleanLocalIP, out IPAddress localAddr);
 
+            if (targetAddr == null || localAddr == null)
+            {
+                txtFail.AppendText("\r\n[启动失败] 目标地址或本地地址无效");
+                SystemSounds.Beep.Play();
+                return;
+            }
+
             if (targetAddr != null && localAddr != null)
             {
                 bool isTargetV6 = targetAddr.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6;
                 bool isLocalV6 = localAddr.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6;
-
-                bool isAny = (cleanLocalIP == "0.0.0.0" || cleanLocalIP == "::");
 
                 if (isTargetV6 != isLocalV6)
                 {
@@ -405,7 +436,15 @@ namespace NetInfoCheckerX
 
             ResetStatistics();
 
-            isTesting = true;
+            long currentTestRunId;
+            lock (testStateLock)
+            {
+                currentTestRunId = Interlocked.Increment(ref testRunId);
+                holdConnectionsAfterLimit = chkHold.Checked;
+                isHoldingConnections = false;
+                isReleasingConnections = false;
+                isTesting = true;
+            }
             SetUIState(false);
 
             testStopwatch.Restart();
@@ -414,50 +453,200 @@ namespace NetInfoCheckerX
             cts = new CancellationTokenSource();
             cts.CancelAfter(TimeSpan.FromMinutes(10));
 
-            StartTestingEngine(targetIP, port, maxTry, maxFail, threads, interval, cleanLocalIP);
+            var startSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            currentTestTask = StartTestingEngine(targetAddr, port, maxTry, maxFail, threads, interval, localAddr,
+                cts.Token, currentTestRunId, startSignal.Task);
+            startSignal.SetResult(true);
         }
 
-        private void StopTest(string reason)
+        private void StopTest(string reason, long? expectedRunId = null)
         {
-            if (!isTesting) return;
-
-            isTesting = false;
-
-            if (cts != null)
+            ConcurrentBag<Socket> socketsToDispose;
+            CancellationTokenSource sourceToDispose;
+            Task workersToWait;
+            lock (testStateLock)
             {
-                try { cts.Cancel(); } catch { }
+                if (!isTesting || (expectedRunId.HasValue && testRunId != expectedRunId.Value)) return;
+
+                isTesting = false;
+                isHoldingConnections = false;
+                isReleasingConnections = true;
+                socketsToDispose = socketPool;
+                socketPool = new ConcurrentBag<Socket>();
+                sourceToDispose = cts;
+                cts = null;
+                workersToWait = currentTestTask ?? Task.CompletedTask;
+                currentTestTask = Task.CompletedTask;
+            }
+
+            if (sourceToDispose != null)
+            {
+                try { sourceToDispose.Cancel(); } catch { }
             }
 
             testStopwatch.Stop();
-            timerUpdate.Stop();
-
-            Task.Run(() =>
+            PostToUI(() =>
             {
-                foreach (var s in socketPool)
-                {
-                    try { s.Dispose(); } catch { }
-                }
-                while (!socketPool.IsEmpty) socketPool.TryTake(out _);
+                timerUpdate.Stop();
+                btnStart.Enabled = false;
+                btnStart.Font = holdButtonBoldFont;
+                btnStart.Text = "正在释放...";
             });
 
-            if (!this.IsDisposed && !this.Disposing)
-            {
-                this.BeginInvoke(new Action(() =>
-                {
-                    SetUIState(true);
-                    var portStatus = GetSystemDynamicPortRange();
-                    this.Text = $"最大连接数测试(TCP) ✧ NICX (mP:{portStatus.num}({portStatus.start}))";
-                    CloudControl.ApplyDevTitle(this);
-                    string stopLog = $"\r\n==========================\r\n" +
-                                     $" [测试停止] {reason}\r\n" +
-                                     $" ❤ 最终成功：{successCount}\r\n" +
-                                     $" ❤ 最终失败：{failCount}\r\n" +
-                                     $"==========================";
-                    txtFail.AppendText(stopLog);
+            _ = CompleteStopAsync(reason, socketsToDispose, workersToWait, sourceToDispose);
+        }
 
-                    txtFail.SelectionStart = txtFail.Text.Length;
-                    txtFail.ScrollToCaret();
-                }));
+        private async Task CompleteStopAsync(string reason, ConcurrentBag<Socket> socketsToDispose,
+            Task workersToWait, CancellationTokenSource sourceToDispose)
+        {
+            try
+            {
+                try { await workersToWait.ConfigureAwait(false); } catch { }
+
+                await Task.Run(() =>
+                {
+                    foreach (var socket in socketsToDispose)
+                    {
+                        try { socket.Dispose(); } catch { }
+                    }
+                }).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (sourceToDispose != null)
+                {
+                    try { sourceToDispose.Dispose(); } catch { }
+                }
+
+                lock (testStateLock)
+                {
+                    isReleasingConnections = false;
+                }
+            }
+
+            PostToUI(() =>
+            {
+                holdTimeUseBoldFont = true;
+                lblTime2.Font = holdTimeBoldFont;
+                btnStart.Font = holdButtonBoldFont;
+                UpdateStatsLabels();
+                SetUIState(true);
+                btnStart.Enabled = true;
+                var portStatus = GetSystemDynamicPortRange();
+                this.Text = $"最大连接数测试(TCP) ✧ NICX (mP:{portStatus.num}({portStatus.start}))";
+                CloudControl.ApplyDevTitle(this);
+                string stopLog = $"\r\n==========================\r\n" +
+                                 $" [测试停止] {reason}\r\n" +
+                                 $" ❤ 最终成功：{Interlocked.Read(ref successCount)}\r\n" +
+                                 $" ❤ 最终失败：{Interlocked.Read(ref failCount)}\r\n" +
+                                 $"==========================";
+                txtFail.AppendText(stopLog);
+                txtFail.SelectionStart = txtFail.Text.Length;
+                txtFail.ScrollToCaret();
+            });
+        }
+
+        private void PostToUI(Action action)
+        {
+            if (this.IsDisposed || this.Disposing || !this.IsHandleCreated) return;
+
+            try
+            {
+                if (this.InvokeRequired)
+                {
+                    this.BeginInvoke(action);
+                }
+                else
+                {
+                    action();
+                }
+            }
+            catch (InvalidOperationException) { }
+        }
+
+        private void HandleAutomaticStop(string reason, long runId)
+        {
+            bool shouldHold;
+            lock (testStateLock)
+            {
+                if (!isTesting || testRunId != runId) return;
+                shouldHold = holdConnectionsAfterLimit;
+            }
+
+            if (shouldHold)
+            {
+                EnterHoldState(reason, runId);
+            }
+            else
+            {
+                StopTest(reason, runId);
+            }
+        }
+
+        private void EnterHoldState(string reason, long runId)
+        {
+            CancellationTokenSource activeSource;
+            lock (testStateLock)
+            {
+                if (!isTesting || testRunId != runId || isHoldingConnections) return;
+                isHoldingConnections = true;
+                activeSource = cts;
+            }
+
+            testStopwatch.Stop();
+            try { activeSource?.CancelAfter(Timeout.Infinite); } catch { }
+
+            PostToUI(() =>
+            {
+                lblTime2.Text = testStopwatch.Elapsed.TotalSeconds.ToString("0");
+                btnStart.Text = "停止";
+                string holdLog = $"\r\n==========================\r\n" +
+                                 $" [进入连接保持状态] {reason}\r\n" +
+                                 $" 请点击“停止”或关闭窗口以释放连接\r\n" +
+                                 $"==========================";
+                txtFail.AppendText(holdLog);
+                txtFail.SelectionStart = txtFail.Text.Length;
+                txtFail.ScrollToCaret();
+            });
+        }
+
+        private bool IsCurrentTestRun(long runId)
+        {
+            return isTesting && Interlocked.Read(ref testRunId) == runId;
+        }
+
+        private bool TryKeepConnectedSocket(Socket socket, long runId)
+        {
+            lock (testStateLock)
+            {
+                if (!isTesting || testRunId != runId) return false;
+                socketPool.Add(socket);
+                if (detectedLocalEndPoint == null && socket.LocalEndPoint is IPEndPoint localEndPoint)
+                {
+                    detectedLocalEndPoint = localEndPoint.Address.ToString();
+                }
+                Interlocked.Increment(ref successCount);
+                return true;
+            }
+        }
+
+        private bool TryReserveAttempt(int maxTry, long runId)
+        {
+            lock (testStateLock)
+            {
+                if (!isTesting || testRunId != runId || isHoldingConnections) return false;
+                if (totalTried >= maxTry) return false;
+                totalTried++;
+                return true;
+            }
+        }
+
+        private void RecordFailure(long runId)
+        {
+            lock (testStateLock)
+            {
+                if (!isTesting || testRunId != runId) return;
+                Interlocked.Increment(ref failCount);
             }
         }
 
@@ -482,7 +671,7 @@ namespace NetInfoCheckerX
             }
             if (!int.TryParse(txtMaxFail.Text, out maxFail) || maxFail < 10 || maxFail > 99999)
             {
-                MessageBox.Show("失败上限需 100-99999 之间");
+                MessageBox.Show("失败上限需 10-99999 之间");
                 return false;
             }
             if (!int.TryParse(txtMaxTry.Text, out maxTry) || maxTry < 100 || maxTry > 65535)
@@ -504,6 +693,11 @@ namespace NetInfoCheckerX
             lastProgressSuccessCount = 0;
             stallStartTime = DateTime.MinValue;
             lastStallWarning = DateTime.MinValue;
+            detectedLocalEndPoint = null;
+            detectedLocalEndPointDisplayed = false;
+            holdTimeUseBoldFont = true;
+            lblTime2.Font = holdTimeBoldFont;
+            btnStart.Font = holdButtonBoldFont;
 
             lblOK2.Text = "-";
             lblFail2.Text = "-";
@@ -513,81 +707,131 @@ namespace NetInfoCheckerX
             txtFail.Text = "失败次数统计\n";
         }
 
-        private async Task DoConnectAsync(string targetIP, int port, string localIP, int interval, int maxTry, int maxFail, CancellationToken token)
+        private static async Task<bool> ConnectWithTimeoutAsync(Socket socket, IPAddress targetAddress, int port,
+            int timeoutMilliseconds, CancellationToken token)
         {
-            if (!IPAddress.TryParse(targetIP, out IPAddress targetAddr)) return;
-            AddressFamily family = targetAddr.AddressFamily;
+            var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            while (!token.IsCancellationRequested && isTesting)
+            using (var timeoutTimer = new System.Threading.Timer(_ =>
             {
-                if (Interlocked.Read(ref totalTried) >= maxTry) break;
-                Interlocked.Increment(ref totalTried);
-
-                Socket socket = new Socket(family, SocketType.Stream, ProtocolType.Tcp);
-
-                socket.NoDelay = true;
-                socket.LingerState = new LingerOption(true, 0);
-
+                if (completion.TrySetResult(false))
+                {
+                    try { socket.Close(); } catch { }
+                }
+            }, null, timeoutMilliseconds, Timeout.Infinite))
+            using (token.Register(() =>
+            {
+                if (completion.TrySetCanceled())
+                {
+                    try { socket.Close(); } catch { }
+                }
+            }))
+            {
                 try
                 {
-                    if (family == AddressFamily.InterNetwork)
+                    socket.BeginConnect(targetAddress, port, asyncResult =>
                     {
-                        if (localIP == "::") return;
-
-                        socket.Bind(new IPEndPoint(IPAddress.Parse(localIP), 0));
-                    }
-                    else if (family == AddressFamily.InterNetworkV6)
-                    {
-                        if (localIP == "0.0.0.0") return;
-                        socket.Bind(new IPEndPoint(IPAddress.Parse(localIP), 0));
-                    }
-
-                    var result = socket.BeginConnect(targetAddr, port, null, null);
-
-                    using (token.Register(() => { try { socket.Close(); } catch { } }))
-                    {
-                        bool success = result.AsyncWaitHandle.WaitOne(2000, true);
-
-                        try { socket.EndConnect(result); } catch { }
-
-                        if (success && socket.Connected && isTesting)
+                        try
                         {
-                            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-
-                            socketPool.Add(socket);
-                            Interlocked.Increment(ref successCount);
-                            UpdateLocalIP(socket.LocalEndPoint.ToString());
+                            socket.EndConnect(asyncResult);
+                            completion.TrySetResult(socket.Connected);
                         }
-                        else
+                        catch
                         {
-                            Interlocked.Increment(ref failCount);
-                            socket.Close();
+                            completion.TrySetResult(false);
                         }
-                    }
+                    }, null);
                 }
                 catch
                 {
-                    Interlocked.Increment(ref failCount);
-                    try { socket.Close(); } catch { }
+                    completion.TrySetResult(false);
                 }
 
-                UpdateStatsLabels();
-                CheckLimits(maxTry, maxFail);
-
-                if (interval > 0)
+                try
                 {
-                    try { await Task.Delay(interval, token); }
-                    catch { break; }
+                    return await completion.Task.ConfigureAwait(false);
+                }
+                catch (TaskCanceledException)
+                {
+                    return false;
                 }
             }
         }
 
-        private void StartTestingEngine(string targetIP, int port, int maxTry, int maxFail, int threads, int interval, string localIP)
+        private async Task DoConnectAsync(IPAddress targetAddress, int port, IPAddress localAddress, int interval,
+            int maxTry, int maxFail, CancellationToken token, long runId, Task startSignal)
         {
+            await startSignal.ConfigureAwait(false);
+
+            AddressFamily family = targetAddress.AddressFamily;
+
+            while (!token.IsCancellationRequested && IsCurrentTestRun(runId) && !isHoldingConnections)
+            {
+                if (!TryReserveAttempt(maxTry, runId)) break;
+
+                Socket socket = null;
+                bool socketWasKept = false;
+                try
+                {
+                    socket = new Socket(family, SocketType.Stream, ProtocolType.Tcp)
+                    {
+                        NoDelay = true,
+                        LingerState = new LingerOption(true, 0)
+                    };
+
+                    socket.Bind(new IPEndPoint(localAddress, 0));
+
+                    bool connected = await ConnectWithTimeoutAsync(socket, targetAddress, port, 2000, token)
+                        .ConfigureAwait(false);
+
+                    if (connected && socket.Connected)
+                    {
+                        socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+                        if (TryKeepConnectedSocket(socket, runId))
+                        {
+                            socketWasKept = true;
+                        }
+                    }
+                    else if (!token.IsCancellationRequested)
+                    {
+                        RecordFailure(runId);
+                    }
+                }
+                catch
+                {
+                    if (!token.IsCancellationRequested)
+                    {
+                        RecordFailure(runId);
+                    }
+                }
+                finally
+                {
+                    if (!socketWasKept && socket != null)
+                    {
+                        try { socket.Dispose(); } catch { }
+                    }
+                }
+
+                CheckLimits(maxTry, maxFail, runId);
+
+                if (interval > 0)
+                {
+                    try { await Task.Delay(interval, token).ConfigureAwait(false); }
+                    catch (TaskCanceledException) { break; }
+                }
+            }
+        }
+
+        private Task StartTestingEngine(IPAddress targetAddress, int port, int maxTry, int maxFail, int threads,
+            int interval, IPAddress localAddress, CancellationToken token, long runId, Task startSignal)
+        {
+            var workers = new Task[threads];
             for (int i = 0; i < threads; i++)
             {
-                Task.Run(() => DoConnectAsync(targetIP, port, localIP, interval, maxTry, maxFail, cts.Token));
+                workers[i] = DoConnectAsync(targetAddress, port, localAddress, interval, maxTry, maxFail, token, runId,
+                    startSignal);
             }
+            return Task.WhenAll(workers);
         }
 
         private void UpdateStatsLabels()
@@ -595,75 +839,62 @@ namespace NetInfoCheckerX
             long currentOK = Interlocked.Read(ref successCount);
             long currentFail = Interlocked.Read(ref failCount);
 
-            this.BeginInvoke(new Action(() =>
+            lblOK2.Text = currentOK.ToString();
+            lblFail2.Text = currentFail.ToString();
+
+            if (currentOK >= lastLoggedSuccess + 100)
             {
-                lblOK2.Text = currentOK.ToString();
-                lblFail2.Text = currentFail.ToString();
-
-                if (currentOK >= lastLoggedSuccess + 100)
-                {
-                    lastLoggedSuccess = (currentOK / 100) * 100;
-                    string nowTime = Others.GetCurrentTimeHMS();
-                    txtSuccess.AppendText($"\r\n[{nowTime}]TCP={comboServer.Text} 成功={lastLoggedSuccess}");
-                }
-
-                if (currentFail >= lastLoggedFail + 10)
-                {
-                    lastLoggedFail = (currentFail / 10) * 10;
-                    string nowTime = Others.GetCurrentTimeHMS();
-                    txtFail.AppendText($"\r\n[{nowTime}]TCP={comboServer.Text} 失败={lastLoggedFail}");
-                }
-            }));
-        }
-
-        private void CheckLimits(int maxTry, int maxFail)
-        {
-            if (totalTried >= maxTry)
-            {
-                StopTest("已达到尝试次数上限");
+                lastLoggedSuccess = (currentOK / 100) * 100;
+                string nowTime = Others.GetCurrentTimeHMS();
+                txtSuccess.AppendText($"\r\n[{nowTime}]TCP={comboServer.Text} 成功={lastLoggedSuccess}");
             }
-            else if (failCount >= maxFail)
+
+            if (currentFail >= lastLoggedFail + 10)
             {
-                StopTest("已达到失败次数上限");
+                lastLoggedFail = (currentFail / 10) * 10;
+                string nowTime = Others.GetCurrentTimeHMS();
+                txtFail.AppendText($"\r\n[{nowTime}]TCP={comboServer.Text} 失败={lastLoggedFail}");
             }
         }
 
-        private void UpdateLocalIP(string localEndPoint)
+        private void CheckLimits(int maxTry, int maxFail, long runId)
         {
-            this.BeginInvoke(new Action(() =>
+            if (!IsCurrentTestRun(runId)) return;
+
+            if (Interlocked.Read(ref totalTried) >= maxTry)
             {
-                string actualIP = "";
-                if (localEndPoint.Contains("]"))
-                {
-                    actualIP = localEndPoint.Split(']')[0].Replace("[", "");
-                }
-                else
-                {
-                    actualIP = localEndPoint.Split(':')[0];
-                }
+                HandleAutomaticStop("已达到尝试次数上限", runId);
+            }
+            else if (Interlocked.Read(ref failCount) >= maxFail)
+            {
+                HandleAutomaticStop("已达到失败次数上限", runId);
+            }
+        }
 
-                if (comboNIC.Text.Contains("Any") || comboNIC.Text.Contains("0.0.0.0") || comboNIC.Text.Contains("::"))
-                {
-                    bool foundMatch = false;
+        private void UpdateLocalIP(string actualIP)
+        {
+            if (string.IsNullOrEmpty(actualIP)) return;
 
-                    for (int i = 0; i < comboNIC.Items.Count; i++)
+            if (comboNIC.Text.Contains("Any") || comboNIC.Text.Contains("0.0.0.0") || comboNIC.Text.Contains("::"))
+            {
+                bool foundMatch = false;
+
+                for (int i = 0; i < comboNIC.Items.Count; i++)
+                {
+                    dynamic item = comboNIC.Items[i];
+                    if (item.Value.ToString() == actualIP)
                     {
-                        dynamic item = comboNIC.Items[i];
-
-                        if (item.Value.ToString() == actualIP)
-                        {
-                            comboNIC.SelectedIndex = i;
-                            foundMatch = true;
-                            break;
-                        }
-                    }
-
-                    if (!foundMatch)
-                    {
-                        comboNIC.Text = actualIP;
+                        comboNIC.SelectedIndex = i;
+                        foundMatch = true;
+                        break;
                     }
                 }
-            }));
+
+                if (!foundMatch)
+                {
+                    comboNIC.Text = actualIP;
+                }
+            }
         }
 
         private void comboServer_KeyDown(object sender, KeyEventArgs e)
@@ -689,20 +920,68 @@ namespace NetInfoCheckerX
             }
             timer1.Stop();
             timer1.Dispose();
+            titleTimer.Stop();
+            titleTimer.Dispose();
             timerUpdate.Stop();
             timerUpdate.Dispose();
+            if (holdTimeRegularFont != null)
+            {
+                if (ReferenceEquals(lblTime2.Font, holdTimeRegularFont))
+                {
+                    lblTime2.Font = holdTimeBoldFont;
+                }
+                holdTimeRegularFont.Dispose();
+                holdTimeRegularFont = null;
+            }
+            if (holdButtonRegularFont != null)
+            {
+                if (ReferenceEquals(btnStart.Font, holdButtonRegularFont))
+                {
+                    btnStart.Font = holdButtonBoldFont;
+                }
+                holdButtonRegularFont.Dispose();
+                holdButtonRegularFont = null;
+            }
         }
 
-        private async void timerUpdate_Tick(object sender, EventArgs e)
+        private void timerUpdate_Tick(object sender, EventArgs e)
         {
             if (isTesting)
             {
                 lblTime2.Text = testStopwatch.Elapsed.TotalSeconds.ToString("0");
+                UpdateStatsLabels();
 
-                string memInfo = GetMemoryUsageString();
+                if (!detectedLocalEndPointDisplayed)
+                {
+                    string localAddress;
+                    lock (testStateLock)
+                    {
+                        localAddress = detectedLocalEndPoint;
+                    }
+                    if (!string.IsNullOrEmpty(localAddress))
+                    {
+                        UpdateLocalIP(localAddress);
+                        detectedLocalEndPointDisplayed = true;
+                    }
+                }
 
-                this.Text = $"最大连接数测试(TCP) ✧ NICX ({memInfo})";
-                CloudControl.ApplyDevTitle(this);
+                if (!isHoldingConnections && cts != null && cts.IsCancellationRequested)
+                {
+                    HandleAutomaticStop("已达到10分钟测试时限", Interlocked.Read(ref testRunId));
+                    return;
+                }
+
+                if (isHoldingConnections)
+                {
+                    holdTimeUseBoldFont = !holdTimeUseBoldFont;
+                    lblTime2.Font = holdTimeUseBoldFont
+                        ? holdTimeBoldFont
+                        : holdTimeRegularFont;
+                    btnStart.Font = holdTimeUseBoldFont
+                        ? holdButtonBoldFont
+                        : holdButtonRegularFont;
+                    return;
+                }
 
                 long currentSuccess = Interlocked.Read(ref successCount);
                 if (currentSuccess > lastProgressSuccessCount)
@@ -723,7 +1002,8 @@ namespace NetInfoCheckerX
                         double stallSeconds = (now - stallStartTime).TotalSeconds;
                         if (stallSeconds >= 90)
                         {
-                            StopTest("连续90秒无成功连接，自动停止");
+                            HandleAutomaticStop("连续90秒无成功连接，自动停止",
+                                Interlocked.Read(ref testRunId));
                             return;
                         }
                         if (stallSeconds >= 10 && (lastStallWarning == DateTime.MinValue || (now - lastStallWarning).TotalSeconds >= 10))
@@ -831,6 +1111,8 @@ namespace NetInfoCheckerX
         {
             if (e.Button == MouseButtons.Right)
             {
+                SaveSettings();
+
                 if (isTesting)
                 {
                     StopTest("重载窗口");
@@ -905,6 +1187,16 @@ namespace NetInfoCheckerX
         private void timer1_Tick(object sender, EventArgs e)
         {
             lblVersion.Text = Global.exeName + " " + Global.Version + " | " + Others.GetCurrentTime();
+        }
+
+        private void titleTimer_Tick(object sender, EventArgs e)
+        {
+            if (isTesting)
+            {
+                string memInfo = GetMemoryUsageString();
+                this.Text = $"最大连接数测试(TCP) ✧ NICX ({memInfo})";
+                CloudControl.ApplyDevTitle(this);
+            }
         }
     }
 }
