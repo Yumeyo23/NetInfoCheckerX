@@ -88,7 +88,7 @@ namespace NetInfoCheckerX
             bool isLight = Global.isThemelight;
             Color contrastColor = isLight ? Color.Black : Color.White;
             Color textBack = isLight ? Global.colorWhite : Global.themeBlack;
-            Color yumeyoColor = isLight ? ColorTranslator.FromHtml("#8e8cd8") : ColorTranslator.FromHtml("#a8a5ff");
+            Color yumeyoColor = isLight ? Global.Yumeyo : Global.Yumeyo2;
             Color btnDarkBack = Color.FromArgb(60, 60, 60);
 
             this.BackColor = isLight ? Global.themeLight : Global.themeBlack;
@@ -169,7 +169,7 @@ namespace NetInfoCheckerX
                         btn.BackColor = btnDarkBack;
                         btn.FlatStyle = FlatStyle.Flat;
                         btn.FlatAppearance.BorderColor = Color.DimGray; // 给个暗色边框
-                        btn.FlatAppearance.MouseOverBackColor = ColorTranslator.FromHtml("#8e8cd8");
+                        btn.FlatAppearance.MouseOverBackColor = Global.Yumeyo;
                     }
                 }
             }
@@ -725,8 +725,8 @@ namespace NetInfoCheckerX
 
             string current5780Server = comboServer.Text;
             txt5780Binding.ForeColor = Color.Black;
-            txt5780Mapping.ForeColor = ColorTranslator.FromHtml("#8e8cd8");
-            txt5780Filtering.ForeColor = ColorTranslator.FromHtml("#8e8cd8");
+            txt5780Mapping.ForeColor = Global.Yumeyo;
+            txt5780Filtering.ForeColor = Global.Yumeyo;
 
             // 创建取消令牌
             _cts5780 = new CancellationTokenSource();
@@ -1580,7 +1580,7 @@ namespace NetInfoCheckerX
             combo3489LocalEnd.Enabled = false;
             ResetIPDetection3489();
             string current3489Server = comboServer.Text;
-            txt3489Type.ForeColor = ColorTranslator.FromHtml("#8e8cd8");
+            txt3489Type.ForeColor = Global.Yumeyo;
 
             _cts3489 = new CancellationTokenSource();
             var cancellationToken = _cts3489.Token;
@@ -2030,7 +2030,7 @@ namespace NetInfoCheckerX
             bool isLight = Global.isThemelight;
             // 获取当前模式下应该显示的默认文字颜色
             Color defaultTextColor = isLight ? Color.Black : Color.White;
-            Color yumeyoColor = isLight ? ColorTranslator.FromHtml("#8e8cd8") : ColorTranslator.FromHtml("#a8a5ff");
+            Color yumeyoColor = isLight ? Global.Yumeyo : Global.Yumeyo2;
 
             ResetIPDetection5780();
             ResetIPDetection3489();
