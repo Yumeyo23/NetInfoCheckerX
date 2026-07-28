@@ -14,7 +14,6 @@ namespace NetInfoCheckerX
 {
     public partial class HWInfoCPP : Form
     {
-        //自由拖拽
         [DllImport("user32.dll")]
         public static extern bool ReleaseCapture();
 
@@ -25,7 +24,6 @@ namespace NetInfoCheckerX
         private const int SC_MOVE = 0xF010;
         private const int HTCAPTION = 0x0002;
 
-        // 这是一个通用的拖动处理函数
         private void MyMouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Left)
@@ -63,47 +61,35 @@ namespace NetInfoCheckerX
 
             bool isLight = Global.isThemelight;
 
-            // 1. 窗口背景颜色
             this.BackColor = isLight ? Global.themeLight : Global.themeBlack;
 
-            // 2. 梦酱专属紫色组 (Yumeyo vs Yumeyo2)
-            Color yumeyoColor = isLight ? ColorTranslator.FromHtml("#8e8cd8") : ColorTranslator.FromHtml("#a8a5ff");
+            Color yumeyoColor = isLight ? Global.Yumeyo : Global.Yumeyo2;
             Label[] yumeyoLabels = { lblPCName, lblExeName };
             foreach (var lbl in yumeyoLabels) { if (lbl != null) lbl.ForeColor = yumeyoColor; }
 
-            // 3. 黑白对比组 (普通文字颜色)
             Color contrastColor = isLight ? Color.Black : Color.White;
 
-            // 标签类
             Label[] contrastLabels = { lblCheckTime, lblSysInsTime, lblSysUpTime };
             foreach (var lbl in contrastLabels) { if (lbl != null) lbl.ForeColor = contrastColor; }
 
-            // 4. 特殊处理文本框 txtPCINFO
             if (txtPCINFO != null)
             {
                 txtPCINFO.ForeColor = contrastColor;
-                // 重点：文本框的背景也要跟着变，不然深色模式下会很难看
                 txtPCINFO.BackColor = isLight ? Global.themeLight : Global.themeBlack;
-
-                // 如果夢酱希望文本框看起来更融入背景，可以尝试把边框去掉（可选）
-                // txtPCINFO.BorderStyle = BorderStyle.None; 
             }
         }
 
-        private async void HWInfoCPP_Load(object sender, EventArgs e)  //创建完毕
+        private async void HWInfoCPP_Load(object sender, EventArgs e)
         {
-            _ = ApplyHWInfoThemeAsync(); // 异步启动，丝滑变色
+            _ = ApplyHWInfoThemeAsync();
 
-            //随意拖拽
             this.MouseDown += MyMouseDown;
             pictureBox1.MouseDown += MyMouseDown;
 
             try
             {
-                // 获取程序运行目录
                 string appPath = Application.StartupPath;
 
-                // 检查所有必需文件
                 List<string> missingFiles = new List<string>();
 
                 foreach (string file in requiredFiles)
@@ -115,7 +101,6 @@ namespace NetInfoCheckerX
                     }
                 }
 
-                // 如果有缺失文件，显示提示并关闭窗口
                 if (missingFiles.Count > 0)
                 {
                     string message = $"缺少运行图吧硬件检测C++版必要的文件：\n{string.Join("\n", missingFiles)}\n\n建议重新打开/解压查询器X/检查杀毒软件喵。";
@@ -133,14 +118,11 @@ namespace NetInfoCheckerX
                 return;
             }
 
-            //启动后的默认显示文本
             txtPCINFO.Text = "                           🔰   正在读取配置(TbTools-C++)   🔰\r\nTips:     1.本工具取自图吧工具箱API(C++预览版)\r\n            2.配置检测仅供参考, 请自行核对~\r\n            3. 如遇程序报错, 请检查查询器X运行目录下组件是否完整, 是否被Defender, 360等软件拦截喵";
 
-            //本机名
             lblPCName.Text = Environment.MachineName;
             lblExeName.Text = Global.exeName + " " + Global.Version;
 
-            //系统安装时间
             try
             {
                 var os = new ManagementObjectSearcher(
@@ -155,7 +137,6 @@ namespace NetInfoCheckerX
                 lblSysInsTime.Text = "系统安装: 无法获取(WMI服务未开启)";
             }
 
-            //已运行时长
             long ms = Environment.TickCount;
             TimeSpan up = TimeSpan.FromMilliseconds(ms);
             DateTime bootTime = DateTime.Now - up;
@@ -165,16 +146,13 @@ namespace NetInfoCheckerX
 
             lblSysUpTime.Text = "系统开机: " + $"{bootTime:yyyy-MM-dd HH:mm:ss} (开机{upStr})";
 
-            //配置检测时间
             lblCheckTime.Text = "检测时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
-
-            //硬件检测核心线程
             string result = await RunHWInfo2Async();
 
             txtPCINFO.Text = result;
         }
-        private void UpdateUptimeDisplay() //动态开机时间
+        private void UpdateUptimeDisplay()
         {
             long ms = Environment.TickCount;
             TimeSpan up = TimeSpan.FromMilliseconds(ms);
@@ -204,14 +182,11 @@ namespace NetInfoCheckerX
                     continue;
                 }
 
-                // 等待一下让文件释放
                 await Task.Delay(100);
 
-                // 读取文本
                 string text = "";
                 try
                 {
-                    // 尝试多次读取，避免文件被占用
                     for (int retry = 0; retry < 5; retry++)
                     {
                         try
@@ -259,7 +234,6 @@ namespace NetInfoCheckerX
             string exe = Path.Combine(Application.StartupPath, "TbToolsHWInfo2.exe");
             string txt = Path.Combine(Application.StartupPath, "hwinfo2.txt");
 
-            // 如果旧文件存在，先删掉
             if (File.Exists(txt))
             {
                 try { File.Delete(txt); } catch { }
@@ -312,16 +286,13 @@ namespace NetInfoCheckerX
                 p?.Dispose();
             }
 
-            // 等待一下再检查文件
             await Task.Delay(200);
 
-            // 判断文件是否已生成
             return File.Exists(txt);
         }
 
         private string ExtractHWInfo2(string text)
         {
-            // 删除 "作者可能…" 的那行
             var lines = text.Split('\n').Where(l => !l.Contains("作者可能")).ToList();
             string clean = string.Join("\n", lines);
 
@@ -344,13 +315,11 @@ namespace NetInfoCheckerX
             // 使用正则表达式将所有连续的制表符替换为单个制表符
             result = System.Text.RegularExpressions.Regex.Replace(result, @"\t+", "\t");
 
-            // 汉化厂商名称
             result = TranslateManufacturers(result);
 
             return result;
         }
 
-        //  汉化主板相关
         private string TranslateManufacturers(string text)
         {
             string result = text;
@@ -370,7 +339,6 @@ namespace NetInfoCheckerX
              { "Maxsun", "铭瑄" },
              { "Colorful Technology And Development Co.,LTD", "七彩虹" },
              { "Microsoft Corporation", "微软" }
-              // 未来可以在这里继续添加更多映射
         };
 
         private void timer1_Tick(object sender, EventArgs e)
