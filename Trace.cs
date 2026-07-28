@@ -634,7 +634,7 @@ namespace NetInfoCheckerX
                 }
                 else
                 {
-                    AppendColorText("ip2region.v4.xdb 未找到\n", ColorTranslator.FromHtml("#a8a5ff"), false);
+                    AppendColorText("ip2region.v4.xdb 未找到\n", Global.Yumeyo2, false);
                 }
 
                 // 新增：初始化 IPv6 搜索器
@@ -644,12 +644,12 @@ namespace NetInfoCheckerX
                 }
                 else
                 {
-                    AppendColorText("ip2region.v6.xdb 未找到\n", ColorTranslator.FromHtml("#a8a5ff"), false);
+                    AppendColorText("ip2region.v6.xdb 未找到\n", Global.Yumeyo2, false);
                 }
             }
             catch (Exception ex)
             {
-                AppendColorText("ip2region 初始化失敗：" + ex.Message + "\n", ColorTranslator.FromHtml("#a8a5ff"), false);
+                AppendColorText("ip2region 初始化失敗：" + ex.Message + "\n", Global.Yumeyo2, false);
             }
         }
 
@@ -945,7 +945,7 @@ namespace NetInfoCheckerX
 
             string protocol = GetSelectedProtocol();
             richTextBox1.Clear();
-            Color themeColor = Color.FromArgb(168, 165, 255);
+            Color themeColor = Global.Yumeyo2;
 
             if (protocol == "ICMP")
             {
@@ -1497,32 +1497,34 @@ namespace NetInfoCheckerX
         // ==========================================
         private string GetLocalGeoInfo(string ip)
         {
-            string ip2Region = string.Empty;
-            string geoCn = string.Empty;
+            if (string.IsNullOrWhiteSpace(ip))
+                return string.Empty;
+
+            if (!IPAddress.TryParse(ip, out _))
+                return "未知";
+
+            string reservedLabel = IanaReservedIP.Check(ip);
+            if (!string.IsNullOrEmpty(reservedLabel))
+                return reservedLabel;
+
             try
             {
-                ip2Region = GetIpLocationString(ip)?.Trim();
+                // Trace 的默认本地库与主界面/手动查询共用同一入口：
+                // 有效 DLC 存在时优先使用 DLC，否则由该方法回退至
+                // IP2Region + GeoCN。这里不受全局隐私模式影响。
+                GeoResult localResult = Api2.GetLocalDBGeoAsync(ip, CancellationToken.None)
+                    .ConfigureAwait(false)
+                    .GetAwaiter()
+                    .GetResult();
+
+                string formatted = FormatOnlineGeoResult(localResult);
+                return string.IsNullOrWhiteSpace(formatted) ? "未知" : formatted;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[GEO-Local] ip2region 查询失败 ip={ip}: {ex.Message}");
+                Debug.WriteLine($"[GEO-Local] 本地数据库查询失败 ip={ip}: {ex.Message}");
+                return "查询失败";
             }
-
-            // 两个本地库相互独立：其中一个异常时，仍保留另一个库的结果。
-            try
-            {
-                geoCn = Api2.GetGeoCNLocationQuick(ip)?.Trim();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[GEO-Local] MaxMind 查询失败 ip={ip}: {ex.Message}");
-            }
-
-            if (string.IsNullOrWhiteSpace(geoCn)) return ip2Region;
-            if (string.IsNullOrWhiteSpace(ip2Region) ||
-                string.Equals(geoCn, ip2Region, StringComparison.OrdinalIgnoreCase))
-                return geoCn;
-            return $"{geoCn} | {ip2Region}";
         }
 
         private static string NormalizeOnlineGeoPart(string value)
@@ -1723,7 +1725,7 @@ namespace NetInfoCheckerX
             if (hasPending || startedAny)
             {
                 if (hasPending)
-                    AppendColorText("\n正在查询地理位置...", Color.FromArgb(168, 165, 255), false);
+                    AppendColorText("\n正在查询地理位置...", Global.Yumeyo2, false);
                 while (_enrichPending.Count > 0)
                     await Task.Delay(100, token);
             }
@@ -4047,7 +4049,7 @@ namespace NetInfoCheckerX
                     using (var smallFont2 = new Font(defaultFont2.FontFamily, Math.Max(defaultFont2.Size - 1.5f, 7f)))
                     {
                         AppendColorText("             -> " + combined + "\n",
-                            ColorTranslator.FromHtml("#a8a5ff"), false, smallFont2);
+                            Global.Yumeyo2, false, smallFont2);
                         _hopGeoOriginal[result.TTL] = combined;
                         if (result.ReplyAddress != null)
                             _ipToHop[result.ReplyAddress.ToString()] = result.TTL;
@@ -4117,7 +4119,7 @@ namespace NetInfoCheckerX
                     if (geoChecked && s.GeoInfo != null)
                     {
                         AppendColorText("             -> " + s.GeoInfo,
-                            ColorTranslator.FromHtml("#a8a5ff"), false, smallFont);
+                            Global.Yumeyo2, false, smallFont);
                         AppendColorText("\n", Color.White, false);
                     }
 
@@ -4138,7 +4140,7 @@ namespace NetInfoCheckerX
                         if (geoChecked && s.IpGeoCache.TryGetValue(altIp.ToString(), out var altGeo))
                         {
                             AppendColorText(" -> " + altGeo,
-                                ColorTranslator.FromHtml("#a8a5ff"), false, smallFont);
+                                Global.Yumeyo2, false, smallFont);
                         }
                         AppendColorText("\n", Color.White, false);
                     }
