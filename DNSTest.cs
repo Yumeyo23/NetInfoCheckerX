@@ -500,7 +500,7 @@ namespace NetInfoCheckerX
 
             bool isLight = Global.isThemelight;
             Color contrastColor = isLight ? Color.Black : Color.White;
-            Color yumeyoColor = isLight ? ColorTranslator.FromHtml("#8e8cd8") : ColorTranslator.FromHtml("#a8a5ff");
+            Color yumeyoColor = isLight ? Global.Yumeyo : Global.Yumeyo2;
             Color controlBack = isLight ? SystemColors.Window : Color.FromArgb(45, 45, 48);
             Color buttonBack = isLight ? SystemColors.ButtonFace : Color.FromArgb(55, 55, 58);
             Color comboFore = isLight ? SystemColors.ControlText : Color.White;
