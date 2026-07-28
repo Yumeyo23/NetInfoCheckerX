@@ -9,8 +9,6 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 
 《网络综合查询器X》是由與夢Yumeyo原创开发、基于易语言版《网络综合查询器》重制、以“小而美”为设计理念的全能向网络工具箱，适合网络爱好者常备日常使用。
 
-软件核心功能为查询/记录/修改本机IP、多出口测试(简洁版/Dashboard)、NAT类型测试、TCP/UDP/ICMP全协议Ping+/Trace+、最大连接数测试、DNS劫持测试、DNS解析测速、UPnP控制台、IPERF内网测速、一键搭建LibreSpeed服务器、本机配置检测、延迟(到骨干网/CS2)测试、一键/Renew、IPv6有效期查询、手动查询IP/MAC地址、快速跳转控制面板、速查剪贴板、悬浮显示信息等。
-
 > [!CAUTION]
 > **本软件主要为中国大陆的中文用户设计. 非中文/中国大陆用户可能无法获得最佳体验, 甚至无法使用.**
 > 
@@ -21,7 +19,7 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 > [!NOTE]
 >
 > 1. 本程序是 [**网络综合查询器**](https://github.com/Yumeyo23/NetInfoChecker)(易语言版，简称**旧版查询器**) 的**C#重制版**，简称 **查询器X** .
->2. 本程序正在开发中，暂未正式公测. 介绍、实际功能等可能随时改变.
+> 2. 本程序已经正式公测. 由于是个人软件，没有严格的开发、测试流程，介绍、实际功能等可能随时改变.
 
 > [!IMPORTANT]
 >
@@ -29,17 +27,22 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 >
 > 为防API轻易滥用及保护软件更新动力，本项目采用部分开源：**公开绝大多数测试的核心方法供交流学习，UI 等高原创部分暂时保持不开源**。
 
-## 视频介绍/Wiki
+## 介绍/Wiki
+
+软件核心功能为查询/记录/修改本机IP、多出口测试(简洁版/Dashboard)、NAT类型测试、TCP/UDP/ICMP全协议Ping+/Trace+、最大连接数测试、DNS劫持测试、DNS解析测速、UPnP控制台、IPERF内网测速、一键搭建LibreSpeed服务器、本机配置检测、延迟(到骨干网/CS2)测试、一键/Renew、IPv6有效期查询、手动查询IP/MAC地址、快速跳转控制面板、速查剪贴板、悬浮显示信息等。
 
 https://www.bilibili.com/video/BV1cyibBkEbJ/
 
-Wiki持续更新中...可在[Wiki](https://github.com/Yumeyo23/NetInfoCheckerX/wiki)查看
+**Wiki持续更新中...绝大多数功能已撰写官方Wiki，可在[Wiki](https://github.com/Yumeyo23/NetInfoCheckerX/wiki)查看**
+
+觉得好的话，可以[请我喝杯咖啡](https://github.com/Yumeyo23/NetInfoCheckerX/wiki/%E8%AF%B7%E6%88%91%E5%96%9D%E6%9D%AF%E5%92%96%E5%95%A1-Buy-me-a-coffee)
 
 ## 下载
-- **因个人习惯，GitHub页面更新不是很及时，最新版软件可+QQ群：1013442261下载**
+- **因个人习惯，GitHub页面更新不是很及时，最新版软件/DLC及其安装方法可+QQ群：1013442261下载**
 - GitHub请在[release](https://github.com/Yumeyo23/NetInfoCheckerX/releases)下载最新版.
 - **软件完全绿色，但用到了一些外部依赖（后面一一列出），release时为WINRAR自解压文件**
 - **既可双击临时运行，也可解压后固定目录运行**。长期使用建议解压后运行
+  
 > [!NOTE]
 >
 > 由于用到了外部依赖，**部分依赖存在报毒问题**，建议关闭或者信任后使用，
@@ -55,7 +58,7 @@ Wiki持续更新中...可在[Wiki](https://github.com/Yumeyo23/NetInfoCheckerX/w
 - 本程序架构**C# NET Framework 4.7.2 WinForm窗口程序**，且作者**无任何升/换框架/跨平台欲望**
 - 感谢陪伴awa
 
-## 灵感/致谢
+## 灵感/致谢/依赖列表
 - NAT类型测试灵感源自于[NatTypeTester](https://github.com/HMBSbige/NatTypeTester)(未使用其代码)，并加入了大量的优化功能：例如**显示debug信息、设置端口模式/起手、列出可用网卡+指定IP测试** ~~(其实我也忍不了一个纯NAT测试要100MB)~~
 - 本机配置检测，为了开发方便+数据准确，全部使用[图吧工具箱](https://www.tbtool.cn/sdk/index.html)公开的硬件检测SDK (~~包括WMI版和~~C++预览版都有使用，WMI已原生实现).
 - iPerf工具来自于最新的[iperf3-win-builds](https://github.com/ar51an/iperf3-win-builds/releases)，受制于技术，只做了设置GUI用于拼接启动代码.
@@ -64,7 +67,6 @@ Wiki持续更新中...可在[Wiki](https://github.com/Yumeyo23/NetInfoCheckerX/w
 - 感谢所有AI教我写程序!!!
 - 如有未尽之处，深表歉意，衷心感谢.
 
-## 依赖列表
 release的程序完整包使用到了以下依赖及NuGet，在此致谢：
 
 | 名字                                                         | 用途                                                         | 备注                                                         |
@@ -72,6 +74,7 @@ release的程序完整包使用到了以下依赖及NuGet，在此致谢：
 | [图吧工具箱硬件检测引擎](https://www.tbtool.cn/sdk/index.html) | 本机配置检测(推荐、备用)                                     | 直接使用图吧工具箱提供的专业API，配置检测更准，开发更快。<br />(推荐)使用的是C++版，直接使用<br />~~(备用)使用的是WMI版，编译了图吧官方提供例程使用~~ **WMI版本已不再使用，改为自有实现** |
 | [iperf3-win-builds](https://github.com/ar51an/iperf3-win-builds/releases) | iPerf3测速工具                                               | 未修改                                                       |
 | [librespeed](https://github.com/librespeed/speedtest)        | LibreSpeed开服器                                             | 精简绝大部分组件(缩小体积)、修改UI/块大小(符合软件需要)      |
+| [OpenSpeedTest](https://github.com/librespeed/speedtest)        | LibreSpeed开服器DLC                                             | 未修改      |
 | [IEEE官方MAC地址表](http://standards-oui.ieee.org/oui/oui.csv)<br />[WireShark提供的MAC地址表](https://www.wireshark.org/download/automated/data/manuf.gz) | 手动查询MAC地址                                              | 未修改                                                       |
 | [Curl for Windows](https://curl.se/windows/)                 | 备用, 访问部分API使用                                        | 未修改，带证书                                               |
 | [Open.Nat](https://www.nuget.org/packages/Open.NAT/2.1.0?_src=template) | UPnP控制台                                                   | NuGet直接使用                                                |
@@ -82,9 +85,10 @@ release的程序完整包使用到了以下依赖及NuGet，在此致谢：
 | [MaxMind.Db](https://www.nuget.org/packages/MaxMind.DB)      | 程序内置的IP地理位置数据库(主窗口、手动查询IP、Trace+使用)   | 同上，数据库使用[GeoCN](https://github.com/ljxi/GeoCN)       |
 | [DnsClient](https://www.nuget.org/packages/DnsClient/)       | DNS劫持测试                                                  | 同上                                                         |
 | [WinDivert](https://github.com/basil00/WinDivert)            | Trace+高精度测试                                             | 同上                                                         |
+| [Merged-IP-Data](https://github.com/NetworkCats/Merged-IP-Data)  | 本地IP数据库DLC | 同上                                                         |
 | [obfuscar](https://www.nuget.org/packages/Obfuscar)          | 备用混淆器, 发布版目前使用[ConfuserEx](https://github.com/mkaring/ConfuserEx) | 同上                                                         |
 
-## To do list
+## To do list （重制阶段用，重制完毕后的新功能不计入此列表）
 
 - [x] 国内出口IP, 国外出口/走代理IP  **//25.11.19开工，已完工**
 
@@ -145,7 +149,6 @@ release的程序完整包使用到了以下依赖及NuGet，在此致谢：
 - [X] 多出口测试完整版（精简版功能+双栈+UDP+主流延迟）  **//26.4.10完工**
 
   
-
 ## NOT TO DO list
 
 - 内网扫描（已有标准答案，个人无需再做）
@@ -153,7 +156,7 @@ release的程序完整包使用到了以下依赖及NuGet，在此致谢：
   2. 该需求已有[Network Scanner](https://www.softperfect.com/products/networkscanner/)这种标杆软件，体积也只有10MB左右，可以扫/8以上的大段+ipv6，可以扫端口、arp、tcp/udp等. **这是有现成的满分答案，我没必要再做**.
 
 
-## NetInfoChecker (E.ver)  To Do List (完工)
+## NetInfoChecker (E.ver)  To Do List (C#重制完毕，易语言版本不再维护)
 
 - 国内出口IP, 国外出口/走代理IP //**2024年7月27日**（V1.0 支持CN查询和GFW查询）
 - 一键/Renew [ipcfg/release/renew/flushdns] //**2024年7月28日**（V1.1 新增一键ipconfig /release + /renew；flushdns于**2024年11月22日**V4.5a加入）
