@@ -224,7 +224,7 @@ namespace NetInfoCheckerX
                         btn.FlatStyle = FlatStyle.Flat;
                         btn.FlatAppearance.BorderColor = Color.DimGray;
                         // 悬停时变梦酱紫
-                        btn.FlatAppearance.MouseOverBackColor = ColorTranslator.FromHtml("#8e8cd8");
+                        btn.FlatAppearance.MouseOverBackColor = Global.Yumeyo;
                     }
                 }
             }
