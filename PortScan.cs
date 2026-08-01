@@ -235,6 +235,7 @@ namespace NetInfoCheckerX
             lblExeName.Text = Global.exeName + " " + Global.Version;
             InitNetworkInterfaces();
             LoadSettings();
+            CloudControl.UsedTimesCounter("PortScan");
         }
 
         private void btnPaste_Click(object sender, EventArgs e)
