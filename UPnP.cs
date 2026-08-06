@@ -6,6 +6,8 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -54,12 +56,109 @@ namespace NetInfoCheckerX
             };
         }
 
+        private void ApplyUPnPTheme()
+        {
+            bool isLight = Global.isThemelight;
+            Color foreground = isLight ? Global.colorBlack : Global.colorWhite;
+            Color formBackground = isLight ? Global.themeLight : Global.themeBlack;
+            Color controlBackground = isLight ? SystemColors.Window : Color.FromArgb(32, 32, 32);
+            Color headerBackground = isLight ? SystemColors.Control : Color.FromArgb(45, 45, 48);
+            Color alternateBackground = isLight ? Color.FromArgb(248, 248, 248) : Color.FromArgb(25, 25, 25);
+            Color accent = isLight ? Global.Yumeyo : Global.Yumeyo2;
+            Color accentText = GetReadableTextColor(accent);
+
+            BackColor = formBackground;
+            ForeColor = foreground;
+
+            foreach (Control control in new Control[]
+            {
+                lblPublicPort, lblClientIP, lblName, lblTime, lblClientPort,
+                label1, label2, radioTCP, radioUDP
+            })
+            {
+                control.BackColor = Color.Transparent;
+                control.ForeColor = foreground;
+            }
+
+            foreach (TextBox textBox in new[] { txtClientPort, txtPublicPort, txtName })
+            {
+                textBox.BackColor = controlBackground;
+                textBox.ForeColor = foreground;
+                textBox.BorderStyle = isLight ? BorderStyle.Fixed3D : BorderStyle.FixedSingle;
+            }
+
+            foreach (ComboBox comboBox in new[] { comboCilentIP, comboTime, comboNIC })
+            {
+                comboBox.BackColor = controlBackground;
+                comboBox.ForeColor = foreground;
+                comboBox.FlatStyle = isLight ? FlatStyle.Standard : FlatStyle.Flat;
+            }
+
+            foreach (Button button in new[] { btnCreate, btnDel, btnRefresh, btnRefreshNIC, btnDelAll })
+            {
+                ApplyUPnPButtonTheme(button);
+            }
+
+            dataGridView1.EnableHeadersVisualStyles = false;
+            dataGridView1.BackgroundColor = controlBackground;
+            dataGridView1.GridColor = isLight ? Color.FromArgb(210, 210, 210) : Color.FromArgb(65, 65, 65);
+            dataGridView1.ColumnHeadersDefaultCellStyle.BackColor = headerBackground;
+            dataGridView1.ColumnHeadersDefaultCellStyle.ForeColor = foreground;
+            dataGridView1.ColumnHeadersDefaultCellStyle.SelectionBackColor = headerBackground;
+            dataGridView1.ColumnHeadersDefaultCellStyle.SelectionForeColor = foreground;
+            dataGridView1.RowHeadersDefaultCellStyle.BackColor = headerBackground;
+            dataGridView1.RowHeadersDefaultCellStyle.ForeColor = foreground;
+            dataGridView1.RowHeadersDefaultCellStyle.SelectionBackColor = accent;
+            dataGridView1.RowHeadersDefaultCellStyle.SelectionForeColor = accentText;
+            dataGridView1.DefaultCellStyle.BackColor = controlBackground;
+            dataGridView1.DefaultCellStyle.ForeColor = foreground;
+            dataGridView1.DefaultCellStyle.SelectionBackColor = accent;
+            dataGridView1.DefaultCellStyle.SelectionForeColor = accentText;
+            dataGridView1.RowsDefaultCellStyle.BackColor = controlBackground;
+            dataGridView1.RowsDefaultCellStyle.ForeColor = foreground;
+            dataGridView1.RowsDefaultCellStyle.SelectionBackColor = accent;
+            dataGridView1.RowsDefaultCellStyle.SelectionForeColor = accentText;
+            dataGridView1.AlternatingRowsDefaultCellStyle.BackColor = alternateBackground;
+            dataGridView1.AlternatingRowsDefaultCellStyle.ForeColor = foreground;
+            dataGridView1.AlternatingRowsDefaultCellStyle.SelectionBackColor = accent;
+            dataGridView1.AlternatingRowsDefaultCellStyle.SelectionForeColor = accentText;
+        }
+
+        private void ApplyUPnPButtonTheme(Button button)
+        {
+            bool isLight = Global.isThemelight;
+            Color foreground = isLight ? Global.colorBlack : Global.colorWhite;
+            Color accent = isLight ? Global.Yumeyo : Global.Yumeyo2;
+
+            if (isLight)
+            {
+                button.ForeColor = SystemColors.ControlText;
+                button.BackColor = SystemColors.Control;
+                button.FlatStyle = FlatStyle.Standard;
+                button.UseVisualStyleBackColor = true;
+            }
+            else
+            {
+                button.ForeColor = foreground;
+                button.UseVisualStyleBackColor = false;
+                button.FlatStyle = FlatStyle.Flat;
+                button.BackColor = Color.FromArgb(60, 60, 60);
+                button.FlatAppearance.BorderColor = Color.FromArgb(120, 120, 120);
+                button.FlatAppearance.MouseOverBackColor = accent;
+            }
+        }
+
+        private static Color GetReadableTextColor(Color background)
+        {
+            int brightness = (background.R * 299 + background.G * 587 + background.B * 114) / 1000;
+            return brightness >= 150 ? Color.Black : Color.White;
+        }
+
         #region 核心逻辑：获取与筛选设备
 
         private async Task<NatDevice> GetNatDevice()
         {
             if (_device != null) return _device;
-            NatDiscoverer discoverer = new NatDiscoverer();
 
             string selectedIpStr = "";
             this.Invoke(new Action(() => { selectedIpStr = comboNIC.Text; }));
@@ -74,13 +173,12 @@ namespace NetInfoCheckerX
             {
                 try
                 {
-                    var devices = await discoverer.DiscoverDevicesAsync(PortMapper.Upnp, new CancellationTokenSource(1500));
-                    var found = devices.FirstOrDefault();
+                    var found = await DiscoverDeviceOnInterface(selectedIp, 1500, quickStageCts.Token);
                     if (found != null) quickStageCts.Cancel();
                     return found;
                 }
                 catch { return null; }
-            }, quickStageCts.Token);
+            });
 
             var commonPortsTask = Task.Run(async () =>
             {
@@ -88,26 +186,18 @@ namespace NetInfoCheckerX
                 foreach (int port in commonPorts)
                 {
                     if (quickStageCts.Token.IsCancellationRequested) break;
-                    if (await QuickCheckPort(gatewayIp, port))
+                    if (await QuickCheckPort(gatewayIp, port, selectedIp))
                     {
                         try
                         {
-                            // 并行赛跑：直连 HTTP 抓取 XML 与标准 SSDP 发现
-                            var directTask = TryGetDeviceOnPort(gatewayIp, port, selectedIp);
-                            var ssdpTask = discoverer.DiscoverDeviceAsync(PortMapper.Upnp, new CancellationTokenSource(800));
-                            var done = await Task.WhenAny(directTask, ssdpTask);
-                            var d = await done;
-                            if (d != null) { quickStageCts.Cancel(); return d; }
-
-                            // 如果先完成的返回 null，等另一个
-                            var other = (done == directTask) ? await ssdpTask : await directTask;
-                            if (other != null) { quickStageCts.Cancel(); return other; }
+                            var device = await TryGetDeviceOnPort(gatewayIp, port, selectedIp);
+                            if (device != null) { quickStageCts.Cancel(); return device; }
                         }
                         catch { }
                     }
                 }
                 return null;
-            }, quickStageCts.Token);
+            });
 
             var winner = await Task.WhenAny(broadcastTask, commonPortsTask);
             _device = await winner;
@@ -119,7 +209,7 @@ namespace NetInfoCheckerX
                 bool shouldFullScan = CheckFullScanConfig();
                 if (shouldFullScan)
                 {
-                    _device = await RunFullScanLogic(discoverer, gatewayIp, selectedIp);
+                    _device = await RunFullScanLogic(gatewayIp, selectedIp);
                 }
             }
 
@@ -127,7 +217,97 @@ namespace NetInfoCheckerX
             return _device;
         }
 
-        private async Task<NatDevice> RunFullScanLogic(NatDiscoverer discoverer, IPAddress gatewayIp, IPAddress localAddress)
+        private async Task<NatDevice> DiscoverDeviceOnInterface(
+            IPAddress localAddress, int timeoutMs, CancellationToken token)
+        {
+            var multicastEndPoint = new IPEndPoint(IPAddress.Parse("239.255.255.250"), 1900);
+            string[] searchTargets =
+            {
+                "urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+                "urn:schemas-upnp-org:device:InternetGatewayDevice:2",
+                "upnp:rootdevice"
+            };
+            var seenLocations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            using (var client = new UdpClient(AddressFamily.InterNetwork))
+            {
+                client.Client.Bind(new IPEndPoint(localAddress, 0));
+                client.Client.SetSocketOption(
+                    SocketOptionLevel.IP,
+                    SocketOptionName.MulticastInterface,
+                    localAddress.GetAddressBytes());
+
+                foreach (string searchTarget in searchTargets)
+                {
+                    token.ThrowIfCancellationRequested();
+                    string request =
+                        "M-SEARCH * HTTP/1.1\r\n" +
+                        "HOST: 239.255.255.250:1900\r\n" +
+                        "MAN: \"ssdp:discover\"\r\n" +
+                        "MX: 1\r\n" +
+                        "ST: " + searchTarget + "\r\n\r\n";
+                    byte[] requestBytes = Encoding.ASCII.GetBytes(request);
+                    await client.SendAsync(requestBytes, requestBytes.Length, multicastEndPoint);
+                }
+
+                DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+                while (DateTime.UtcNow < deadline)
+                {
+                    token.ThrowIfCancellationRequested();
+                    int remainingMs = Math.Max(1, (int)(deadline - DateTime.UtcNow).TotalMilliseconds);
+                    Task<UdpReceiveResult> receiveTask = client.ReceiveAsync();
+                    Task delayTask = Task.Delay(remainingMs, token);
+                    Task completedTask = await Task.WhenAny(receiveTask, delayTask);
+
+                    if (completedTask != receiveTask)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        return null;
+                    }
+
+                    UdpReceiveResult response = await receiveTask;
+                    string responseText = Encoding.UTF8.GetString(response.Buffer);
+                    string location = GetSsdpHeaderValue(responseText, "LOCATION");
+                    if (string.IsNullOrWhiteSpace(location) || !seenLocations.Add(location)) continue;
+
+                    Uri locationUri;
+                    if (!Uri.TryCreate(location, UriKind.Absolute, out locationUri)) continue;
+                    if (locationUri.Scheme != Uri.UriSchemeHttp && locationUri.Scheme != Uri.UriSchemeHttps) continue;
+
+                    NatDevice device = await Task.Run(() =>
+                    {
+                        try
+                        {
+                            object info = CallBuildUpnpNatDeviceInfo(localAddress, locationUri.ToString());
+                            return info == null ? null : CreateUpnpDevice(info);
+                        }
+                        catch
+                        {
+                            return null;
+                        }
+                    });
+
+                    if (device != null) return device;
+                }
+            }
+
+            return null;
+        }
+
+        private static string GetSsdpHeaderValue(string response, string headerName)
+        {
+            string[] lines = response.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string line in lines)
+            {
+                int separator = line.IndexOf(':');
+                if (separator <= 0) continue;
+                if (!line.Substring(0, separator).Trim().Equals(headerName, StringComparison.OrdinalIgnoreCase)) continue;
+                return line.Substring(separator + 1).Trim();
+            }
+            return null;
+        }
+
+        private async Task<NatDevice> RunFullScanLogic(IPAddress gatewayIp, IPAddress localAddress)
         {
             var masterCts = new CancellationTokenSource();
             return await Task.Run(async () =>
@@ -146,7 +326,7 @@ namespace NetInfoCheckerX
                             try
                             {
                                 if (masterCts.IsCancellationRequested) return null;
-                                if (await QuickCheckPort(gatewayIp, targetPort))
+                                if (await QuickCheckPort(gatewayIp, targetPort, localAddress))
                                 {
                                     var d = await TryGetDeviceOnPort(gatewayIp, targetPort, localAddress);
                                     if (d != null) { masterCts.Cancel(); return d; }
@@ -176,12 +356,13 @@ namespace NetInfoCheckerX
             });
         }
 
-        private async Task<bool> QuickCheckPort(IPAddress ip, int port)
+        private async Task<bool> QuickCheckPort(IPAddress ip, int port, IPAddress localAddress)
         {
             try
             {
-                using (var client = new System.Net.Sockets.TcpClient())
+                using (var client = new TcpClient(AddressFamily.InterNetwork))
                 {
+                    client.Client.Bind(new IPEndPoint(localAddress, 0));
                     var task = client.ConnectAsync(ip, port);
                     if (await Task.WhenAny(task, Task.Delay(100)) == task && client.Connected) return true;
                 }
@@ -249,7 +430,15 @@ namespace NetInfoCheckerX
                 var ipProviderType = asm.GetType("Open.Nat.IPAddressesProvider");
                 var ipProvider = Activator.CreateInstance(ipProviderType);
                 var searcherType = asm.GetType("Open.Nat.UpnpSearcher");
-                _cachedSearcher = Activator.CreateInstance(searcherType, new[] { ipProvider });
+                var ipProviderInterfaceType = asm.GetType("Open.Nat.IIPAddressesProvider");
+                var searcherConstructor = searcherType.GetConstructor(
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.NonPublic,
+                    null, new[] { ipProviderInterfaceType }, null);
+                if (searcherConstructor == null)
+                    throw new MissingMethodException("Open.Nat.UpnpSearcher 构造函数不可用");
+                _cachedSearcher = searcherConstructor.Invoke(new[] { ipProvider });
                 _cachedBuildMethod = searcherType.GetMethod("BuildUpnpNatDeviceInfo",
                     System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
                 var deviceType = asm.GetType("Open.Nat.UpnpNatDevice");
@@ -510,7 +699,7 @@ namespace NetInfoCheckerX
                             {
                                 _isConfirmingDelete = false;
                                 btnDel.Text = "删除映射";
-                                btnDel.ForeColor = Color.White;
+                                ApplyUPnPButtonTheme(btnDel);
                             }
                         }));
                     }
@@ -523,7 +712,7 @@ namespace NetInfoCheckerX
             try
             {
                 btnDel.Text = "删除中";
-                btnDel.ForeColor = Color.White;
+                ApplyUPnPButtonTheme(btnDel);
                 ToggleControls(false, btnDel);
 
                 var device = await GetNatDevice();
@@ -560,6 +749,7 @@ namespace NetInfoCheckerX
             {
                 ToggleControls(true);
                 btnDel.Text = "删除映射";
+                ApplyUPnPButtonTheme(btnDel);
             }
         }
 
@@ -600,7 +790,7 @@ namespace NetInfoCheckerX
             try
             {
                 btnDelAll.Text = "删除中";
-                btnDelAll.ForeColor = Color.White;
+                ApplyUPnPButtonTheme(btnDelAll);
                 ToggleControls(false, btnDelAll);
 
                 var device = await GetNatDevice();
@@ -638,9 +828,8 @@ namespace NetInfoCheckerX
         private void RestoreDelAllButton()
         {
             btnDelAll.Text = "删除全部";
-            btnDelAll.BackColor = Color.FromArgb(60, 60, 60);
-            btnDelAll.ForeColor = Color.White;
             btnDelAll.Font = new Font(btnDelAll.Font, FontStyle.Bold);
+            ApplyUPnPButtonTheme(btnDelAll);
         }
 
         #endregion
@@ -654,6 +843,7 @@ namespace NetInfoCheckerX
 
         private void UPnP_Load(object sender, EventArgs e)
         {
+            ApplyUPnPTheme();
             try
             {
                 string appPath = Application.StartupPath;
