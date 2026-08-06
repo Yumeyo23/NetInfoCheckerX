@@ -5,21 +5,18 @@
 
 Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) By Yumeyo
 
-<img width="3000" height="1875" alt="功能预览260406" src="https://github.com/user-attachments/assets/3a7d3019-be1f-43a3-8baa-afed93bd87fd" />
+<img width="3000" height="1875" alt="功能预览260807" src="https://github.com/user-attachments/assets/9ce6d005-26c1-446c-9241-3934761d5626" />
 
-《网络综合查询器X》是由與夢Yumeyo原创开发、基于易语言版《网络综合查询器》重制、以“小而美”为设计理念的全能向网络工具箱，适合网络爱好者常备日常使用。
+《网络综合查询器X》是由與夢Yumeyo原创开发、基于易语言版《[网络综合查询器](https://github.com/Yumeyo23/NetInfoChecker)》重制、以“小而美”为设计理念的全能向网络工具箱，适合网络爱好者常备日常使用。
 
 > [!CAUTION]
 > **本软件主要为中国大陆的中文用户设计. 非中文/中国大陆用户可能无法获得最佳体验, 甚至无法使用.**
 > 
+> **由于是个人软件，没有严格的开发、测试流程，介绍、实际功能等可能随时改变，软件也可能随时停更、停用.**
+> 
 > **This software is designed for Chinese-speaking users in mainland China.**
 >
 > **Non-Chinese/mainland China users may not have the best experience, or may even be unable to use.**
-
-> [!NOTE]
->
-> 1. 本程序是 [**网络综合查询器** ](https://github.com/Yumeyo23/NetInfoChecker)(易语言版，简称**旧版查询器**) 的**C#重制版**，简称 **查询器X (NetInfoCheckerX / NICX)**  .
-> 2. 本程序已经正式公测. 由于是个人软件，没有严格的开发、测试流程，介绍、实际功能等可能随时改变.
 
 > [!IMPORTANT]
 >
@@ -29,7 +26,7 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 
 ## 介绍/Wiki
 
-软件核心功能为查询/记录/修改本机IP、多出口测试(简洁版/Dashboard)、NAT类型测试、TCP/UDP/ICMP全协议Ping+/Trace+、最大连接数测试、DNS劫持测试、DNS解析测速、UPnP控制台、IPERF内网测速、一键搭建LibreSpeed服务器、本机配置检测、延迟(到骨干网/CS2)测试、一键/Renew、IPv6有效期查询、手动查询IP/MAC地址、快速跳转控制面板、速查剪贴板、悬浮显示信息等。
+软件核心功能为查询/记录/修改本机IP、多出口测试(简洁版/Dashboard)、NAT类型测试、TCP/UDP/ICMP全协议Ping+/Trace+、最大连接数测试、DNS劫持测试、DNS解析测速、UPnP控制台、IPERF内网测速、一键搭建LibreSpeed服务器、本机配置检测、延迟(到骨干网/CS2)测试、UDP游戏延迟模拟测试、DHCP/PPPoE服务器扫描、一键/Renew、IPv6有效期查询、手动查询IP/MAC地址、快速跳转控制面板、速查剪贴板、悬浮显示信息等。
 
 https://www.bilibili.com/video/BV1cyibBkEbJ/
 
