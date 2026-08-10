@@ -183,7 +183,7 @@ namespace NetInfoCheckerX
             {
                 comboGEO.SelectedIndex = 0;
             }
-            CloudControl.UsedTimesCounter("FindIP");
+            CloudControl.UsedTimesCounter("手动查询IP");
             lblTip.Text = "准备就绪";
         }
 
