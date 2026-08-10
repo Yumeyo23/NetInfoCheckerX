@@ -57,6 +57,17 @@ namespace NetInfoCheckerX
         private int _udpProbeSequence = Environment.TickCount & 0xFFFF;
         private ConcurrentDictionary<string, string> _geoCache = new ConcurrentDictionary<string, string>();
         private int _activeGeoOnlineIndex = 0;
+        // 在线归属地会话缓存：按“API + IP”隔离，在整个进程生命周期内共享。
+        // 文件只是本次启动的落盘镜像；实际读取优先走内存，程序退出时删除。
+        private static readonly ConcurrentDictionary<string, string> TraceGeoSessionCache =
+            new ConcurrentDictionary<string, string>();
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> TraceGeoSessionGates =
+            new ConcurrentDictionary<string, SemaphoreSlim>();
+        private static readonly object TraceGeoSessionFileSync = new object();
+        private static readonly Encoding TraceGeoSessionFileEncoding = new UTF8Encoding(false);
+        private static int _traceGeoSessionCacheInitialized;
+        private static int _traceGeoSessionCleanupStarted;
+        private const string TraceGeoSessionCacheFileName = "NICX_Trace_GeoSessionCache.tmp";
         // 在线增强最多同时 3 个请求，并在整个进程内平滑限制为每秒最多启动 5 个。
         // 请求超时完全由各 Provider 使用的 HttpHelper 负责。
         private const int GeoMaxStartsPerSecond = 5;
@@ -199,6 +210,7 @@ namespace NetInfoCheckerX
         {
             InitializeComponent();
             EnsureWinDivertLifecycleHooks();
+            EnsureTraceGeoSessionCache();
             this.MinimumSize = this.Size;
             // 初始化一个随机的标识符 (使用时间戳和随机数混合)
             _instanceIdentifier = (ushort)(DateTime.Now.Ticks % 60000 + new Random().Next(100, 5000));
@@ -231,6 +243,116 @@ namespace NetInfoCheckerX
             foreach (WinDivertTraceSession session in ActiveWinDivertSessions.Values.ToArray())
             {
                 if (ReferenceEquals(session.Owner, owner)) session.RequestStop();
+            }
+        }
+
+        private static string TraceGeoSessionCachePath =>
+            Path.Combine(Application.StartupPath, TraceGeoSessionCacheFileName);
+
+        private static void EnsureTraceGeoSessionCache()
+        {
+            if (Interlocked.Exchange(ref _traceGeoSessionCacheInitialized, 1) != 0)
+                return;
+
+            // 正常退出会删除文件；若上一次被强制终止，则在本次首次打开
+            // Trace 时清理残留，确保不会跨软件启动复用。
+            try
+            {
+                if (File.Exists(TraceGeoSessionCachePath))
+                    File.Delete(TraceGeoSessionCachePath);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[GEO-SessionCache] 清理旧缓存失败: " + ex.Message);
+            }
+
+            Application.ApplicationExit += (sender, args) =>
+                CleanupTraceGeoSessionCache();
+            AppDomain.CurrentDomain.ProcessExit += (sender, args) =>
+                CleanupTraceGeoSessionCache();
+        }
+
+        private static void CleanupTraceGeoSessionCache()
+        {
+            if (Interlocked.Exchange(ref _traceGeoSessionCleanupStarted, 1) != 0)
+                return;
+
+            TraceGeoSessionCache.Clear();
+            TraceGeoSessionGates.Clear();
+            lock (TraceGeoSessionFileSync)
+            {
+                try
+                {
+                    if (File.Exists(TraceGeoSessionCachePath))
+                        File.Delete(TraceGeoSessionCachePath);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("[GEO-SessionCache] 退出时删除缓存失败: " + ex.Message);
+                }
+            }
+        }
+
+        private static string BuildTraceGeoSessionKey(GeoProvider provider, string ip)
+        {
+            string normalizedIp = IPAddress.TryParse(ip, out IPAddress parsed)
+                ? parsed.ToString()
+                : (ip ?? string.Empty).Trim();
+            return provider.ID + "\u001f" + (provider.Name ?? string.Empty) +
+                "\u001f" + normalizedIp;
+        }
+
+        private static bool TryGetTraceGeoSessionCache(GeoProvider provider, string ip,
+            out string result)
+        {
+            result = null;
+            if (provider == null || string.IsNullOrWhiteSpace(ip)) return false;
+            return TraceGeoSessionCache.TryGetValue(
+                BuildTraceGeoSessionKey(provider, ip), out result) &&
+                !string.IsNullOrWhiteSpace(result);
+        }
+
+        private static SemaphoreSlim GetTraceGeoSessionGate(GeoProvider provider, string ip)
+        {
+            string key = BuildTraceGeoSessionKey(provider, ip);
+            return TraceGeoSessionGates.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        }
+
+        private static void CacheTraceGeoSessionResult(GeoProvider provider, string ip,
+            string result)
+        {
+            if (provider == null || string.IsNullOrWhiteSpace(ip) ||
+                string.IsNullOrWhiteSpace(result) ||
+                Volatile.Read(ref _traceGeoSessionCleanupStarted) != 0) return;
+
+            EnsureTraceGeoSessionCache();
+            string key = BuildTraceGeoSessionKey(provider, ip);
+            if (!TraceGeoSessionCache.TryAdd(key, result)) return;
+
+            // 一行一条：API ID/Name、IP 保持可读，结果使用 Base64，避免
+            // 地名中的换行或制表符破坏记录格式。文件不包含 API Token。
+            string normalizedIp = IPAddress.TryParse(ip, out IPAddress parsed)
+                ? parsed.ToString()
+                : ip.Trim();
+            string encodedResult = Convert.ToBase64String(
+                TraceGeoSessionFileEncoding.GetBytes(result));
+            string line = provider.ID + "/" + (provider.Name ?? string.Empty) +
+                "\t" + normalizedIp + "\t" + encodedResult + Environment.NewLine;
+
+            lock (TraceGeoSessionFileSync)
+            {
+                if (Volatile.Read(ref _traceGeoSessionCleanupStarted) != 0)
+                    return;
+                try
+                {
+                    File.AppendAllText(TraceGeoSessionCachePath, line,
+                        TraceGeoSessionFileEncoding);
+                }
+                catch (Exception ex)
+                {
+                    // 程序目录不可写时仍保留内存缓存，不影响 Trace。
+                    Debug.WriteLine("[GEO-SessionCache] 写入缓存失败: " + ex.Message);
+                }
             }
         }
 
@@ -1512,10 +1634,7 @@ namespace NetInfoCheckerX
                 // Trace 的默认本地库与主界面/手动查询共用同一入口：
                 // 有效 DLC 存在时优先使用 DLC，否则由该方法回退至
                 // IP2Region + GeoCN。这里不受全局隐私模式影响。
-                GeoResult localResult = Api2.GetLocalDBGeoAsync(ip, CancellationToken.None)
-                    .ConfigureAwait(false)
-                    .GetAwaiter()
-                    .GetResult();
+                GeoResult localResult = Api2.GetLocalDBGeo(ip, CancellationToken.None);
 
                 string formatted = FormatOnlineGeoResult(localResult);
                 return string.IsNullOrWhiteSpace(formatted) ? "未知" : formatted;
@@ -1619,19 +1738,40 @@ namespace NetInfoCheckerX
             bool isReserved = !string.IsNullOrEmpty(IanaReservedIP.Check(ip));
             Debug.WriteLine($"[GEO-Trace] 本地 ip={ip} reserved={isReserved} geo={geo}");
             if (!isReserved)
+            {
+                if (CanUseOnlineGeoEnhancement())
+                {
+                    GeoProvider provider = Api2.GeoCN_Providers[_activeGeoOnlineIndex];
+                    if (TryGetTraceGeoSessionCache(provider, ip, out string sessionCached))
+                    {
+                        _geoCache[ip] = sessionCached;
+                        Debug.WriteLine($"[GEO-Trace] 命中会话缓存 api={provider.ID} ip={ip}");
+                        return sessionCached;
+                    }
+                }
                 EnrichGeoCacheAsync(ip, token);
+            }
             return geo;
         }
 
         private bool EnrichGeoCacheAsync(string ip, CancellationToken token)
         {
             if (!CanUseOnlineGeoEnhancement() || _geoCache.ContainsKey(ip)) return false;
+            GeoProvider provider = Api2.GeoCN_Providers[_activeGeoOnlineIndex];
+            if (TryGetTraceGeoSessionCache(provider, ip, out string sessionCached))
+            {
+                _geoCache[ip] = sessionCached;
+                Debug.WriteLine($"[GEO-Trace] 命中会话缓存 api={provider.ID} ip={ip}");
+                return false;
+            }
             if (!_enrichPending.TryAdd(ip, 0)) return false;
 
             Debug.WriteLine($"[GEO-Trace] 发起查询 ip={ip}");
             _ = Task.Run(async () =>
             {
                 bool semaphoreEntered = false;
+                bool sessionGateEntered = false;
+                SemaphoreSlim sessionGate = GetTraceGeoSessionGate(provider, ip);
                 Stopwatch sw = Stopwatch.StartNew();
                 try
                 {
@@ -1639,7 +1779,14 @@ namespace NetInfoCheckerX
                     semaphoreEntered = true;
                     if (!CanUseOnlineGeoEnhancement()) return;
                     if (_geoCache.ContainsKey(ip)) { Debug.WriteLine($"[GEO-Trace] 跳过(已缓存) ip={ip}"); return; }
-                    var provider = Api2.GeoCN_Providers[_activeGeoOnlineIndex];
+                    await sessionGate.WaitAsync(token);
+                    sessionGateEntered = true;
+                    if (TryGetTraceGeoSessionCache(provider, ip, out sessionCached))
+                    {
+                        _geoCache[ip] = sessionCached;
+                        Debug.WriteLine($"[GEO-Trace] 等待后命中会话缓存 api={provider.ID} ip={ip}");
+                        return;
+                    }
                     await WaitForGeoRequestSlotAsync(token);
                     GeoResult geoResult = await provider.GetGeoTaskIgnoringPrivacy(ip, token);
                     sw.Stop();
@@ -1647,7 +1794,10 @@ namespace NetInfoCheckerX
                         out bool usedOnlineResult);
                     if (!string.IsNullOrWhiteSpace(enriched)) _geoCache[ip] = enriched;
                     if (usedOnlineResult)
+                    {
+                        CacheTraceGeoSessionResult(provider, ip, enriched);
                         Debug.WriteLine($"[GEO-Trace] 完成 ip={ip} => {enriched} 耗时={sw.Elapsed.TotalSeconds:F1}s");
+                    }
                     else
                         Debug.WriteLine($"[GEO-Trace] 在线结果无效，使用本地库 ip={ip} => {enriched} 耗时={sw.Elapsed.TotalSeconds:F1}s");
                 }
@@ -1671,6 +1821,7 @@ namespace NetInfoCheckerX
                 }
                 finally
                 {
+                    if (sessionGateEntered) sessionGate.Release();
                     if (semaphoreEntered) _geoEnrichSemaphore.Release();
                     _enrichPending.TryRemove(ip, out _);
                     if (!IsDisposed && IsHandleCreated &&
@@ -1777,10 +1928,20 @@ namespace NetInfoCheckerX
                 ApplyEnrichedGeoToAllStats(ip, cached, stats);
                 return;
             }
+            GeoProvider provider = Api2.GeoCN_Providers[_activeGeoOnlineIndex];
+            if (TryGetTraceGeoSessionCache(provider, ip, out cached))
+            {
+                _geoCache[ip] = cached;
+                ApplyEnrichedGeoToAllStats(ip, cached, stats);
+                Debug.WriteLine($"[GEO-MTR] 命中会话缓存 api={provider.ID} ttl={ttl} ip={ip}");
+                return;
+            }
             if (!_enrichPending.TryAdd(ip, 0)) return;
 
             Debug.WriteLine($"[GEO-MTR] 发起查询 ttl={ttl} ip={ip}");
             bool semaphoreEntered = false;
+            bool sessionGateEntered = false;
+            SemaphoreSlim sessionGate = GetTraceGeoSessionGate(provider, ip);
             Stopwatch sw = Stopwatch.StartNew();
             try
             {
@@ -1793,7 +1954,15 @@ namespace NetInfoCheckerX
                     Debug.WriteLine($"[GEO-MTR] 跳过(已缓存) ttl={ttl} ip={ip}");
                     return;
                 }
-                var provider = Api2.GeoCN_Providers[_activeGeoOnlineIndex];
+                await sessionGate.WaitAsync(token);
+                sessionGateEntered = true;
+                if (TryGetTraceGeoSessionCache(provider, ip, out cached))
+                {
+                    _geoCache[ip] = cached;
+                    ApplyEnrichedGeoToAllStats(ip, cached, stats);
+                    Debug.WriteLine($"[GEO-MTR] 等待后命中会话缓存 api={provider.ID} ttl={ttl} ip={ip}");
+                    return;
+                }
                 await WaitForGeoRequestSlotAsync(token);
                 GeoResult geoResult = await provider.GetGeoTaskIgnoringPrivacy(ip, token);
                 sw.Stop();
@@ -1805,7 +1974,10 @@ namespace NetInfoCheckerX
                     ApplyEnrichedGeoToAllStats(ip, enriched, stats);
                 }
                 if (usedOnlineResult)
+                {
+                    CacheTraceGeoSessionResult(provider, ip, enriched);
                     Debug.WriteLine($"[GEO-MTR] 完成 ttl={ttl} ip={ip} => {enriched} 耗时={sw.Elapsed.TotalSeconds:F1}s");
+                }
                 else
                     Debug.WriteLine($"[GEO-MTR] 在线结果无效，使用本地库 ttl={ttl} ip={ip} => {enriched} 耗时={sw.Elapsed.TotalSeconds:F1}s");
             }
@@ -1833,6 +2005,7 @@ namespace NetInfoCheckerX
             }
             finally
             {
+                if (sessionGateEntered) sessionGate.Release();
                 if (semaphoreEntered) _geoEnrichSemaphore.Release();
                 _enrichPending.TryRemove(ip, out _);
             }
