@@ -1312,6 +1312,7 @@ namespace NetInfoCheckerX
         {
             _ = ApplyHWInfoThemeAsync();
 
+            this.MinimumSize = this.Size;
             this.MouseDown += MyMouseDown;
             pictureBox1.MouseDown += MyMouseDown;
 
