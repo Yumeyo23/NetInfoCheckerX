@@ -82,7 +82,7 @@ namespace NetInfoCheckerX
         private async void HWInfoCPP_Load(object sender, EventArgs e)
         {
             _ = ApplyHWInfoThemeAsync();
-
+            this.MinimumSize = this.Size;
             this.MouseDown += MyMouseDown;
             pictureBox1.MouseDown += MyMouseDown;
 
