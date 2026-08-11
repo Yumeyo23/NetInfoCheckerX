@@ -39,8 +39,45 @@ namespace NetInfoCheckerX
 
         private CancellationTokenSource _cts3489;
         private CancellationTokenSource _cts5780;
+        private CancellationTokenSource _batchCts;
         private Socket _activeSocket3489;
         private Socket _activeSocket5780;
+        private bool _isBatchTesting;
+        private bool _isResolvingServer;
+        private bool _isReloading;
+        private string _resolvedServerDomain;
+        private readonly HashSet<string> _resolvedServerAddresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private sealed class BatchServerEntry
+        {
+            public string Host { get; set; }
+            public int Port { get; set; }
+            public string DisplayName { get; set; }
+        }
+
+        private sealed class BatchAttemptResult
+        {
+            public bool Success { get; set; }
+            public string Summary { get; set; }
+        }
+
+        private sealed class BatchServerResult
+        {
+            public string Server { get; set; }
+            public string Protocol5780 { get; set; }
+            public List<BatchAttemptResult> Attempts5780 { get; } = new List<BatchAttemptResult>();
+            public List<BatchAttemptResult> Attempts3489 { get; } = new List<BatchAttemptResult>();
+
+            public bool Is5780Available
+            {
+                get { return Attempts5780.Exists(item => item.Success); }
+            }
+
+            public bool Is3489Available
+            {
+                get { return Attempts3489.Exists(item => item.Success); }
+            }
+        }
 
         //严格模式
         //bool strictMode = true;
@@ -94,14 +131,14 @@ namespace NetInfoCheckerX
             this.BackColor = isLight ? Global.themeLight : Global.themeBlack;
 
             Control[] yumeyoControls = {
-        lbl5780, lbl3489, lbl5780StartTime, lbl3489StartTime, lblExeName
+        lbl5780, lbl3489, lbl5780StartTime, lbl3489StartTime, lblExeName, lblSetting
     };
             foreach (var c in yumeyoControls) { if (c != null) c.ForeColor = yumeyoColor; }
 
             Control[] contrastControls = {
         lbl5780Binding, lbl5780Mapping, lbl5780Filtering, lbl5780LocalEnd,
         lbl5780PublicEnd, lbl3489Type, lbl3489LocalEnd, lbl3489PublicEnd,
-        checkPortRandom, checkPortMode, checkPortRange, radioTCP, radioUDP, radioTLS
+        checkPortRandom, checkPortMode, checkPortRange, checkSelectIP, radioTCP, radioUDP, radioTLS, lblTimeout
     };
             foreach (var c in contrastControls)
             {
@@ -115,7 +152,7 @@ namespace NetInfoCheckerX
             Control[] editControls = {
     txt5780Debug, txt3489Debug, txt5780Binding, txt5780Mapping,
     txt5780Filtering, combo5780LocalEnd, txt5780PublicEnd,
-    txt3489Type, combo3489LocalEnd, txt3489PublicEnd, comboServer, txtServerPort
+    txt3489Type, combo3489LocalEnd, txt3489PublicEnd, comboServer, txtServerPort, txtTimeout
 };
 
             foreach (var c in editControls)
@@ -225,6 +262,14 @@ namespace NetInfoCheckerX
                 if (!int.TryParse(txtServerPort.Text, out int port) || port < 1 || port > 65535)
                     txtServerPort.Text = "3478";
             };
+
+            txtTimeout.KeyPress += (s, ev) =>
+            {
+                if (!char.IsDigit(ev.KeyChar) && !char.IsControl(ev.KeyChar))
+                    ev.Handled = true;
+            };
+
+            txtTimeout.Leave += (s, ev) => GetTimeoutMs();
 
             SetupButtonEvents5780();
             SetupButtonEvents3489();
@@ -352,6 +397,9 @@ namespace NetInfoCheckerX
             GetPrivateProfileString("NATTest", "ServerPort", "", temp, 255, iniPath);
             string savedPort = temp.ToString();
 
+            GetPrivateProfileString("NATTest", "Timeout", "2000", temp, 255, iniPath);
+            string savedTimeout = temp.ToString();
+
             if (!string.IsNullOrEmpty(savedServer))
             {
                 RestoreComboSelection(comboServer, savedServer);
@@ -361,6 +409,11 @@ namespace NetInfoCheckerX
             {
                 txtServerPort.Text = port.ToString();
             }
+
+            int timeout;
+            txtTimeout.Text = int.TryParse(savedTimeout, out timeout) && timeout >= 1 && timeout <= 9999
+                ? timeout.ToString()
+                : "2000";
         }
 
         private void ExtractPortFromComboServer()
@@ -432,6 +485,19 @@ namespace NetInfoCheckerX
             if (int.TryParse(txtServerPort.Text?.Trim(), out int port) && port >= 1 && port <= 65535)
                 return port;
             return 3478;
+        }
+
+        private int GetTimeoutMs()
+        {
+            int timeout;
+            if (int.TryParse(txtTimeout.Text == null ? string.Empty : txtTimeout.Text.Trim(), out timeout) &&
+                timeout >= 1 && timeout <= 9999)
+            {
+                return timeout;
+            }
+
+            txtTimeout.Text = "2000";
+            return 2000;
         }
 
         private void RestoreComboSelection(ComboBox combo, string savedText)
@@ -713,7 +779,534 @@ namespace NetInfoCheckerX
             }
         }
 
+        private async Task<bool> PrepareServerForTestAsync()
+        {
+            if (_isResolvingServer) return false;
+
+            string input = comboServer.Text == null ? string.Empty : comboServer.Text.Trim();
+            if (input.Length == 0)
+            {
+                ShowErrorTooltip("请输入 STUN 服务器地址", true);
+                return false;
+            }
+
+            string host = ExtractIPFromComboText(input).Trim();
+            IPAddress directAddress;
+            if (IPAddress.TryParse(host, out directAddress))
+            {
+                if (string.IsNullOrEmpty(_resolvedServerDomain) || !_resolvedServerAddresses.Contains(host))
+                {
+                    _resolvedServerDomain = null;
+                    _resolvedServerAddresses.Clear();
+                }
+                return true;
+            }
+
+            _resolvedServerDomain = null;
+            _resolvedServerAddresses.Clear();
+
+            _isResolvingServer = true;
+            btnCheck5780.Enabled = false;
+            btnCheck3489.Enabled = false;
+            comboServer.Enabled = false;
+            try
+            {
+                IPAddress[] resolved = await Task.Run(() => Dns.GetHostAddresses(host));
+                List<string> ipv4Addresses = new List<string>();
+                List<string> ipv6Addresses = new List<string>();
+                HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (IPAddress address in resolved)
+                {
+                    if (address.AddressFamily != AddressFamily.InterNetwork &&
+                        address.AddressFamily != AddressFamily.InterNetworkV6)
+                        continue;
+
+                    string addressText = address.ToString();
+                    if (!seen.Add(addressText)) continue;
+
+                    if (address.AddressFamily == AddressFamily.InterNetwork)
+                        ipv4Addresses.Add(addressText);
+                    else
+                        ipv6Addresses.Add(addressText);
+                }
+
+                List<string> uniqueAddresses = new List<string>(ipv4Addresses);
+                uniqueAddresses.AddRange(ipv6Addresses);
+
+                if (uniqueAddresses.Count == 0)
+                    throw new Exception("未解析到 IPv4/IPv6 地址");
+
+                comboServer.Items.Clear();
+                comboServer.Items.Add(host);
+                foreach (string address in uniqueAddresses) comboServer.Items.Add(address);
+
+                _resolvedServerDomain = host;
+                foreach (string address in uniqueAddresses) _resolvedServerAddresses.Add(address);
+
+                if (uniqueAddresses.Count == 1)
+                {
+                    comboServer.SelectedIndex = 1;
+                    return true;
+                }
+
+                comboServer.SelectedIndex = 1;
+                const string resolvedMessage = "域名已解析, 请选择一个IP或直接默认IP开测";
+                lbl5780StartTime.Text = resolvedMessage;
+                lbl3489StartTime.Text = resolvedMessage;
+                comboServer.DroppedDown = true;
+                return false;
+            }
+            catch (Exception ex)
+            {
+                ShowErrorTooltip("DNS 解析失败：" + ex.Message, true);
+                return false;
+            }
+            finally
+            {
+                _isResolvingServer = false;
+                comboServer.Enabled = true;
+                if (!_isBatchTesting && !_isReloading)
+                {
+                    btnCheck5780.Enabled = true;
+                    btnCheck3489.Enabled = true;
+                }
+            }
+        }
+
+        private string GetServerHostForTest(bool useAutomaticResolvedAddress)
+        {
+            if (useAutomaticResolvedAddress && !string.IsNullOrEmpty(_resolvedServerDomain) && IsCurrentServerFromResolvedDomain())
+                return _resolvedServerDomain;
+
+            return comboServer.Text == null ? string.Empty : comboServer.Text.Trim();
+        }
+
+        private bool IsCurrentServerFromResolvedDomain()
+        {
+            if (string.IsNullOrEmpty(_resolvedServerDomain)) return false;
+
+            string input = comboServer.Text == null ? string.Empty : ExtractIPFromComboText(comboServer.Text).Trim();
+            if (string.Equals(input, _resolvedServerDomain, StringComparison.OrdinalIgnoreCase)) return true;
+
+            IPAddress address;
+            return IPAddress.TryParse(input, out address) && _resolvedServerAddresses.Contains(input);
+        }
+
+        private string GetOriginalDomainForDisplay()
+        {
+            if (!string.IsNullOrEmpty(_resolvedServerDomain) && IsCurrentServerFromResolvedDomain())
+                return _resolvedServerDomain;
+
+            string input = comboServer.Text == null ? string.Empty : ExtractIPFromComboText(comboServer.Text).Trim();
+            IPAddress address;
+            return IPAddress.TryParse(input, out address) ? null : input;
+        }
+
+        private bool TryGetBatchFileRequest(out string filePath)
+        {
+            filePath = null;
+            if (!Global.isYumeyo) return false;
+
+            string input = comboServer.Text == null ? string.Empty : comboServer.Text.Trim().Trim('"');
+            if (!input.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)) return false;
+
+            filePath = Environment.ExpandEnvironmentVariables(input);
+            try
+            {
+                filePath = Path.GetFullPath(filePath);
+            }
+            catch
+            {
+                // 保留原始内容，稍后由批量入口给出明确的路径错误。
+            }
+            return true;
+        }
+
+        private bool TryParseBatchServer(string line, out BatchServerEntry server, out string error)
+        {
+            server = null;
+            error = null;
+            string value = line == null ? string.Empty : line.Trim();
+            if (value.Length == 0)
+            {
+                error = "空行";
+                return false;
+            }
+
+            string host;
+            string portText;
+            if (value.StartsWith("[", StringComparison.Ordinal))
+            {
+                int closeBracket = value.IndexOf(']');
+                if (closeBracket <= 1 || closeBracket + 1 >= value.Length || value[closeBracket + 1] != ':')
+                {
+                    error = "IPv6 地址应使用 [地址]:端口 格式";
+                    return false;
+                }
+                host = value.Substring(1, closeBracket - 1).Trim();
+                portText = value.Substring(closeBracket + 2).Trim();
+            }
+            else
+            {
+                int separator = value.LastIndexOf(':');
+                if (separator <= 0 || separator == value.Length - 1)
+                {
+                    error = "应使用 地址:端口 格式";
+                    return false;
+                }
+                host = value.Substring(0, separator).Trim();
+                portText = value.Substring(separator + 1).Trim();
+                if (host.IndexOf(':') >= 0)
+                {
+                    error = "IPv6 地址应使用 [地址]:端口 格式";
+                    return false;
+                }
+            }
+
+            int port;
+            if (host.Length == 0 || host.IndexOfAny(new[] { ' ', '\t', '\r', '\n' }) >= 0)
+            {
+                error = "服务器地址无效";
+                return false;
+            }
+            if (!int.TryParse(portText, out port) || port < 1 || port > 65535)
+            {
+                error = "端口必须是 1-65535 的整数";
+                return false;
+            }
+
+            server = new BatchServerEntry
+            {
+                Host = host,
+                Port = port,
+                DisplayName = host.IndexOf(':') >= 0 ? "[" + host + "]:" + port : host + ":" + port
+            };
+            return true;
+        }
+
+        private BatchAttemptResult Create5780AttemptResult(string protocol, string runError)
+        {
+            string binding = NormalizeBatchValue(txt5780Binding.Text);
+            string mapping = NormalizeBatchValue(txt5780Mapping.Text);
+            string filtering = NormalizeBatchValue(txt5780Filtering.Text);
+            string publicEndPoint = NormalizeBatchValue(txt5780PublicEnd.Text);
+
+            bool mappingSuccess = mapping == "Direct" || mapping == "Endpoint-Independent" ||
+                                  mapping == "Address-Dependent" || mapping == "Address-and-Port-Dependent";
+            bool filteringSuccess = protocol != "UDP" || filtering == "Endpoint-Independent" ||
+                                    filtering == "Address-Dependent" || filtering == "Address-and-Port-Dependent";
+            bool success = string.Equals(binding, "Success", StringComparison.OrdinalIgnoreCase) &&
+                           mappingSuccess && filteringSuccess && string.IsNullOrEmpty(runError);
+
+            StringBuilder summary = new StringBuilder();
+            summary.Append(success ? "成功" : "失败");
+            summary.Append("；Binding=").Append(binding);
+            summary.Append("，Mapping=").Append(mapping);
+            summary.Append("，Filtering=").Append(filtering);
+            if (publicEndPoint != "--") summary.Append("，外部地址=").Append(publicEndPoint);
+            if (!string.IsNullOrEmpty(runError)) summary.Append("；错误=").Append(runError);
+            return new BatchAttemptResult { Success = success, Summary = summary.ToString() };
+        }
+
+        private BatchAttemptResult Create3489AttemptResult(string runError)
+        {
+            string natType = NormalizeBatchValue(txt3489Type.Text);
+            string publicEndPoint = NormalizeBatchValue(txt3489PublicEnd.Text);
+            bool success = (natType == "OpenInternet" || natType == "FullCone" ||
+                            natType == "SymmetricUdpFirewall" || natType == "Symmetric" ||
+                            natType == "RestrictedCone" || natType == "PortRestrictedCone") &&
+                           string.IsNullOrEmpty(runError);
+
+            StringBuilder summary = new StringBuilder();
+            summary.Append(success ? "成功" : "失败");
+            summary.Append("；NAT类型=").Append(natType);
+            if (publicEndPoint != "--") summary.Append("，外部地址=").Append(publicEndPoint);
+            if (!string.IsNullOrEmpty(runError)) summary.Append("；错误=").Append(runError);
+            return new BatchAttemptResult { Success = success, Summary = summary.ToString() };
+        }
+
+        private string NormalizeBatchValue(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return "--";
+            string result = value.Trim().Replace("\r", " ").Replace("\n", " ");
+            return result.Length == 0 || result.Trim('.').Length == 0 ? "--" : result;
+        }
+
+        private async Task RunBatchTestsAsync(string filePath)
+        {
+            if (_isBatchTesting) return;
+
+            _isBatchTesting = true;
+            CancellationTokenSource batchCancellation = new CancellationTokenSource();
+            _batchCts = batchCancellation;
+            string originalServer = comboServer.Text;
+            string originalPort = txtServerPort.Text;
+            string original5780LocalEnd = combo5780LocalEnd.Text;
+            string original3489LocalEnd = combo3489LocalEnd.Text;
+            string originalResolvedDomain = _resolvedServerDomain;
+            HashSet<string> originalResolvedAddresses = new HashSet<string>(_resolvedServerAddresses, StringComparer.OrdinalIgnoreCase);
+            List<BatchServerResult> results = new List<BatchServerResult>();
+            List<string> invalidLines = new List<string>();
+            bool cancelled = false;
+            string fatalError = null;
+            string outputPath = null;
+
+            try
+            {
+                if (!File.Exists(filePath))
+                {
+                    MessageBox.Show(this, "找不到批量测试文件：\r\n" + filePath,
+                        "STUN 批量测试", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                string[] lines = await Task.Run(() => File.ReadAllLines(filePath));
+                List<BatchServerEntry> servers = new List<BatchServerEntry>();
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    string trimmed = lines[i] == null ? string.Empty : lines[i].Trim();
+                    if (trimmed.Length == 0 || trimmed.StartsWith("#") ||
+                        trimmed.StartsWith(";") || trimmed.StartsWith("//"))
+                        continue;
+
+                    BatchServerEntry server;
+                    string parseError;
+                    if (TryParseBatchServer(trimmed, out server, out parseError))
+                        servers.Add(server);
+                    else
+                        invalidLines.Add("第 " + (i + 1) + " 行：" + trimmed + "（" + parseError + "）");
+                }
+
+                if (servers.Count == 0)
+                {
+                    MessageBox.Show(this, "文件中没有有效的 地址:端口 记录。",
+                        "STUN 批量测试", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                SetBatchUiState(true);
+                CancellationToken cancellationToken = batchCancellation.Token;
+                for (int serverIndex = 0; serverIndex < servers.Count; serverIndex++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    BatchServerEntry server = servers[serverIndex];
+                    BatchServerResult serverResult = new BatchServerResult
+                    {
+                        Server = server.DisplayName,
+                        Protocol5780 = radioTCP.Checked ? "TCP" : radioTLS.Checked ? "TLS" : "UDP"
+                    };
+                    results.Add(serverResult);
+
+                    _resolvedServerDomain = null;
+                    _resolvedServerAddresses.Clear();
+                    comboServer.Text = server.Host;
+                    txtServerPort.Text = server.Port.ToString();
+                    lbl5780StartTime.Text = string.Format("批量测试 {0}/{1}: {2}", serverIndex + 1, servers.Count, server.DisplayName);
+                    lbl3489StartTime.Text = "每项测试 2 次";
+
+                    for (int attempt = 1; attempt <= 2; attempt++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        serverResult.Attempts5780.Add(await Run5780TestAsync(cancellationToken));
+                    }
+
+                    for (int attempt = 1; attempt <= 2; attempt++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        serverResult.Attempts3489.Add(await Run3489TestAsync(cancellationToken));
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled = true;
+            }
+            catch (Exception ex)
+            {
+                fatalError = ex.Message;
+            }
+            finally
+            {
+                try
+                {
+                    if (results.Count > 0 || invalidLines.Count > 0)
+                    {
+                        string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                        outputPath = GetUniqueBatchOutputPath(desktop);
+                        string report = BuildBatchReport(filePath, results, invalidLines, cancelled, fatalError);
+                        File.WriteAllText(outputPath, report, new UTF8Encoding(true));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    fatalError = string.IsNullOrEmpty(fatalError) ? ex.Message : fatalError + "；报告写入失败：" + ex.Message;
+                    outputPath = null;
+                }
+
+                comboServer.Text = originalServer;
+                txtServerPort.Text = originalPort;
+                combo5780LocalEnd.Text = original5780LocalEnd;
+                combo3489LocalEnd.Text = original3489LocalEnd;
+                _resolvedServerDomain = originalResolvedDomain;
+                _resolvedServerAddresses.Clear();
+                foreach (string address in originalResolvedAddresses) _resolvedServerAddresses.Add(address);
+                SetBatchUiState(false);
+                if (ReferenceEquals(_batchCts, batchCancellation)) _batchCts = null;
+                batchCancellation.Dispose();
+                _isBatchTesting = false;
+            }
+
+            if (_isReloading || IsDisposed || Disposing) return;
+
+            if (!string.IsNullOrEmpty(fatalError))
+            {
+                MessageBox.Show(this, "批量测试遇到错误：\r\n" + fatalError +
+                    (outputPath == null ? string.Empty : "\r\n\r\n已保存当前结果：\r\n" + outputPath),
+                    "STUN 批量测试", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            else if (outputPath != null)
+            {
+                string message = cancelled ? "批量测试已取消，当前结果已保存：" : "批量测试完成，结果已保存：";
+                MessageBox.Show(this, message + "\r\n" + outputPath,
+                    "STUN 批量测试", MessageBoxButtons.OK,
+                    cancelled ? MessageBoxIcon.Information : MessageBoxIcon.Asterisk);
+            }
+        }
+
+        private void SetBatchUiState(bool running)
+        {
+            comboServer.Enabled = !running;
+            txtServerPort.Enabled = !running;
+            combo5780LocalEnd.Enabled = !running;
+            combo3489LocalEnd.Enabled = !running;
+            radioUDP.Enabled = !running;
+            radioTCP.Enabled = !running;
+            radioTLS.Enabled = !running;
+            checkPortMode.Enabled = !running;
+            checkPortRandom.Enabled = !running;
+            checkPortRange.Enabled = !running;
+            checkSelectIP.Enabled = !running;
+            txtTimeout.Enabled = !running;
+            btnCheck5780.Enabled = !running;
+            btnCheck3489.Enabled = !running;
+            btnSettings.Enabled = !running;
+            btnRFCCompare.Enabled = !running;
+            btnMiaoDong.Enabled = !running;
+            btnReset.Enabled = true;
+        }
+
+        private string GetUniqueBatchOutputPath(string desktop)
+        {
+            string baseName = "STUN批量测试_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string path = Path.Combine(desktop, baseName + ".txt");
+            int suffix = 2;
+            while (File.Exists(path))
+            {
+                path = Path.Combine(desktop, baseName + "_" + suffix + ".txt");
+                suffix++;
+            }
+            return path;
+        }
+
+        private string BuildBatchReport(string sourceFile, List<BatchServerResult> results,
+            List<string> invalidLines, bool cancelled, string fatalError)
+        {
+            int fullyAvailable = 0;
+            int partiallyAvailable = 0;
+            int unavailable = 0;
+            foreach (BatchServerResult result in results)
+            {
+                if (result.Is5780Available && result.Is3489Available) fullyAvailable++;
+                else if (result.Is5780Available || result.Is3489Available) partiallyAvailable++;
+                else unavailable++;
+            }
+
+            StringBuilder report = new StringBuilder();
+            report.AppendLine("NICX STUN服务器批量测试结果");
+            report.AppendLine("生成时间：" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            report.AppendLine("源文件：" + sourceFile);
+            report.AppendLine("状态：" + (cancelled ? "用户取消（结果可能不完整）" : string.IsNullOrEmpty(fatalError) ? "已完成" : "异常中止"));
+            report.AppendLine("重试规则：RFC5780 与 RFC3489 各测试 2 次；同一项任一次成功即视为该项可用。");
+            if (!string.IsNullOrEmpty(fatalError)) report.AppendLine("异常：" + fatalError);
+            report.AppendLine();
+            report.AppendLine(string.Format("统计：完全可用 {0}，部分可用 {1}，完全不可用 {2}，已记录服务器 {3}，格式错误 {4}",
+                fullyAvailable, partiallyAvailable, unavailable, results.Count, invalidLines.Count));
+            report.AppendLine();
+
+            AppendBatchReportSection(report, "完全可用（RFC5780、RFC3489 均可用）", results, 0);
+            AppendBatchReportSection(report, "部分可用（仅一项可用）", results, 1);
+            AppendBatchReportSection(report, "完全不可用（两项均失败）", results, 2);
+
+            if (invalidLines.Count > 0)
+            {
+                report.AppendLine("================ 输入格式错误（" + invalidLines.Count + "） ================");
+                foreach (string invalidLine in invalidLines) report.AppendLine(invalidLine);
+                report.AppendLine();
+            }
+            return report.ToString();
+        }
+
+        private void AppendBatchReportSection(StringBuilder report, string title,
+            List<BatchServerResult> results, int category)
+        {
+            int count = 0;
+            foreach (BatchServerResult result in results)
+            {
+                bool matches = category == 0
+                    ? result.Is5780Available && result.Is3489Available
+                    : category == 1
+                        ? result.Is5780Available ^ result.Is3489Available
+                        : !result.Is5780Available && !result.Is3489Available;
+                if (matches) count++;
+            }
+
+            report.AppendLine("================ " + title + "（" + count + "） ================");
+            foreach (BatchServerResult result in results)
+            {
+                bool matches = category == 0
+                    ? result.Is5780Available && result.Is3489Available
+                    : category == 1
+                        ? result.Is5780Available ^ result.Is3489Available
+                        : !result.Is5780Available && !result.Is3489Available;
+                if (!matches) continue;
+
+                report.AppendLine("[" + result.Server + "]");
+                AppendBatchAttempts(report, "RFC5780/" + result.Protocol5780, result.Is5780Available, result.Attempts5780);
+                AppendBatchAttempts(report, "RFC3489/UDP", result.Is3489Available, result.Attempts3489);
+                report.AppendLine();
+            }
+        }
+
+        private void AppendBatchAttempts(StringBuilder report, string name, bool available,
+            List<BatchAttemptResult> attempts)
+        {
+            report.AppendLine("  " + name + "：" + (available ? "可用" : "不可用"));
+            if (attempts.Count == 0)
+            {
+                report.AppendLine("    未执行");
+                return;
+            }
+            for (int i = 0; i < attempts.Count; i++)
+                report.AppendLine("    第 " + (i + 1) + " 次：" + attempts[i].Summary);
+        }
+
         private async void btnCheck5780_Click(object sender, EventArgs e)
+        {
+            if (_isBatchTesting) return;
+
+            string batchFilePath;
+            if (TryGetBatchFileRequest(out batchFilePath))
+            {
+                await RunBatchTestsAsync(batchFilePath);
+                return;
+            }
+
+            if (radioUDP.Checked && !checkSelectIP.Checked && !await PrepareServerForTestAsync()) return;
+
+            await Run5780TestAsync(CancellationToken.None);
+        }
+
+        private async Task<BatchAttemptResult> Run5780TestAsync(CancellationToken externalCancellationToken)
         {
             btnCheck5780.Enabled = false;
             combo5780LocalEnd.Enabled = false;
@@ -723,14 +1316,18 @@ namespace NetInfoCheckerX
 
             ResetIPDetection5780();
 
-            string current5780Server = comboServer.Text;
+            string originalDomain = GetOriginalDomainForDisplay();
             txt5780Binding.ForeColor = Color.Black;
             txt5780Mapping.ForeColor = Global.Yumeyo;
             txt5780Filtering.ForeColor = Global.Yumeyo;
 
             // 创建取消令牌
-            _cts5780 = new CancellationTokenSource();
-            var cancellationToken = _cts5780.Token;
+            CancellationTokenSource testCancellation = externalCancellationToken.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(externalCancellationToken)
+                : new CancellationTokenSource();
+            _cts5780 = testCancellation;
+            var cancellationToken = testCancellation.Token;
+            string runError = null;
 
             _stopRequested = false;
             txt5780Debug.Clear();
@@ -741,8 +1338,9 @@ namespace NetInfoCheckerX
             string protocol = "UDP";
             if (radioTCP.Checked) protocol = "TCP";
             else if (radioTLS.Checked) protocol = "TLS";
+            bool useAutomaticResolvedAddress = protocol != "UDP" || checkSelectIP.Checked;
+            int timeoutMs = GetTimeoutMs();
 
-            lbl5780StartTime.Text = string.Format("开测: {0} 服务器:[{2}]{1}", GetCurrentTime(), current5780Server, protocol);
             txt5780Binding.Text = "";
 
             Socket socket = null;
@@ -753,7 +1351,7 @@ namespace NetInfoCheckerX
                 Log5780(string.Format("开始时间: " + Others.GetCurrentTime()));
                 Log5780(string.Format("=== 开始 RFC5780 {0} 协议测试 ===", protocol), string.Format("{0} 测试初始化...", protocol));
 
-                string serverHost = comboServer.Text.Trim();
+                string serverHost = GetServerHostForTest(useAutomaticResolvedAddress);
                 if (string.IsNullOrEmpty(serverHost)) throw new Exception("请选择服务器");
 
                 IPAddress[] serverIps = await Task.Run(() => Dns.GetHostAddresses(serverHost), cancellationToken);
@@ -830,27 +1428,32 @@ namespace NetInfoCheckerX
                 Log5780($"使用服务器端口 {serverPort}", "端口配置");
 
                 IPEndPoint serverEp1 = new IPEndPoint(serverIp, serverPort);
+                lbl5780StartTime.Text = string.Format("开测: {0} 服务器IP: [{2}]{1}",
+                    GetCurrentTime(), serverIp, protocol);
 
                 if (protocol == "UDP")
                 {
-                    await RunUdpTest5780(serverEp1, selectedLocalIP, testFamily, cancellationToken);
+                    await RunUdpTest5780(serverEp1, selectedLocalIP, testFamily, timeoutMs, cancellationToken, originalDomain);
                 }
                 else if (protocol == "TCP")
                 {
-                    await RunTcpTest5780(serverEp1, selectedLocalIP, testFamily, protocol, cancellationToken);
+                    await RunTcpTest5780(serverEp1, selectedLocalIP, testFamily, protocol, timeoutMs, cancellationToken, originalDomain);
                 }
                 else if (protocol == "TLS")
                 {
-                    await RunTlsTest5780(serverEp1, selectedLocalIP, testFamily, protocol, cancellationToken, serverHost);
+                    string tlsServerName = string.IsNullOrEmpty(originalDomain) ? serverHost : originalDomain;
+                    await RunTlsTest5780(serverEp1, selectedLocalIP, testFamily, protocol, timeoutMs, cancellationToken, tlsServerName, originalDomain);
                 }
 
             }
             catch (OperationCanceledException)
             {
+                runError = "测试已取消";
                 Log5780("测试已被用户取消", "测试取消");
             }
             catch (Exception ex)
             {
+                runError = ex.Message;
                 Log5780(string.Format("[Error] {0}", ex.Message));
                 if (!cancellationToken.IsCancellationRequested)
                 {
@@ -888,7 +1491,7 @@ namespace NetInfoCheckerX
                 }
                 _activeSocket5780 = null;
 
-                if (!cancellationToken.IsCancellationRequested)
+                if (!cancellationToken.IsCancellationRequested && !_isBatchTesting)
                 {
                     btnCheck5780.Enabled = true;
                     combo5780LocalEnd.Enabled = true;
@@ -897,12 +1500,19 @@ namespace NetInfoCheckerX
                     radioTLS.Enabled = true;
                     if (!_stopRequested && !lbl5780.Text.Contains("结束"))
                     {
-                        lbl5780.Text = "RFC5780 (完成)";
+                        lbl5780.Text = "RFC5780 (完成" +
+                            (string.IsNullOrEmpty(originalDomain) ? string.Empty : "@" + originalDomain) + ")";
                     }
                 }
+
+                if (ReferenceEquals(_cts5780, testCancellation))
+                    _cts5780 = null;
+                testCancellation.Dispose();
             }
+
+            return Create5780AttemptResult(protocol, runError);
         }
-        private async Task RunUdpTest5780(IPEndPoint serverEp1, IPAddress selectedLocalIP, AddressFamily testFamily, CancellationToken cancellationToken)
+        private async Task RunUdpTest5780(IPEndPoint serverEp1, IPAddress selectedLocalIP, AddressFamily testFamily, int timeoutMs, CancellationToken cancellationToken, string originalDomain)
         {
             Socket socket = null;
             try
@@ -910,6 +1520,7 @@ namespace NetInfoCheckerX
                 cancellationToken.ThrowIfCancellationRequested();
 
                 Log5780($"[UDP] 目标服务器: {serverEp1}");
+                if (!string.IsNullOrEmpty(originalDomain)) Log5780($"[UDP] 原域名: {originalDomain}");
                 Log5780($"[UDP] 测试族: {testFamily}");
 
                 // 获取绑定端口
@@ -949,10 +1560,10 @@ namespace NetInfoCheckerX
                 cancellationToken.ThrowIfCancellationRequested();
 
                 Log5780(">>> [UDP] Mapping Test I: Binding Request", "Mapping Test I");
-                Log5780($"[UDP] 接收超时: 3000ms");
+                Log5780($"[UDP] 接收超时: {timeoutMs}ms");
                 Log5780($"[UDP] CHANGE-REQUEST: changeIP=False, changePort=False");
                 Log5780($"[UDP] 请求地址: {serverEp1}");
-                var resultA = await Task.Run(() => StunClient.Query(socket, serverEp1, false, false, 3000), cancellationToken);
+                var resultA = await Task.Run(() => StunClient.Query(socket, serverEp1, false, false, timeoutMs), cancellationToken);
 
                 if (resultA?.PublicEndPoint != null)
                 {
@@ -1024,11 +1635,11 @@ namespace NetInfoCheckerX
                 cancellationToken.ThrowIfCancellationRequested();
 
                 Log5780(">>> [UDP] Filtering Test II: Change IP & Port", "Filtering Test II");
-                Log5780($"[UDP] 接收超时: 2000ms");
+                Log5780($"[UDP] 接收超时: {timeoutMs}ms");
                 Log5780($"[UDP] CHANGE-REQUEST: changeIP=True, changePort=True");
                 Log5780($"[UDP] 请求地址: {serverEp1}");
 
-                var filteringII = await Task.Run(() => StunClient.Query(socket, serverEp1, true, true, 2000), cancellationToken);
+                var filteringII = await Task.Run(() => StunClient.Query(socket, serverEp1, true, true, timeoutMs), cancellationToken);
                 if (filteringII?.ResponseEndPoint != null)
                 {
                     Log5780($"[UDP] Test II 成功");
@@ -1048,11 +1659,11 @@ namespace NetInfoCheckerX
                 cancellationToken.ThrowIfCancellationRequested();
 
                 Log5780(">>> [UDP] Filtering Test III: Change Port", "Filtering Test III");
-                Log5780($"[UDP] 接收超时: 2000ms");
+                Log5780($"[UDP] 接收超时: {timeoutMs}ms");
                 Log5780($"[UDP] CHANGE-REQUEST: changeIP=False, changePort=True");
                 Log5780($"[UDP] 请求地址: {serverEp1}");
 
-                var filteringIII = await Task.Run(() => StunClient.Query(socket, serverEp1, false, true, 2000), cancellationToken);
+                var filteringIII = await Task.Run(() => StunClient.Query(socket, serverEp1, false, true, timeoutMs), cancellationToken);
                 if (filteringIII?.ResponseEndPoint != null)
                 {
                     Log5780($"[UDP] Test III 成功");
@@ -1084,12 +1695,12 @@ namespace NetInfoCheckerX
 
 
                 Log5780(">>> [UDP] Mapping Test II: otherIP + primaryPort", "Mapping Test II");
-                Log5780($"[UDP] 接收超时: 1500ms");
+                Log5780($"[UDP] 接收超时: {timeoutMs}ms");
                 Log5780($"[UDP] CHANGE-REQUEST: changeIP=False, changePort=False");
                 Log5780($"[UDP] 请求地址: {mappingTest2Server}");
 
                 StunResult resultB;
-                resultB = await Task.Run(() => StunClient.Query(socket, mappingTest2Server, false, false, 1500), cancellationToken);
+                resultB = await Task.Run(() => StunClient.Query(socket, mappingTest2Server, false, false, timeoutMs), cancellationToken);
 
                 if (resultB != null && resultB.PublicEndPoint != null)
                 {
@@ -1110,10 +1721,10 @@ namespace NetInfoCheckerX
 
 
                 Log5780(">>> [UDP] Mapping Test III: otherIP + otherPort", "Mapping Test III");
-                Log5780($"[UDP] 接收超时: 1500ms");
+                Log5780($"[UDP] 接收超时: {timeoutMs}ms");
                 Log5780($"[UDP] CHANGE-REQUEST: changeIP=False, changePort=False");
                 Log5780($"[UDP] 请求地址: {mappingTest3Server}");
-                var resultC = await Task.Run(() => StunClient.Query(socket, mappingTest3Server, false, false, 1500), cancellationToken);
+                var resultC = await Task.Run(() => StunClient.Query(socket, mappingTest3Server, false, false, timeoutMs), cancellationToken);
 
                 if (resultC != null && resultC.PublicEndPoint != null)
                 {
@@ -1160,7 +1771,7 @@ namespace NetInfoCheckerX
                 _activeSocket5780 = null;
             }
         }
-        private async Task RunTcpTest5780(IPEndPoint serverEp1, IPAddress selectedLocalIP, AddressFamily testFamily, string protocol, CancellationToken cancellationToken)
+        private async Task RunTcpTest5780(IPEndPoint serverEp1, IPAddress selectedLocalIP, AddressFamily testFamily, string protocol, int timeoutMs, CancellationToken cancellationToken, string originalDomain)
         {
             try
             {
@@ -1168,6 +1779,7 @@ namespace NetInfoCheckerX
                 if (serverEp1.Port != serverPort) serverEp1 = new IPEndPoint(serverEp1.Address, serverPort);
 
                 Log5780($"[TCP] 目标服务器: {serverEp1}");
+                if (!string.IsNullOrEmpty(originalDomain)) Log5780($"[TCP] 原域名: {originalDomain}");
                 Log5780($"[TCP] 协议: {protocol}, 测试族: {testFamily}");
 
                 int tcpBindPort = GetPortToUse(true);
@@ -1185,7 +1797,7 @@ namespace NetInfoCheckerX
                 Log5780(">>> [TCP] Mapping Test I: Binding Request", "Mapping Test I");
                 Log5780($"[TCP] CHANGE-REQUEST: changeIP=False, changePort=False");
                 Log5780($"[TCP] 请求地址: {serverEp1}");
-                var resultA = await StunClient.QueryTcpAsync(serverEp1, false, false, tcpLocalEndPoint, cancellationToken);
+                var resultA = await StunClient.QueryTcpAsync(serverEp1, false, false, tcpLocalEndPoint, cancellationToken, timeoutMs);
 
                 if (resultA?.PublicEndPoint != null)
                 {
@@ -1246,7 +1858,7 @@ namespace NetInfoCheckerX
 
                     Log5780($"[TCP] CHANGE-REQUEST: changeIP=False, changePort=False");
                     Log5780($"[TCP] 请求地址: {mappingTest2Server}");
-                    resultB = await StunClient.QueryTcpAsync(mappingTest2Server, false, false, currentLocalEndPoint, cancellationToken);
+                    resultB = await StunClient.QueryTcpAsync(mappingTest2Server, false, false, currentLocalEndPoint, cancellationToken, timeoutMs);
                     if (resultB?.PublicEndPoint != null)
                     {
                         RecordEndPoint5780(resultB.PublicEndPoint);
@@ -1284,7 +1896,7 @@ namespace NetInfoCheckerX
                 {
                     Log5780($"[TCP] CHANGE-REQUEST: changeIP=False, changePort=False");
                     Log5780($"[TCP] 请求地址: {mappingTest3Server}");
-                    resultC = await StunClient.QueryTcpAsync(mappingTest3Server, false, false, currentLocalEndPoint, cancellationToken);
+                    resultC = await StunClient.QueryTcpAsync(mappingTest3Server, false, false, currentLocalEndPoint, cancellationToken, timeoutMs);
                 }
                 if (resultC?.PublicEndPoint != null)
                 {
@@ -1390,8 +2002,10 @@ namespace NetInfoCheckerX
             IPAddress selectedLocalIP,
             AddressFamily testFamily,
             string protocol,
+            int timeoutMs,
             CancellationToken cancellationToken,
-            string tlsServerName)
+            string tlsServerName,
+            string originalDomain)
         {
             try
             {
@@ -1399,6 +2013,7 @@ namespace NetInfoCheckerX
                 if (serverEp1.Port != serverPort) serverEp1 = new IPEndPoint(serverEp1.Address, serverPort);
 
                 Log5780($"[TLS] 目标服务器: {serverEp1}");
+                if (!string.IsNullOrEmpty(originalDomain)) Log5780($"[TLS] 原域名: {originalDomain}");
                 Log5780($"[TLS] 协议: {protocol}, 测试族: {testFamily}");
 
                 int tlsBindPort = GetPortToUse(true);
@@ -1416,7 +2031,7 @@ namespace NetInfoCheckerX
                 Log5780(">>> [TLS] Mapping Test I: Binding Request", "Mapping Test I");
                 Log5780($"[TLS] CHANGE-REQUEST: changeIP=False, changePort=False");
                 Log5780($"[TLS] 请求地址: {serverEp1}");
-                var resultA = await StunClient.QueryTlsAsync(serverEp1, false, false, tlsLocalEndPoint, cancellationToken, tlsServerName);
+                var resultA = await StunClient.QueryTlsAsync(serverEp1, false, false, tlsLocalEndPoint, cancellationToken, tlsServerName, timeoutMs);
 
                 if (resultA?.PublicEndPoint == null)
                 {
@@ -1475,7 +2090,7 @@ namespace NetInfoCheckerX
 
                     Log5780($"[TLS] CHANGE-REQUEST: changeIP=False, changePort=False");
                     Log5780($"[TLS] 请求地址: {mappingTest2Server}");
-                    resultB = await StunClient.QueryTlsAsync(mappingTest2Server, false, false, currentLocalEndPoint, cancellationToken, tlsServerName);
+                    resultB = await StunClient.QueryTlsAsync(mappingTest2Server, false, false, currentLocalEndPoint, cancellationToken, tlsServerName, timeoutMs);
                     if (resultB?.PublicEndPoint != null)
                     {
                         RecordEndPoint5780(resultB.PublicEndPoint);
@@ -1513,7 +2128,7 @@ namespace NetInfoCheckerX
                 {
                     Log5780($"[TLS] CHANGE-REQUEST: changeIP=False, changePort=False");
                     Log5780($"[TLS] 请求地址: {mappingTest3Server}");
-                    resultC = await StunClient.QueryTlsAsync(mappingTest3Server, false, false, currentLocalEndPoint, cancellationToken, tlsServerName);
+                    resultC = await StunClient.QueryTlsAsync(mappingTest3Server, false, false, currentLocalEndPoint, cancellationToken, tlsServerName, timeoutMs);
                 }
                 if (resultC?.PublicEndPoint != null)
                 {
@@ -1576,21 +2191,42 @@ namespace NetInfoCheckerX
         }
         private async void btnCheck3489_Click(object sender, EventArgs e)
         {
+            if (_isBatchTesting) return;
+
+            string batchFilePath;
+            if (TryGetBatchFileRequest(out batchFilePath))
+            {
+                await RunBatchTestsAsync(batchFilePath);
+                return;
+            }
+
+            if (!checkSelectIP.Checked && !await PrepareServerForTestAsync()) return;
+
+            await Run3489TestAsync(CancellationToken.None);
+        }
+
+        private async Task<BatchAttemptResult> Run3489TestAsync(CancellationToken externalCancellationToken)
+        {
             btnCheck3489.Enabled = false;
             combo3489LocalEnd.Enabled = false;
             ResetIPDetection3489();
-            string current3489Server = comboServer.Text;
+            string originalDomain = GetOriginalDomainForDisplay();
+            bool useAutomaticResolvedAddress = checkSelectIP.Checked;
             txt3489Type.ForeColor = Global.Yumeyo;
 
-            _cts3489 = new CancellationTokenSource();
-            var cancellationToken = _cts3489.Token;
+            CancellationTokenSource testCancellation = externalCancellationToken.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(externalCancellationToken)
+                : new CancellationTokenSource();
+            _cts3489 = testCancellation;
+            var cancellationToken = testCancellation.Token;
+            string runError = null;
+            int timeoutMs = GetTimeoutMs();
 
             _stopRequested = false;
             txt3489Debug.Clear();
             txt3489Type.Text = "...";
             txt3489Type.ForeColor = Color.Gray;
             txt3489PublicEnd.Text = "";
-            lbl3489StartTime.Text = "开测: " + GetCurrentTime() + " 服务器:" + current3489Server;
 
             Socket socket = null;
             _activeSocket3489 = null;
@@ -1598,7 +2234,7 @@ namespace NetInfoCheckerX
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                string serverHost = comboServer.Text.Trim();
+                string serverHost = GetServerHostForTest(useAutomaticResolvedAddress);
                 if (string.IsNullOrEmpty(serverHost)) throw new Exception("请选择服务器");
 
                 Log(string.Format("开始时间: " + Others.GetCurrentTime()));
@@ -1625,8 +2261,10 @@ namespace NetInfoCheckerX
                 }
 
                 IPEndPoint serverEp1 = new IPEndPoint(serverIp, GetServerPort());
+                lbl3489StartTime.Text = "开测: " + GetCurrentTime() + " 服务器IP: " + serverIp;
 
                 Log($"目标服务器: {serverEp1}");
+                if (!string.IsNullOrEmpty(originalDomain)) Log($"原域名: {originalDomain}");
 
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -1672,14 +2310,14 @@ namespace NetInfoCheckerX
 
                 cancellationToken.ThrowIfCancellationRequested();
                 Log(">>>  Test I: Binding Request", "Test I (Binding)");
-                Log($"接收超时: 3000ms");
+                Log($"接收超时: {timeoutMs}ms");
                 Log($"CHANGE-REQUEST: changeIP=False, changePort=False");
                 Log($"请求地址: {serverEp1}");
 
                 var result1 = await Task.Run(() =>
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    return StunClient.Query3489(socket, serverEp1, false, false);
+                    return StunClient.Query3489(socket, serverEp1, false, false, timeoutMs);
                 }, cancellationToken);
 
                 if (result1?.PublicEndPoint != null)
@@ -1705,7 +2343,7 @@ namespace NetInfoCheckerX
                     txt3489Type.ForeColor = Color.Red;
                     Log($"Test I 失败: {errDetail}");
                     Log("判定: UdpBlocked", "(完成)");
-                    return; // 结束本次测试，不往下跑了
+                    return Create3489AttemptResult(null); // 结束本次测试，不往下跑了
                 }
                 txt3489PublicEnd.Text = FormatPrivateEndPoint(result1.PublicEndPoint);
 
@@ -1716,7 +2354,7 @@ namespace NetInfoCheckerX
                     txt3489Type.Text = "Unsupported Server";
                     txt3489Type.ForeColor = Color.DarkOrange;
                     Log("Test I 失败 (服务器返回的地址无效)", "(完成)");
-                    return;
+                    return Create3489AttemptResult(null);
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1732,7 +2370,7 @@ namespace NetInfoCheckerX
                     txt3489Type.Text = "Unsupported Server";
                     txt3489Type.ForeColor = Color.DarkOrange;
                     Log("服务器不支持 RFC3489 CHANGED-ADDRESS 无法继续测试", "(完成)");
-                    return;
+                    return Create3489AttemptResult(null);
                 }
 
                 Log($"CHANGED-ADDRESS: {changedEp}");
@@ -1750,14 +2388,14 @@ namespace NetInfoCheckerX
                 cancellationToken.ThrowIfCancellationRequested();
                 cancellationToken.ThrowIfCancellationRequested();
                 Log(">>>  Test II: Binding Request (changeIP, changePORT)", "Test II (FullCone)");
-                Log($"接收超时: 3000ms");
+                Log($"接收超时: {timeoutMs}ms");
                 Log($"请求地址: {serverEp1}");
                 Log($"CHANGE-REQUEST: changeIP=True, changePort=True");
 
                 var result2 = await Task.Run(() =>
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    return StunClient.Query3489(socket, serverEp1, true, true);
+                    return StunClient.Query3489(socket, serverEp1, true, true, timeoutMs);
                 }, cancellationToken);
 
                 if (result2 != null)
@@ -1777,7 +2415,7 @@ namespace NetInfoCheckerX
                         txt3489Type.ForeColor = Color.DarkOrange;
                         Log($"响应来源异常: 服务器未从备用地址响应，实际来自 {result2.ResponseEndPoint}，原始 {primaryRemoteEp}");
                         Log("判定: Unsupported Server", "(完成)");
-                        return;
+                        return Create3489AttemptResult(null);
                     }
 
                     if (result2.PublicEndPoint != null)
@@ -1792,14 +2430,14 @@ namespace NetInfoCheckerX
                         txt3489Type.ForeColor = Color.LimeGreen;
                         Log($"Test II 成功: {result2.ResponseEndPoint}");
                         Log("判定: OpenInternet", "(完成)");
-                        return;
+                        return Create3489AttemptResult(null);
                     }
 
                     txt3489Type.Text = "FullCone";
                     txt3489Type.ForeColor = Color.LimeGreen;
                     Log($"Test II 成功: {result2.ResponseEndPoint}");
                     Log("判定: FullCone", "(完成)");
-                    return;
+                    return Create3489AttemptResult(null);
                 }
 
                 string errDetail2 = !string.IsNullOrEmpty(result2?.ErrorMessage)
@@ -1812,13 +2450,13 @@ namespace NetInfoCheckerX
                     txt3489Type.Text = "SymmetricUdpFirewall";
                     txt3489Type.ForeColor = Color.OrangeRed;
                     Log("判定: Symmetric UDP Firewall", "(完成)");
-                    return;
+                    return Create3489AttemptResult(null);
                 }
                 Log("Test II 失败: -> Test I#2");
                 cancellationToken.ThrowIfCancellationRequested();
                 cancellationToken.ThrowIfCancellationRequested();
                 Log(">>>  Test I#2: Binding Request (changedAddress)", "Test I#2 (Symmetric)");
-                Log($"接收超时: 3000ms");
+                Log($"接收超时: {timeoutMs}ms");
 
                 if (result1.ChangedEndPoint != null)
                 {
@@ -1828,7 +2466,7 @@ namespace NetInfoCheckerX
                     var result3 = await Task.Run(() =>
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        return StunClient.Query3489(socket, testI2Server, false, false);
+                        return StunClient.Query3489(socket, testI2Server, false, false, timeoutMs);
                     }, cancellationToken);
 
                     if (result3 == null || result3.PublicEndPoint == null)
@@ -1841,7 +2479,7 @@ namespace NetInfoCheckerX
                         txt3489Type.ForeColor = Color.DarkOrange;
                         Log($"Test I#2 失败: {errDetail}");
                         Log("判定: Unknown", "(完成)");
-                        return;
+                        return Create3489AttemptResult(null);
                     }
 
                     Log($"Test I#2 成功");
@@ -1857,7 +2495,7 @@ namespace NetInfoCheckerX
                         txt3489Type.Text = "Symmetric";
                         txt3489Type.ForeColor = Color.Red;
                         Log("判定: Symmetric", "(完成)");
-                        return;
+                        return Create3489AttemptResult(null);
                     }
 
                     Log("Test I#2 成功: -> Test III");
@@ -1870,14 +2508,14 @@ namespace NetInfoCheckerX
                 cancellationToken.ThrowIfCancellationRequested();
                 cancellationToken.ThrowIfCancellationRequested();
                 Log(">>>  Test III: Binding Request (changePORT)", "Test III (Restricted)");
-                Log($"接收超时: 3000ms");
+                Log($"接收超时: {timeoutMs}ms");
                 Log($"请求地址: {serverEp1}");
                 Log($"CHANGE-REQUEST: changeIP=False, changePort=True");
 
                 var result4 = await Task.Run(() =>
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    return StunClient.Query3489(socket, serverEp1, false, true);
+                    return StunClient.Query3489(socket, serverEp1, false, true, timeoutMs);
                 }, cancellationToken);
 
                 if (result4 != null)
@@ -1922,11 +2560,12 @@ namespace NetInfoCheckerX
             }
             catch (OperationCanceledException)
             {
+                runError = "测试已取消";
                 Log("测试已被用户取消", "测试取消");
-                return;
             }
             catch (Exception ex)
             {
+                runError = ex.Message;
                 Log($"[Error] {ex.Message}");
                 if (!cancellationToken.IsCancellationRequested)
                 {
@@ -1950,141 +2589,112 @@ namespace NetInfoCheckerX
                 _activeSocket3489 = null;
 
                 // 只有在测试正常完成或出错时才恢复按钮状态
-                if (!cancellationToken.IsCancellationRequested)
+                if (!cancellationToken.IsCancellationRequested && !_isBatchTesting)
                 {
                     btnCheck3489.Enabled = true;
                     combo3489LocalEnd.Enabled = true;
                     if (!_stopRequested && !lbl3489.Text.Contains("结束"))
                     {
-                        lbl3489.Text = "RFC3489 (完成)";
+                        lbl3489.Text = "RFC3489 (完成" +
+                            (string.IsNullOrEmpty(originalDomain) ? string.Empty : "@" + originalDomain) + ")";
                     }
                 }
+
+
+                if (ReferenceEquals(_cts3489, testCancellation))
+                    _cts3489 = null;
+                testCancellation.Dispose();
             }
+
+            return Create3489AttemptResult(runError);
         }
 
 
-        private async void btnReset_Click(object sender, EventArgs e)//重置，用两次
+        private async void btnReset_Click(object sender, EventArgs e)
         {
-            await PerformResetAsync();
-            await PerformResetAsync();
-            LoadLocalIPs();
-        }
-        private async Task PerformResetAsync()  // 改为异步方法
-        {
-            _stopRequested = true;
+            if (_isReloading) return;
+            _isReloading = true;
 
-            btnCheck3489.Enabled = false;
-            btnCheck5780.Enabled = false;
-            btnReset.Enabled = false;
-
-            if (_cts3489 != null)
-            {
-                _cts3489.Cancel();
-                //await Task.Delay(200);
-                _cts3489.Dispose();
-                _cts3489 = null;
-            }
-
-            if (_cts5780 != null)
-            {
-                _cts5780.Cancel();
-                //await Task.Delay(150);
-                _cts5780.Dispose();
-                _cts5780 = null;
-            }
-
-            // 关闭活动的 Socket
-            try
-            {
-                _activeSocket3489?.Close();
-                _activeSocket3489?.Dispose();
-                _activeSocket3489 = null;
-            }
-            catch { }
+            string serverText = comboServer.Text;
+            string serverPort = txtServerPort.Text;
+            string timeoutText = GetTimeoutMs().ToString();
+            string localEnd5780 = combo5780LocalEnd.Text;
+            string localEnd3489 = combo3489LocalEnd.Text;
+            string resolvedDomain = _resolvedServerDomain;
+            HashSet<string> resolvedAddresses = new HashSet<string>(_resolvedServerAddresses, StringComparer.OrdinalIgnoreCase);
+            bool useUdp = radioUDP.Checked;
+            bool useTcp = radioTCP.Checked;
+            bool useTls = radioTLS.Checked;
+            bool changeContinuously = checkPortRandom.Checked;
+            bool randomPort = checkPortMode.Checked;
+            bool recommendedRange = checkPortRange.Checked;
+            bool automaticUdpServer = checkSelectIP.Checked;
+            bool settingsExpanded = txt5780Debug.Visible;
+            Point currentLocation = Location;
+            Size currentSize = Size;
 
             try
             {
-                _activeSocket5780?.Close();
-                _activeSocket5780?.Dispose();
-                _activeSocket5780 = null;
+                SaveNATSettings();
+
+                _stopRequested = true;
+                _batchCts?.Cancel();
+                _cts3489?.Cancel();
+                _cts5780?.Cancel();
+                try { _activeSocket3489?.Close(); } catch { }
+                try { _activeSocket5780?.Close(); } catch { }
+
+                for (int i = 0; i < 40 && _isBatchTesting; i++)
+                    await Task.Delay(50);
+                await Task.Delay(50);
+
+                NATTest newForm = new NATTest();
+                newForm.StartPosition = FormStartPosition.Manual;
+                newForm.Location = currentLocation;
+                newForm.Show();
+                newForm.pictureBox1.Image = this.pictureBox1.Image;
+
+                newForm.comboServer.Text = serverText;
+                newForm.txtServerPort.Text = serverPort;
+                newForm.txtTimeout.Text = timeoutText;
+                newForm.checkPortRandom.Checked = changeContinuously;
+                newForm.checkPortMode.Checked = randomPort;
+                newForm.checkPortRange.Checked = recommendedRange;
+                newForm.checkSelectIP.Checked = automaticUdpServer;
+                newForm.radioUDP.Checked = useUdp;
+                newForm.radioTCP.Checked = useTcp;
+                newForm.radioTLS.Checked = useTls;
+                newForm.RestoreComboSelection(newForm.combo5780LocalEnd, localEnd5780);
+                newForm.RestoreComboSelection(newForm.combo3489LocalEnd, localEnd3489);
+                newForm._resolvedServerDomain = resolvedDomain;
+                newForm._resolvedServerAddresses.Clear();
+                foreach (string address in resolvedAddresses) newForm._resolvedServerAddresses.Add(address);
+
+                if (settingsExpanded && !newForm.txt5780Debug.Visible)
+                    newForm.btnSettings_Click(newForm.btnSettings, EventArgs.Empty);
+                newForm.Location = currentLocation;
+                newForm.Size = currentSize;
+
+                Close();
+                Dispose();
             }
-            catch { }
-
-            // 等待一小段时间确保所有异步操作完成
-            await Task.Delay(50);  // 给TCP/TLS连接足够时间关闭
-
-            _lastPort3489 = 0;
-            _lastPort5780 = 0;
-
-            btnReset.Enabled = true;
-
-            _stopRequested = false;
-
-            ResetUIState();
-
-            await ApplyNATThemeAsync();
-        }
-        // 改进后的 UI 重置方法：考虑主题颜色
-        private void ResetUIState()
-        {
-            bool isLight = Global.isThemelight;
-            // 获取当前模式下应该显示的默认文字颜色
-            Color defaultTextColor = isLight ? Color.Black : Color.White;
-            Color yumeyoColor = isLight ? Global.Yumeyo : Global.Yumeyo2;
-
-            ResetIPDetection5780();
-            ResetIPDetection3489();
-
-            // 3489 部分
-            txt3489Type.Text = "--";
-            txt3489Type.ForeColor = defaultTextColor; // 还原为基础色
-            txt3489PublicEnd.Text = "--";
-            txt3489PublicEnd.ForeColor = defaultTextColor;
-            txt3489Debug.Text = "DeBugRFC3489 等待中";
-            lbl3489StartTime.Text = "开测时间";
-            lbl3489.Text = "RFC3489";
-
-            // 5780 部分
-            txt5780Mapping.Text = "--";
-            txt5780Mapping.ForeColor = defaultTextColor;
-            txt5780Filtering.Text = "--";
-            txt5780Filtering.ForeColor = defaultTextColor;
-            txt5780PublicEnd.Text = "--";
-            txt5780PublicEnd.ForeColor = defaultTextColor;
-            txt5780Binding.Text = "--";
-            txt5780Binding.ForeColor = defaultTextColor;
-            txt5780Debug.Text = "DeBugRFC5780 等待中";
-            lbl5780StartTime.Text = "开测时间";
-            lbl5780.Text = "RFC5780";
-
-            if (combo3489LocalEnd.Text.Contains(":"))
+            catch (Exception ex)
             {
-                string[] parts = combo3489LocalEnd.Text.Split(':');
-                // 兼容 [IPv6]:Port 格式
-                if (combo3489LocalEnd.Text.Contains("]"))
-                    combo3489LocalEnd.Text = parts[0] + ":" + parts[1].Split(' ')[0];
-                else
-                    combo3489LocalEnd.Text = parts[0].Split(' ')[0];
+                _isReloading = false;
+                _stopRequested = false;
+                btnReset.Enabled = true;
+                ShowErrorTooltip("重载 NAT 测试窗口失败：" + ex.Message, true);
             }
-
-            btnCheck3489.Enabled = true;
-            btnCheck5780.Enabled = true;
-            combo5780LocalEnd.Enabled = true;
-            combo3489LocalEnd.Enabled = true;
-            radioTCP.Enabled = true;
-            radioUDP.Enabled = true;
-            radioTLS.Enabled = true;
         }
-
         private void checkPortRandom_CheckedChanged(object sender, EventArgs e)//连续模式设置
         {
             if (checkPortRandom.Checked == true)
             {
-                checkPortRandom.Text = "连续更换 (连续测试时, 按下面设置换一个端口)";
+                checkPortRandom.Text = "端口更换: 自动(?)";
             }
             else
             {
-                checkPortRandom.Text = "连续固定 (连续测试不换端口, 重置/手动设置更换)";
+                checkPortRandom.Text = "端口更换: 手动(?)";
             }
         }
 
@@ -2092,11 +2702,11 @@ namespace NetInfoCheckerX
         { //
             if (checkPortMode.Checked == true)
             {
-                checkPortMode.Text = "随机端口 (每次开测都随机一个新端口)";
+                checkPortMode.Text = "更换模式: 随机(?)";
             }
             else
             {
-                checkPortMode.Text = "顺序端口 (每次开测用上次的端口号+1)";
+                checkPortMode.Text = "更换模式: 连号(?)";
             }
         }
 
@@ -2104,11 +2714,11 @@ namespace NetInfoCheckerX
         {//
             if (checkPortRange.Checked == true)
             {
-                checkPortRange.Text = "推荐范围 (49152-65535) 按规范范围, 尽量避免占用";
+                checkPortRange.Text = "更换范围: 标准(?)";
             }
             else
             {
-                checkPortRange.Text = "完全范围 (1-65535) 不考虑占用, 测就完事了";
+                checkPortRange.Text = "更换范围: 完全(?)";
             }
         }
 
@@ -2217,6 +2827,24 @@ namespace NetInfoCheckerX
         // 程序旁边的 ini 文件完整路径
         private string iniPath = System.IO.Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
 
+        private void SaveNATSettings()
+        {
+            WritePrivateProfileString("NATTest", "checkPortRandom", checkPortRandom.Checked.ToString().ToLower(), iniPath);
+            WritePrivateProfileString("NATTest", "checkPortMode", checkPortMode.Checked.ToString().ToLower(), iniPath);
+            WritePrivateProfileString("NATTest", "checkPortRange", checkPortRange.Checked.ToString().ToLower(), iniPath);
+            WritePrivateProfileString("NATTest", "checkSelectIP", checkSelectIP.Checked.ToString().ToLower(), iniPath);
+
+            string serverText = comboServer.Text;
+            if (!string.IsNullOrEmpty(serverText))
+                WritePrivateProfileString("NATTest", "Server", serverText, iniPath);
+
+            string portText = txtServerPort.Text;
+            if (!string.IsNullOrEmpty(portText))
+                WritePrivateProfileString("NATTest", "ServerPort", portText, iniPath);
+
+            WritePrivateProfileString("NATTest", "Timeout", GetTimeoutMs().ToString(), iniPath);
+        }
+
         private void LoadCheckStates()
         {
             // 准备一个"小篮子"来装读取到的字符串
@@ -2233,11 +2861,13 @@ namespace NetInfoCheckerX
             checkPortRandom.Checked = ReadIni("checkPortRandom").ToLower() == "true";
             checkPortMode.Checked = ReadIni("checkPortMode").ToLower() == "true";
             checkPortRange.Checked = ReadIni("checkPortRange").ToLower() == "true";
+            checkSelectIP.Checked = ReadIni("checkSelectIP").ToLower() == "true";
 
             // 触发一下 CheckedChanged 事件，确保按钮上的文字也被更新
             checkPortRandom_CheckedChanged(null, null);
             checkPortMode_CheckedChanged(null, null);
             checkPortRange_CheckedChanged(null, null);
+            checkSelectIP_CheckedChanged(null, null);
         }
         private void NATTest_FormClosing(object sender, FormClosingEventArgs e)
         {
@@ -2246,6 +2876,7 @@ namespace NetInfoCheckerX
                 // 取消和清理测试任务
                 _cts3489?.Cancel();
                 _cts5780?.Cancel();
+                _batchCts?.Cancel();
                 _activeSocket3489?.Close();
                 _activeSocket5780?.Close();
                 _cts3489?.Dispose();
@@ -2253,101 +2884,12 @@ namespace NetInfoCheckerX
                 _cts3489 = null;
                 _cts5780 = null;
 
-                // 写入配置项
-                WritePrivateProfileString("NATTest", "checkPortRandom", checkPortRandom.Checked.ToString().ToLower(), iniPath);
-                WritePrivateProfileString("NATTest", "checkPortMode", checkPortMode.Checked.ToString().ToLower(), iniPath);
-                WritePrivateProfileString("NATTest", "checkPortRange", checkPortRange.Checked.ToString().ToLower(), iniPath);
-
-                // 保存服务器和端口
-                string serverText = comboServer.Text;
-                if (!string.IsNullOrEmpty(serverText))
-                    WritePrivateProfileString("NATTest", "Server", serverText, iniPath);
-
-                string portText = txtServerPort.Text;
-                if (!string.IsNullOrEmpty(portText))
-                    WritePrivateProfileString("NATTest", "ServerPort", portText, iniPath);
+                SaveNATSettings();
             }
             catch (Exception ex)
             {
                 ShowErrorTooltip($"记录当前NAT测试设置失败，但问题不大，下次打开NAT测试时会自动使用默认设置喵。错误信息：{ex.Message}");
             }
-        }
-
-        private bool IsPrivateIP(IPAddress ip)
-        {
-            if (ip == null) return false;
-
-            // IPv4 内网地址检查
-            if (ip.AddressFamily == AddressFamily.InterNetwork)
-            {
-                byte[] bytes = ip.GetAddressBytes();
-
-                // 10.0.0.0/8
-                if (bytes[0] == 10) return true;
-
-                // 172.16.0.0/12
-                if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) return true;
-
-                // 192.168.0.0/16
-                if (bytes[0] == 192 && bytes[1] == 168) return true;
-
-                // 127.0.0.0/8 (回环地址)
-                if (bytes[0] == 127) return true;
-
-                // 169.254.0.0/16 (链路本地)
-                if (bytes[0] == 169 && bytes[1] == 254) return true;
-
-                return false;
-            }
-            // IPv6 内网地址检查
-            else if (ip.AddressFamily == AddressFamily.InterNetworkV6)
-            {
-                // ::1 (IPv6回环)
-                if (ip.Equals(IPAddress.IPv6Loopback)) return true;
-
-                // fe80::/10 (链路本地地址)
-                if (ip.IsIPv6LinkLocal) return true;
-
-                // fc00::/7 (唯一本地地址 ULA)
-                byte[] bytes = ip.GetAddressBytes();
-                if (bytes[0] == 0xFC || bytes[0] == 0xFD) return true;
-
-                // fec0::/10 (站点本地地址 - 已废弃，但仍可能是内网)
-                if (bytes[0] == 0xFE && (bytes[1] & 0xC0) == 0xC0) return true;
-
-                return false;
-            }
-
-            return false;
-        }
-
-        private string GetIPType(IPAddress ip)
-        {
-            if (ip.AddressFamily == AddressFamily.InterNetwork)
-            {
-                byte[] bytes = ip.GetAddressBytes();
-
-                if (bytes[0] == 10) return "10.0.0.0/8 (私有A类)";
-                if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) return "172.16.0.0/12 (私有B类)";
-                if (bytes[0] == 192 && bytes[1] == 168) return "192.168.0.0/16 (私有C类)";
-                if (bytes[0] == 127) return "127.0.0.0/8 (回环地址)";
-                if (bytes[0] == 169 && bytes[1] == 254) return "169.254.0.0/16 (链路本地)";
-
-                return "公网IPv4";
-            }
-            else if (ip.AddressFamily == AddressFamily.InterNetworkV6)
-            {
-                if (ip.Equals(IPAddress.IPv6Loopback)) return "::1 (IPv6回环)";
-                if (ip.IsIPv6LinkLocal) return "fe80::/10 (链路本地)";
-
-                byte[] bytes = ip.GetAddressBytes();
-                if (bytes[0] == 0xFC || bytes[0] == 0xFD) return "fc00::/7 (唯一本地地址)";
-                if (bytes[0] == 0xFE && (bytes[1] & 0xC0) == 0xC0) return "fec0::/10 (站点本地-已废弃)";
-
-                return "公网IPv6";
-            }
-
-            return "未知类型";
         }
 
         // 增强地址验证：检查是否为无效地址（包括 0.0.0.0, ::, 内网, 组播, 保留等）
@@ -2600,6 +3142,17 @@ namespace NetInfoCheckerX
             {
                 e.Handled = true;
 
+                string batchFilePath;
+                if (TryGetBatchFileRequest(out batchFilePath))
+                {
+                    await RunBatchTestsAsync(batchFilePath);
+                    return;
+                }
+
+                // Enter 会同时发起 RFC5780 与 RFC3489；后者始终为 UDP，
+                // 因此手动选服模式需要先让用户确认目标 IP。
+                if (!checkSelectIP.Checked && !await PrepareServerForTestAsync()) return;
+
                 btnCheck5780.PerformClick();
                 await Task.Delay(10);
                 btnCheck3489.PerformClick();
@@ -2625,8 +3178,9 @@ namespace NetInfoCheckerX
         private void ShowErrorTooltip(string message, bool is5780 = false)
         {
             Debug.WriteLine($"[错误] {message}");
+            if (_isBatchTesting) return;
             Control anchor = is5780 ? lbl5780LocalEnd : lbl3489LocalEnd;
-            toolTip2.Show(message, anchor, 0, anchor.Height + 4, 4000);
+            toolTip1.Show(message, anchor, 0, anchor.Height + 4, 4000);
         }
 
         private async void txtServerPort_KeyDown(object sender, KeyEventArgs e)
@@ -2635,9 +3189,23 @@ namespace NetInfoCheckerX
             {
                 e.Handled = true;
 
+                if (!checkSelectIP.Checked && !await PrepareServerForTestAsync()) return;
+
                 btnCheck5780.PerformClick();
                 await Task.Delay(10);
                 btnCheck3489.PerformClick();
+            }
+        }
+
+        private void checkSelectIP_CheckedChanged(object sender, EventArgs e)
+        {
+            if (checkSelectIP.Checked == true)
+            {
+                checkSelectIP.Text = "选服模式(UDP): 自动(?)";
+            }
+            else
+            {
+                checkSelectIP.Text = "选服模式(UDP): 手动(?)";
             }
         }
     }
