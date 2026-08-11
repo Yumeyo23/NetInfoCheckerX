@@ -292,11 +292,7 @@ namespace NetInfoCheckerX
             }
 
             // 2. 优先识别 HttpHelper 抛出的"硬核"网络错误
-            if (content == "请求超时。" ||
-                content == "操作已被用户取消。" ||
-                content == "发送请求时出错。" ||
-                content.Contains("网络连接失败") ||
-                content.Contains("网络打不开捏"))
+            if (IsHttpHelperError(content))
             {
                 return content;
             }
@@ -342,6 +338,12 @@ namespace NetInfoCheckerX
                 return "返回类型不是IP地址。";
             }
 
+            // HttpHelper 的错误文本里可能包含目标服务器 IP，必须先于 IP 提取处理。
+            if (IsHttpHelperError(content))
+            {
+                return content;
+            }
+
             const string patternV4 = @"(?<![0-9]\.)\b(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b(?!\.[0-9])";
             const string patternV6Candidate = @"(?<![0-9a-fA-F:.])(?=[0-9a-fA-F:.]*:)[0-9a-fA-F:.]+(?![0-9a-fA-F:.])";
 
@@ -364,6 +366,59 @@ namespace NetInfoCheckerX
             }
 
             return "返回类型不是IP地址。";
+        }
+
+        /// <summary>
+        /// 识别 HttpHelper 各请求入口可能返回的固定错误文本及常见网络异常。
+        /// </summary>
+        private static bool IsHttpHelperError(string content)
+        {
+            if (string.IsNullOrWhiteSpace(content)) return false;
+
+            string normalized = content.Trim().TrimEnd('。');
+            switch (normalized)
+            {
+                case "请求超时":
+                case "DNS解析超时":
+                case "操作已被用户取消":
+                case "操作被取消":
+                case "发送请求时出错":
+                case "未找到IPv4地址":
+                case "未找到IPv6地址":
+                case "指定的本地 IP 与强制使用的地址族不一致":
+                case "不能同时指定 forceIPv4 和 forceIPv6":
+                case "未找到查询器X内置curl":
+                case "返回空":
+                    return true;
+            }
+
+            string[] errorFragments =
+            {
+                "网络连接失败",
+                "网络打不开捏",
+                "远程名无法解析",
+                "未能解析此远程名称",
+                "无法连接到远程服务器",
+                "基础连接已经关闭",
+                "连接尝试失败",
+                "目标计算机积极拒绝",
+                "请求被中止",
+                "An error occurred while sending the request",
+                "The remote name could not be resolved",
+                "No such host is known",
+                "Unable to connect to the remote server",
+                "A connection attempt failed",
+                "actively refused it",
+                "The request was aborted"
+            };
+
+            foreach (string fragment in errorFragments)
+            {
+                if (content.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+
+            return false;
         }
 
         /// <summary>
