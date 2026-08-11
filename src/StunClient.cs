@@ -57,7 +57,7 @@ namespace NetInfoCheckerX
             return tx16;
         }
 
-        public static StunResult Query(Socket socket, IPEndPoint serverEndpoint, bool changeIp, bool changePort, int timeoutMs = 3000)
+        public static StunResult Query(Socket socket, IPEndPoint serverEndpoint, bool changeIp, bool changePort, int timeoutMs = 2000)
         {
             try
             {
@@ -152,7 +152,7 @@ namespace NetInfoCheckerX
         }
 
         // RFC3489 经典查询（无 Magic Cookie）
-        public static StunResult Query3489(Socket socket, IPEndPoint serverEndpoint, bool changeIp, bool changePort, int timeoutMs = 3000)
+        public static StunResult Query3489(Socket socket, IPEndPoint serverEndpoint, bool changeIp, bool changePort, int timeoutMs = 2000)
         {
             try
             {
@@ -518,10 +518,13 @@ namespace NetInfoCheckerX
         /// <summary>
         /// TCP 协议的 STUN 查询方法
         /// </summary>
-        public static async Task<StunResult> QueryTcpAsync(IPEndPoint serverEndpoint, bool changeIp, bool changePort, IPEndPoint localEndPoint = null, CancellationToken cancellationToken = default)
+        public static async Task<StunResult> QueryTcpAsync(IPEndPoint serverEndpoint, bool changeIp, bool changePort, IPEndPoint localEndPoint = null, CancellationToken cancellationToken = default, int timeoutMs = 2000)
         {
             TcpClient tcpClient = null;
             NetworkStream stream = null;
+            CancellationTokenSource timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCancellation.CancelAfter(Math.Max(1, timeoutMs));
+            CancellationToken queryToken = timeoutCancellation.Token;
 
             try
             {
@@ -531,16 +534,17 @@ namespace NetInfoCheckerX
                 if (localEndPoint != null)
                     Console.WriteLine($"[TCP] 已绑定到本地端点: {localEndPoint}");
 
-                tcpClient.SendTimeout = 4000;
-                tcpClient.ReceiveTimeout = 4000;
+                tcpClient.SendTimeout = timeoutMs;
+                tcpClient.ReceiveTimeout = timeoutMs;
 
                 Console.WriteLine($"[TCP] 尝试连接到 {serverEndpoint}");
                 var connectTask = tcpClient.ConnectAsync(serverEndpoint.Address, serverEndpoint.Port);
-                var timeoutTask = Task.Delay(4000);
+                var timeoutTask = Task.Delay(Timeout.Infinite, queryToken);
                 var completedTask = await Task.WhenAny(connectTask, timeoutTask).ConfigureAwait(false);
 
                 if (completedTask == timeoutTask)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     Console.WriteLine($"[TCP] 连接超时: {serverEndpoint}");
                     tcpClient.Close();
                     return null;
@@ -589,8 +593,8 @@ namespace NetInfoCheckerX
                 sendBuffer[3] = lengthBytes[1];
                 sendBuffer.AddRange(attributes);
 
-                await stream.WriteAsync(sendBuffer.ToArray(), 0, sendBuffer.Count, cancellationToken).ConfigureAwait(false);
-                await stream.FlushAsync().ConfigureAwait(false);
+                await stream.WriteAsync(sendBuffer.ToArray(), 0, sendBuffer.Count, queryToken).ConfigureAwait(false);
+                await stream.FlushAsync(queryToken).ConfigureAwait(false);
 
                 byte[] receiveBuffer = new byte[1024];
                 int totalReceived = 0;
@@ -598,7 +602,7 @@ namespace NetInfoCheckerX
 
                 while (totalReceived < 20)
                 {
-                    bytesRead = await stream.ReadAsync(receiveBuffer, totalReceived, 20 - totalReceived, cancellationToken).ConfigureAwait(false);
+                    bytesRead = await stream.ReadAsync(receiveBuffer, totalReceived, 20 - totalReceived, queryToken).ConfigureAwait(false);
                     if (bytesRead == 0) return null;
                     totalReceived += bytesRead;
                 }
@@ -609,7 +613,7 @@ namespace NetInfoCheckerX
                 while (totalReceived < totalMessageLength)
                 {
                     int bytesToRead = Math.Min(totalMessageLength - totalReceived, receiveBuffer.Length - totalReceived);
-                    bytesRead = await stream.ReadAsync(receiveBuffer, totalReceived, bytesToRead, cancellationToken).ConfigureAwait(false);
+                    bytesRead = await stream.ReadAsync(receiveBuffer, totalReceived, bytesToRead, queryToken).ConfigureAwait(false);
                     if (bytesRead == 0) return null;
                     totalReceived += bytesRead;
                 }
@@ -627,6 +631,15 @@ namespace NetInfoCheckerX
                 Console.WriteLine($"[TCP] Socket错误 [{sex.SocketErrorCode}]: {sex.Message} → {serverEndpoint}");
                 return new StunResult { ErrorMessage = sex.Message };
             }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                Console.WriteLine($"[TCP] 请求超时: {serverEndpoint}");
+                return null;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"[TCP] 异常: {ex.Message}");
@@ -637,6 +650,7 @@ namespace NetInfoCheckerX
                 stream?.Close();
                 try { tcpClient?.Client?.Close(0); } catch { }
                 tcpClient?.Close();
+                timeoutCancellation.Dispose();
             }
         }
 
@@ -649,10 +663,14 @@ namespace NetInfoCheckerX
             bool changePort,
             IPEndPoint localEndPoint = null,
             CancellationToken cancellationToken = default,
-            string tlsServerName = null)
+            string tlsServerName = null,
+            int timeoutMs = 2000)
         {
             TcpClient tcpClient = null;
             SslStream sslStream = null;
+            CancellationTokenSource timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCancellation.CancelAfter(Math.Max(1, timeoutMs));
+            CancellationToken queryToken = timeoutCancellation.Token;
 
             try
             {
@@ -662,15 +680,16 @@ namespace NetInfoCheckerX
                 if (localEndPoint != null)
                     Console.WriteLine($"[TLS] 已绑定到本地端点: {localEndPoint}");
 
-                tcpClient.SendTimeout = 4000;
-                tcpClient.ReceiveTimeout = 4000;
+                tcpClient.SendTimeout = timeoutMs;
+                tcpClient.ReceiveTimeout = timeoutMs;
 
                 var connectTask = tcpClient.ConnectAsync(serverEndpoint.Address, serverEndpoint.Port);
-                var timeoutTask = Task.Delay(4000);
+                var timeoutTask = Task.Delay(Timeout.Infinite, queryToken);
                 var completedTask = await Task.WhenAny(connectTask, timeoutTask).ConfigureAwait(false);
 
                 if (completedTask == timeoutTask)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     Console.WriteLine($"[TLS] 连接超时: {serverEndpoint}");
                     tcpClient.Close();
                     return null;
@@ -699,8 +718,21 @@ namespace NetInfoCheckerX
                     string sni = string.IsNullOrWhiteSpace(tlsServerName)
                         ? serverEndpoint.Address.ToString()
                         : tlsServerName;
-                    await sslStream.AuthenticateAsClientAsync(sni).ConfigureAwait(false);
+                    Task authenticateTask = sslStream.AuthenticateAsClientAsync(sni);
+                    Task authenticateTimeoutTask = Task.Delay(Timeout.Infinite, queryToken);
+                    Task authenticateCompletedTask = await Task.WhenAny(authenticateTask, authenticateTimeoutTask).ConfigureAwait(false);
+                    if (authenticateCompletedTask == authenticateTimeoutTask)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        Console.WriteLine($"[TLS] TLS握手超时: {serverEndpoint}");
+                        return null;
+                    }
+                    await authenticateTask.ConfigureAwait(false);
                     Console.WriteLine($"[TLS] TLS握手成功");
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
                 }
                 catch (Exception authEx)
                 {
@@ -735,8 +767,8 @@ namespace NetInfoCheckerX
                 sendBuffer[3] = lengthBytes[1];
                 sendBuffer.AddRange(attributes);
 
-                await sslStream.WriteAsync(sendBuffer.ToArray(), 0, sendBuffer.Count, cancellationToken).ConfigureAwait(false);
-                await sslStream.FlushAsync().ConfigureAwait(false);
+                await sslStream.WriteAsync(sendBuffer.ToArray(), 0, sendBuffer.Count, queryToken).ConfigureAwait(false);
+                await sslStream.FlushAsync(queryToken).ConfigureAwait(false);
 
                 byte[] receiveBuffer = new byte[1024];
                 int totalReceived = 0;
@@ -744,7 +776,7 @@ namespace NetInfoCheckerX
 
                 while (totalReceived < 20)
                 {
-                    bytesRead = await sslStream.ReadAsync(receiveBuffer, totalReceived, 20 - totalReceived, cancellationToken).ConfigureAwait(false);
+                    bytesRead = await sslStream.ReadAsync(receiveBuffer, totalReceived, 20 - totalReceived, queryToken).ConfigureAwait(false);
                     if (bytesRead == 0) return null;
                     totalReceived += bytesRead;
                 }
@@ -755,7 +787,7 @@ namespace NetInfoCheckerX
                 while (totalReceived < totalMessageLength)
                 {
                     int bytesToRead = Math.Min(totalMessageLength - totalReceived, receiveBuffer.Length - totalReceived);
-                    bytesRead = await sslStream.ReadAsync(receiveBuffer, totalReceived, bytesToRead, cancellationToken).ConfigureAwait(false);
+                    bytesRead = await sslStream.ReadAsync(receiveBuffer, totalReceived, bytesToRead, queryToken).ConfigureAwait(false);
                     if (bytesRead == 0) return null;
                     totalReceived += bytesRead;
                 }
@@ -773,6 +805,15 @@ namespace NetInfoCheckerX
                 Console.WriteLine($"[TLS] Socket错误 [{sex.SocketErrorCode}]: {sex.Message} → {serverEndpoint}");
                 return new StunResult { ErrorMessage = sex.Message };
             }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                Console.WriteLine($"[TLS] 请求超时: {serverEndpoint}");
+                return null;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"[TLS] 异常: {ex.Message}");
@@ -783,6 +824,7 @@ namespace NetInfoCheckerX
                 sslStream?.Close();
                 try { tcpClient?.Client?.Close(0); } catch { }
                 tcpClient?.Close();
+                timeoutCancellation.Dispose();
             }
         }
     }
