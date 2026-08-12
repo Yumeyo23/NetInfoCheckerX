@@ -248,9 +248,6 @@ namespace NetInfoCheckerX
                 comboServer.SelectedIndex = 0;
             }
 
-            comboServer.TextChanged += (s, ev) => ExtractPortFromComboServer();
-            ExtractPortFromComboServer();
-
             txtServerPort.KeyPress += (s, ev) =>
             {
                 if (!char.IsDigit(ev.KeyChar) && !char.IsControl(ev.KeyChar))
@@ -414,69 +411,6 @@ namespace NetInfoCheckerX
             txtTimeout.Text = int.TryParse(savedTimeout, out timeout) && timeout >= 1 && timeout <= 9999
                 ? timeout.ToString()
                 : "2000";
-        }
-
-        private void ExtractPortFromComboServer()
-        {
-            string text = comboServer.Text?.Trim();
-            if (string.IsNullOrEmpty(text)) return;
-
-            int descIdx = text.IndexOf(" (");
-            string clean = descIdx > 0 ? text.Substring(0, descIdx) : text;
-
-            string portStr = null;
-
-            // [addr]:port 格式
-            if (clean.StartsWith("[") && clean.Contains("]:"))
-            {
-                int bracketEnd = clean.IndexOf("]:");
-                portStr = clean.Substring(bracketEnd + 2);
-            }
-            else if (clean.Contains("[") || clean.Contains("]"))
-            {
-            }
-            else
-            {
-                int colonCount = 0;
-                foreach (char c in clean) { if (c == ':') colonCount++; }
-
-                if (colonCount >= 2)
-                {
-                    int lastColon = clean.LastIndexOf(':');
-                    string afterLast = clean.Substring(lastColon + 1);
-
-                    // 仅当最后一节是纯数字且去掉后是合法 IP 时，才认为是端口
-                    if (int.TryParse(afterLast, out int candidate) && candidate >= 1 && candidate <= 65535)
-                    {
-                        string withoutLast = clean.Substring(0, lastColon);
-                        if (IPAddress.TryParse(withoutLast, out _) ||
-                            IPAddress.TryParse(withoutLast.TrimStart('['), out _))
-                        {
-                            portStr = afterLast;
-                        }
-                        else
-                        {
-                            if (!IPAddress.TryParse(clean, out _))
-                            {
-                                portStr = afterLast;
-                            }
-                        }
-                    }
-                }
-                else if (colonCount == 1)
-                {
-                    int colon = clean.IndexOf(':');
-                    portStr = clean.Substring(colon + 1);
-                }
-            }
-
-            if (!string.IsNullOrEmpty(portStr) && int.TryParse(portStr, out int port))
-            {
-                if (port >= 1 && port <= 65535)
-                {
-                    txtServerPort.Text = port.ToString();
-                }
-            }
         }
 
         private int GetServerPort(string protocol = null)
