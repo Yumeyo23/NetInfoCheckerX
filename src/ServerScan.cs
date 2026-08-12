@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -17,12 +17,14 @@ namespace NetInfoCheckerX
         private const string WindowTitle = "DHCP/PPPoE服务器扫描 ✧ NetInfoCheckerX";
         private CancellationTokenSource scanCancellation;
         private bool formClosing;
+        private ContextMenuStrip gridCopyMenu;
         private string IniPath => Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
 
         public ServerScan()
         {
             InitializeComponent();
             ConfigureResultsGrid();
+            SetupGridCopyMenu();
             txtTimeout.KeyPress += txtTimeout_KeyPress;
             linkLabel1.LinkClicked += linkLabel1_LinkClicked;
             lblNIC.MouseUp += lblNIC_MouseUp;
@@ -51,6 +53,33 @@ namespace NetInfoCheckerX
             colResponse.AutoSizeMode = DataGridViewAutoSizeColumnMode.DisplayedCells;
             colSummary.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
             colSummary.MinimumWidth = 160;
+        }
+
+        private void SetupGridCopyMenu()
+        {
+            gridCopyMenu = new ContextMenuStrip();
+            ToolStripMenuItem copyItem = new ToolStripMenuItem("复制");
+            copyItem.Click += (sender, e) => CopyCurrentCell();
+            gridCopyMenu.Items.Add(copyItem);
+
+            gridResults.MouseDown += (sender, e) =>
+            {
+                if (e.Button != MouseButtons.Right) return;
+                DataGridView.HitTestInfo hit = gridResults.HitTest(e.X, e.Y);
+                if (hit.RowIndex < 0 || hit.ColumnIndex < 0) return;
+                gridResults.CurrentCell = gridResults.Rows[hit.RowIndex].Cells[hit.ColumnIndex];
+                gridCopyMenu.Show(gridResults, e.Location);
+            };
+        }
+
+        private void CopyCurrentCell()
+        {
+            DataGridViewCell cell = gridResults.CurrentCell;
+            if (cell == null || cell.Value == null) return;
+            string text = cell.Value.ToString();
+            if (string.IsNullOrEmpty(text)) return;
+            try { Clipboard.SetText(text); }
+            catch { }
         }
 
         private async Task ApplyServerScanTheme()
@@ -264,6 +293,36 @@ namespace NetInfoCheckerX
                 else
                 {
                     lblStatus.Text = "没有找到Npcap可用的无线网卡";
+                }
+            }
+            catch (NpcapNotInstalledException)
+            {
+                lblStatus.Text = "Npcap未安装";
+                DialogResult choice = MessageBox.Show(this,
+                    "当前系统内未安装Npcap驱动，相关功能无法使用。跳转到下载页面吗？",
+                    "未安装Npcap",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+
+                if (choice == DialogResult.Yes)
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = NpcapDownloadUrl,
+                            UseShellExecute = true
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show(this, "无法打开 Npcap 官网：" + ex.Message, "打开链接失败",
+                            MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+                    }
+                }
+                else
+                {
+                    Close();
                 }
             }
             catch (Exception ex)
