@@ -26,6 +26,7 @@ namespace NetInfoCheckerX
         private DateTime _lastDelClickTime;
         private bool _isConfirmingDeleteAll = false;
         private DateTime _lastDelAllClickTime;
+        private ContextMenuStrip gridCopyMenu;
 
         // 反射缓存：绕过 SSDP，直接从 TCP 端口拉取 UPnP 设备描述 XML
         private static System.Reflection.MethodInfo _cachedBuildMethod;
@@ -50,6 +51,7 @@ namespace NetInfoCheckerX
         public UPnP()
         {
             InitializeComponent();
+            SetupGridCopyMenu();
             requiredFiles = new string[]
             {
             "Open.Nat.dll",
@@ -152,6 +154,33 @@ namespace NetInfoCheckerX
         {
             int brightness = (background.R * 299 + background.G * 587 + background.B * 114) / 1000;
             return brightness >= 150 ? Color.Black : Color.White;
+        }
+
+        private void SetupGridCopyMenu()
+        {
+            gridCopyMenu = new ContextMenuStrip();
+            ToolStripMenuItem copyItem = new ToolStripMenuItem("复制");
+            copyItem.Click += (sender, e) => CopyCurrentCell();
+            gridCopyMenu.Items.Add(copyItem);
+
+            dataGridView1.MouseDown += (sender, e) =>
+            {
+                if (e.Button != MouseButtons.Right) return;
+                DataGridView.HitTestInfo hit = dataGridView1.HitTest(e.X, e.Y);
+                if (hit.RowIndex < 0 || hit.ColumnIndex < 0) return;
+                dataGridView1.CurrentCell = dataGridView1.Rows[hit.RowIndex].Cells[hit.ColumnIndex];
+                gridCopyMenu.Show(dataGridView1, e.Location);
+            };
+        }
+
+        private void CopyCurrentCell()
+        {
+            DataGridViewCell cell = dataGridView1.CurrentCell;
+            if (cell == null || cell.Value == null) return;
+            string text = cell.Value.ToString();
+            if (string.IsNullOrEmpty(text)) return;
+            try { Clipboard.SetText(text); }
+            catch { }
         }
 
         #region 核心逻辑：获取与筛选设备
