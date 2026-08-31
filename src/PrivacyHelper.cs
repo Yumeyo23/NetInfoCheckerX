@@ -8,6 +8,12 @@ namespace NetInfoCheckerX
 {
     internal static class PrivacyHelper
     {
+        private const string IPv4OctetPattern = @"(?:25[0-5]|2[0-4][0-9]|[01]?\d?\d)";
+        private const string MaskableIPv4Pattern = @"(?<![\w.])" + IPv4OctetPattern
+            + @"\.(?:" + IPv4OctetPattern + @"|\*)"
+            + @"\.(?:" + IPv4OctetPattern + @"|\*)"
+            + @"\.(?:" + IPv4OctetPattern + @"|\*)(?![\w.])";
+
         private static readonly HashSet<string> PublicDnsWhitelist = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "114.114.114.114",
@@ -135,8 +141,8 @@ namespace NetInfoCheckerX
             if (string.IsNullOrWhiteSpace(text)) return text;
 
             string result = Regex.Replace(text,
-                @"\b(?:25[0-5]|2[0-4][0-9]|[01]?\d?\d)\.(?:25[0-5]|2[0-4][0-9]|[01]?\d?\d)\.(?:25[0-5]|2[0-4][0-9]|[01]?\d?\d)\.(?:25[0-5]|2[0-4][0-9]|[01]?\d?\d)\b",
-                match => MaskIP(match.Value));
+                MaskableIPv4Pattern,
+                match => MaskIPv4Value(match.Value));
 
             result = Regex.Replace(result,
                 @"(?i)(?<![\w:])(?:[a-f0-9]{1,4}:){2,}[a-f0-9]{1,4}(?![\w:])|(?i)(?<![\w:])(?:[a-f0-9]{1,4}:){1,7}:(?![\w:])|(?i)(?<![\w:])::(?:[a-f0-9]{1,4}:){0,6}[a-f0-9]{1,4}(?![\w:])",
@@ -150,26 +156,29 @@ namespace NetInfoCheckerX
             if (string.IsNullOrWhiteSpace(text)) return text;
 
             Match match = Regex.Match(text,
-                @"\b(?:25[0-5]|2[0-4][0-9]|[01]?\d?\d)\.(?:25[0-5]|2[0-4][0-9]|[01]?\d?\d)\.(?:25[0-5]|2[0-4][0-9]|[01]?\d?\d)\.(?:25[0-5]|2[0-4][0-9]|[01]?\d?\d)\b|(?i)(?<![\w:])(?:[a-f0-9]{1,4}:){2,}[a-f0-9]{1,4}(?![\w:])|(?i)(?<![\w:])(?:[a-f0-9]{1,4}:){1,7}:(?![\w:])|(?i)(?<![\w:])::(?:[a-f0-9]{1,4}:){0,6}[a-f0-9]{1,4}(?![\w:])");
+                MaskableIPv4Pattern + @"|(?i)(?<![\w:])(?:[a-f0-9]{1,4}:){2,}[a-f0-9]{1,4}(?![\w:])|(?i)(?<![\w:])(?:[a-f0-9]{1,4}:){1,7}:(?![\w:])|(?i)(?<![\w:])::(?:[a-f0-9]{1,4}:){0,6}[a-f0-9]{1,4}(?![\w:])");
 
             if (!match.Success) return text;
 
-            string maskedIp = MaskIP(match.Value);
+            bool isPartiallyMaskedIPv4 = match.Value.IndexOf('*') >= 0 && match.Value.IndexOf('.') >= 0;
+            string maskedIp = isPartiallyMaskedIPv4
+                ? MaskIPv4Value(match.Value)
+                : MaskIP(match.Value);
             string prefix = text.Substring(0, match.Index);
             string suffix = text.Substring(match.Index + match.Length);
-            return string.IsNullOrWhiteSpace(suffix)
+            return string.IsNullOrWhiteSpace(suffix) && !isPartiallyMaskedIPv4
                 ? prefix + maskedIp
                 : prefix + maskedIp + " (隐私模式)";
         }
 
-        public static string MaskSpeedTestCnIP(string ip)
+        private static string MaskIPv4Value(string ip)
         {
             if (string.IsNullOrWhiteSpace(ip)) return ip;
 
             string[] parts = ip.Split('.');
-            if (parts.Length == 4 && parts[3] == "*")
+            if (parts.Length == 4 && Array.IndexOf(parts, "*") >= 0)
             {
-                return $"{parts[0]}.*.*.* (隐私模式)";
+                return $"{parts[0]}.*.*.{parts[3]}";
             }
 
             return MaskIP(ip);
