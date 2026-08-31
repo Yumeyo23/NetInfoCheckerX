@@ -1,0 +1,8 @@
+# .github/issue-config.yml
+autoAssign:
+  # 是否启用自动分配
+  enabled: true
+  
+  # 要分配到的 GitHub 用户名（必须是仓库成员或 Owner）
+  assignees:
+    - Yumeyo23
