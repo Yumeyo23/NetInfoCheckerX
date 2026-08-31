@@ -1300,11 +1300,9 @@ namespace NetInfoCheckerX
 
             isRunning = true;
             cts = new CancellationTokenSource();
-            // TraceGEO 是开发者专用的在线增强提供方选择。
-            // 不能仅依赖 About 页隐藏控件，运行时也必须校验权限。
-            _activeGeoOnlineIndex = Global.isYumeyo
-                ? ReadTraceGEOIndexFromIni()
-                : 0;
+            // TraceGEO 由用户在 About 页选择；索引 0 使用本地库，
+            // 其余索引使用用户自行加载的地理位置 API。
+            _activeGeoOnlineIndex = ReadTraceGEOIndexFromIni();
             _geoCache.Clear();
             _enrichPending.Clear();
             _hopGeoOriginal.Clear();
@@ -2013,8 +2011,6 @@ namespace NetInfoCheckerX
 
         private int ReadTraceGEOIndexFromIni()
         {
-            if (!Global.isYumeyo) return 0;
-
             try
             {
                 var sb = new StringBuilder(16);
@@ -2028,8 +2024,7 @@ namespace NetInfoCheckerX
 
         private bool CanUseOnlineGeoEnhancement()
         {
-            return Global.isYumeyo &&
-                _activeGeoOnlineIndex > 0 &&
+            return _activeGeoOnlineIndex > 0 &&
                 _activeGeoOnlineIndex < Api2.GeoCN_Providers.Count;
         }
 
