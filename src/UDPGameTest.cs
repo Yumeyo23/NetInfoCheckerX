@@ -161,7 +161,11 @@ namespace NetInfoCheckerX
             _uiTimer.Tick += UiTimer_Tick;
             ResetLabels();
 
-            if (ChartDependenciesAvailable())
+            if (AppSettings.DisablePingLineChart)
+            {
+                _chartDisabled = true;
+            }
+            else if (ChartDependenciesAvailable())
             {
                 _chart = new UDPGameTestChart();
                 _chart.Location = new Point(Left, Bottom + 8);
