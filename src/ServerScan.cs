@@ -441,7 +441,7 @@ namespace NetInfoCheckerX
                 result.MacAddress,
                 result.ServerIdentity,
                 result.Offering,
-                result.ResponseTimeMs + " ms",
+                result.ResponseTimeMs.ToString("0.###") + " ms",
                 result.Summary);
 
             gridResults.Rows[rowIndex].Tag = result;
