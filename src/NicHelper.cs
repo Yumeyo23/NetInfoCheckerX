@@ -20,9 +20,13 @@ namespace NetInfoCheckerX
         public static bool IsTargetNicType(NetworkInterface adapter)
         {
             return adapter.NetworkInterfaceType == NetworkInterfaceType.Ethernet ||
+                   adapter.NetworkInterfaceType == NetworkInterfaceType.FastEthernetFx ||
+                   adapter.NetworkInterfaceType == NetworkInterfaceType.FastEthernetT ||
+                   adapter.NetworkInterfaceType == NetworkInterfaceType.GigabitEthernet ||
                    adapter.NetworkInterfaceType == NetworkInterfaceType.Wireless80211 ||
                    adapter.NetworkInterfaceType == NetworkInterfaceType.Ppp ||
-                   adapter.NetworkInterfaceType == NetworkInterfaceType.Wwanpp;
+                   adapter.NetworkInterfaceType == NetworkInterfaceType.Wwanpp ||
+                   adapter.NetworkInterfaceType == NetworkInterfaceType.Wwanpp2;
         }
 
         public static bool IsCommonVirtualNic(NetworkInterface adapter)
@@ -122,21 +126,79 @@ namespace NetInfoCheckerX
 
         public static IEnumerable<NetworkInterface> GetCandidateAdapters(bool requireUp, bool preferGateway)
         {
+            return GetCandidateAdapters(
+                requireUp,
+                preferGateway,
+                AppSettings.FilterVirtualAdapters,
+                AppSettings.FilterNoGatewayAdapters,
+                AppSettings.FilterUncommonAdapterTypes,
+                AppSettings.FilterNoUsableAddressAdapters);
+        }
+
+        /// <summary>
+        /// 保留原有二参数入口，并允许调用方显式覆盖用户筛选设置。
+        /// </summary>
+        public static IEnumerable<NetworkInterface> GetCandidateAdapters(
+            bool requireUp,
+            bool preferGateway,
+            bool filterVirtualAdapters,
+            bool filterNoGatewayAdapters)
+        {
+            return GetCandidateAdapters(
+                requireUp,
+                preferGateway,
+                filterVirtualAdapters,
+                filterNoGatewayAdapters,
+                true);
+        }
+
+        public static IEnumerable<NetworkInterface> GetCandidateAdapters(
+            bool requireUp,
+            bool preferGateway,
+            bool filterVirtualAdapters,
+            bool filterNoGatewayAdapters,
+            bool filterUncommonAdapterTypes)
+        {
+            return GetCandidateAdapters(
+                requireUp,
+                preferGateway,
+                filterVirtualAdapters,
+                filterNoGatewayAdapters,
+                filterUncommonAdapterTypes,
+                false);
+        }
+
+        public static IEnumerable<NetworkInterface> GetCandidateAdapters(
+            bool requireUp,
+            bool preferGateway,
+            bool filterVirtualAdapters,
+            bool filterNoGatewayAdapters,
+            bool filterUncommonAdapterTypes,
+            bool filterNoUsableAddressAdapters)
+        {
             var upAdapters = new List<NetworkInterface>();
             var usableAdapters = new List<NetworkInterface>();
             var gatewayAdapters = new List<NetworkInterface>();
 
             foreach (NetworkInterface adapter in NetworkInterface.GetAllNetworkInterfaces())
             {
-                if (!IsTargetNicType(adapter) || IsCommonVirtualNic(adapter)) continue;
+                if (filterUncommonAdapterTypes && !IsTargetNicType(adapter)) continue;
                 if (requireUp && adapter.OperationalStatus != OperationalStatus.Up) continue;
 
+                IPInterfaceProperties properties;
+                bool hasProperties = TryGetIPProperties(adapter, out properties);
+                bool hasUsableGateway = hasProperties && HasUsableGateway(properties);
+                bool hasUsableAddress = hasProperties && HasUsableUnicastAddress(properties);
+
+                // 无网关筛选优先于虚拟网卡关键词筛选。
+                if (filterNoGatewayAdapters && !hasUsableGateway) continue;
+                if (filterVirtualAdapters && IsCommonVirtualNic(adapter)) continue;
+                if (filterNoUsableAddressAdapters && !hasUsableAddress) continue;
+
                 upAdapters.Add(adapter);
+                if (!hasProperties) continue;
 
-                if (!TryGetIPProperties(adapter, out IPInterfaceProperties properties)) continue;
-
-                bool hasUsableGateway = HasUsableGateway(properties);
-                if (hasUsableGateway || HasUsableUnicastAddress(properties))
+                if (hasUsableGateway || hasUsableAddress)
                 {
                     usableAdapters.Add(adapter);
                     if (hasUsableGateway)
@@ -148,13 +210,21 @@ namespace NetInfoCheckerX
 
             if (!preferGateway)
             {
-                return usableAdapters.Count > 0 ? usableAdapters : upAdapters;
+                if (filterNoUsableAddressAdapters) return usableAdapters;
+
+                var allAdapters = new List<NetworkInterface>(usableAdapters);
+                allAdapters.AddRange(upAdapters.Where(n => !usableAdapters.Any(u => u.Id == n.Id)));
+                return allAdapters;
             }
 
             var result = new List<NetworkInterface>();
             result.AddRange(gatewayAdapters);
             result.AddRange(usableAdapters.Where(n => !gatewayAdapters.Any(g => g.Id == n.Id)));
-            return result.Count > 0 ? result : upAdapters;
+            if (!filterNoUsableAddressAdapters)
+            {
+                result.AddRange(upAdapters.Where(n => !result.Any(r => r.Id == n.Id)));
+            }
+            return result;
         }
 
         public static IEnumerable<NicAddressInfo> GetUsableIPAddresses(bool includeIPv4 = true, bool includeIPv6 = true)
