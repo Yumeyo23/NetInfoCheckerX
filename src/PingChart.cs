@@ -22,7 +22,7 @@ namespace NetInfoCheckerX
         private bool _chartDirty;
         private bool _allowClose;
         private double _lastSetXMin, _lastSetXMax;
-        private const double DisplayWindowSeconds = 15;//超过自动滚动显示
+        private const double DisplayWindowSeconds = 10;//超过自动滚动显示
         private const double AutoScrollMarginSec = 2;
         private const int RefreshMs = 100;
 
