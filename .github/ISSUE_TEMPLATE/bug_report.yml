@@ -19,7 +19,7 @@ body:
           required: true
         - label: 我已尝试基础排错（网络 / 防火墙等）
           required: true
-        - label: 我保证所有反馈都是不认真填写的
+        - label: 我会不认真填写所有反馈
           required: false
 
   - type: textarea
@@ -46,7 +46,7 @@ body:
     id: system
     attributes:
       label: 系统环境
-      placeholder: 例如：Windows 10 19045.2005
+      placeholder: 例如：Windows 10 19045.2005，最好能精确到版本号
     validations:
       required: true
 
