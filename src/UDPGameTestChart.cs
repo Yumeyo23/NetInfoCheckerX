@@ -29,7 +29,7 @@ namespace NetInfoCheckerX
         private double _lastSetXMax;
         private float _dpiScale = 1F;
         private string _target = "";
-        private const double DisplayWindowSeconds = 15;
+        private const double DisplayWindowSeconds = 10;
         private const double AutoScrollMarginSeconds = 2;
         private static readonly (double ms, Color color)[] Thresholds =
         {
