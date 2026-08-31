@@ -126,9 +126,7 @@ namespace NetInfoCheckerX
                 }
             }
 
-            Control[] allButtons = {
-        btnOK, btnPaste, btnIP138, btnPing0, btnPing, btnTra
-    };
+            Control[] allButtons = { btnOK, btnPaste };
 
             foreach (var b in allButtons)
             {
@@ -152,6 +150,18 @@ namespace NetInfoCheckerX
                 }
             }
 
+            LinkLabel[] allLinks = { lnkPing, lnkTracert, lnkIP138, lnkPing0, lnkCustomSearch };
+            foreach (LinkLabel link in allLinks)
+            {
+                if (link == null) continue;
+                link.ForeColor = contrastColor;
+                link.LinkColor = contrastColor;
+                link.ActiveLinkColor = contrastColor;
+                link.VisitedLinkColor = contrastColor;
+                link.DisabledLinkColor = contrastColor;
+                link.BackColor = Color.Transparent;
+            }
+
             if (chkTop != null)
             {
                 chkTop.ForeColor = contrastColor;
@@ -171,6 +181,9 @@ namespace NetInfoCheckerX
             {
                 comboGEO.Items.Add(provider.Name);
             }
+            string geoToolTip = Api2.GetExternalToolTip("GEOCN");
+            if (!string.IsNullOrWhiteSpace(geoToolTip))
+                toolTip1.SetToolTip(comboGEO, geoToolTip);
             CloudControl.ApplyDevTitle(this);
 
             int savedIndex = ReadGeoIndexFromIni();
@@ -181,7 +194,7 @@ namespace NetInfoCheckerX
             }
             else
             {
-                comboGEO.SelectedIndex = 0;
+                if (comboGEO.Items.Count > 0) comboGEO.SelectedIndex = 0;
             }
             CloudControl.UsedTimesCounter("手动查询IP");
             lblTip.Text = "准备就绪";
@@ -323,7 +336,7 @@ namespace NetInfoCheckerX
             }
         }
 
-        private void btnIP138_Click(object sender, EventArgs e)
+        private void lnkIP138_Click(object sender, EventArgs e)
         {
             string ip = GetFormattedIP();
             if (string.IsNullOrEmpty(ip)) return;
@@ -333,7 +346,7 @@ namespace NetInfoCheckerX
             Process.Start($"https://www.ip138.com/iplookup.php?ip={safeIp}");
         }
 
-        private void btnPing0_Click(object sender, EventArgs e)
+        private void lnkPing0_Click(object sender, EventArgs e)
         {
             string ip = GetFormattedIP();
             if (string.IsNullOrEmpty(ip)) return;
@@ -391,7 +404,7 @@ namespace NetInfoCheckerX
             CancelCurrentQueryAsync().Wait();
         }
 
-        private void btnPing_Click(object sender, EventArgs e)
+        private void lnkPing_Click(object sender, EventArgs e)
         {
             string ip = GetFormattedIP();
             SystemSounds.Beep.Play();
@@ -399,7 +412,7 @@ namespace NetInfoCheckerX
             string cmd = $"ping -t {ip}";
             if (!string.IsNullOrEmpty(cmd)) RunCmd(cmd);
         }
-        private void btnTra_Click(object sender, EventArgs e)
+        private void lnkTracert_Click(object sender, EventArgs e)
         {
             string ip = GetFormattedIP();
             SystemSounds.Beep.Play();
@@ -423,7 +436,7 @@ namespace NetInfoCheckerX
             }
         }
 
-        private void btnPing_MouseDown(object sender, MouseEventArgs e)
+        private void lnkPing_MouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Middle)
             {
@@ -437,7 +450,7 @@ namespace NetInfoCheckerX
             }
         }
 
-        private void btnTra_MouseDown(object sender, MouseEventArgs e)
+        private void lnkTracert_MouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Middle)
             {
@@ -448,6 +461,33 @@ namespace NetInfoCheckerX
             {
                 string command = NetworkTestSettingsDialog.ShowTrace(this, GetFormattedIP());
                 if (!string.IsNullOrEmpty(command)) RunCmd(command);
+            }
+        }
+
+        private void lnkCustomSearch_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left && e.Button != MouseButtons.Right) return;
+
+            string ip = GetFormattedIP();
+            txtIP.Text = ip;
+            if (string.IsNullOrEmpty(ip)) return;
+
+            SystemSounds.Beep.Play();
+            string template = AppSettings.GetSearchUrl(e.Button == MouseButtons.Left);
+            string url = template.Replace("[IP]", Uri.EscapeDataString(ip));
+
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = url,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("无法打开搜索链接：" + ex.Message, "搜索失败",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
 
