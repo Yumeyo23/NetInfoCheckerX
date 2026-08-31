@@ -14,7 +14,7 @@ body:
     id: suggestion
     attributes:
       label: 建议内容
-      placeholder: 请描述你的想法或希望新增/改进的功能
+      placeholder: 简单描述你的想法或希望新增/改进的功能
     validations:
       required: true
 
@@ -22,7 +22,7 @@ body:
     id: reason
     attributes:
       label: 理由
-      placeholder: 为什么需要这个功能？能解决什么问题？
+      placeholder: 大胆分享你的见解，为什么需要这个功能？能解决什么问题？
     validations:
       required: true
 
