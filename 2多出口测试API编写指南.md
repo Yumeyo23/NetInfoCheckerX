@@ -6,7 +6,7 @@
 
 提示：多出口测试API独立后，“多出口测试”各个窗口的名字更多只是对该窗口规模的介绍，并不设置“教育网窗口只能使用教育网API”等任何要求。你可以将任何API放置在任何窗口中，只要遵循了查询器X可用的语法，就可以使用。
 
-本文只介绍多出口测试配置独有的写法。文件版本、注释、字符串、表达式、HTTP 请求、Header、文本提取、JSON/INI 读取及其他通用函数，参见《[IP回显/定位API编写指南]()》，本文不再重复。
+本文只介绍多出口测试配置独有的写法。文件版本、注释、字符串、表达式、HTTP 请求、Header、文本提取、JSON/INI 读取及其他通用函数，参见《[IP回显/定位API编写指南](https://github.com/Yumeyo23/NetInfoCheckerX/blob/main/1IP%E5%9B%9E%E6%98%BE%E5%AE%9A%E4%BD%8DAPI%E7%BC%96%E5%86%99%E6%8C%87%E5%8D%97.md)》，本文不再重复。
 
 截至11.2609.1.0版本，多出口测试使用以下配置文件：
 
@@ -18,7 +18,7 @@
 
 ## 零、AI 编写建议
 
-考虑到大家可能更愿意用 AI 编写配置文件，可[点击这里]()下载本 Wiki 完整文档。下载后，把`本文`、[IP回显/定位API编写指南(点击下载)]() 和 `目标 API 的官方文档` 一起交给 AI，同时提供你的想法让 AI 编写。
+考虑到大家可能更愿意用 AI 编写配置文件，可[点击这里](https://github.com/Yumeyo23/NetInfoCheckerX/edit/main/2%E5%A4%9A%E5%87%BA%E5%8F%A3%E6%B5%8B%E8%AF%95API%E7%BC%96%E5%86%99%E6%8C%87%E5%8D%97.md)下载本 Wiki 完整文档。下载后，把`本文`、[IP回显/定位API编写指南](https://github.com/Yumeyo23/NetInfoCheckerX/blob/main/1IP%E5%9B%9E%E6%98%BE%E5%AE%9A%E4%BD%8DAPI%E7%BC%96%E5%86%99%E6%8C%87%E5%8D%97.md) 和 `目标 API 的官方文档` 一起交给 AI，同时提供你的想法让 AI 编写。
 
 如 API 官方没有文档，则向 AI 提供你 API 的使用方法，包括但不限于：
 
