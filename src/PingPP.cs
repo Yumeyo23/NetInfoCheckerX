@@ -82,6 +82,7 @@ namespace NetInfoCheckerX
         private readonly Stopwatch _flushWatch = Stopwatch.StartNew();
         private bool _useBufferedOutput;
         private bool _suppressOutput;
+        private bool _timeoutOnlyOutput;
         private bool _whiteTextOnly;
         private const int FlushIntervalMs = 100;
         private int _flushIntervalMs = 100;
@@ -364,8 +365,11 @@ namespace NetInfoCheckerX
                         string remoteIp = ((IPEndPoint)receiveEP).Address.ToString();
 
                         Color rowColor = GetRttColor(rtt);
-                        AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
-                        AppendColorText($"UDP成功: {remoteIp} ={FormatRtt(rtt)}ms", rowColor, true);
+                        if (!_timeoutOnlyOutput)
+                        {
+                            AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
+                            AppendColorText($"UDP成功: {remoteIp} ={FormatRtt(rtt)}ms", rowColor, true);
+                        }
 
                     }
                     else
@@ -510,13 +514,16 @@ namespace NetInfoCheckerX
                     PrintTestSettings(actualIp);
 
                     Color rowColor = GetRttColor(rtt);
-                    AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
+                    if (!_timeoutOnlyOutput)
+                    {
+                        AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
 
-                    string displayTarget = ipAddr.AddressFamily == AddressFamily.InterNetworkV6
-                        ? $"[{targetIp}]:{port}"
-                        : $"{targetIp}:{port}";
+                        string displayTarget = ipAddr.AddressFamily == AddressFamily.InterNetworkV6
+                            ? $"[{targetIp}]:{port}"
+                            : $"{targetIp}:{port}";
 
-                    AppendColorText($"TCP成功: {displayTarget} ={FormatRtt(rtt)}ms", rowColor, true);
+                        AppendColorText($"TCP成功: {displayTarget} ={FormatRtt(rtt)}ms", rowColor, true);
+                    }
                 }
                 else
                 {
@@ -660,7 +667,11 @@ namespace NetInfoCheckerX
             if (comboFreq.SelectedIndex < 0) comboFreq.SelectedIndex = 0;
             CloudControl.UsedTimesCounter("PingPP");
 
-            if (ChartDependenciesAvailable())
+            if (AppSettings.DisablePingLineChart)
+            {
+                _chartDisabled = true;
+            }
+            else if (ChartDependenciesAvailable())
             {
                 _chartForm = new PingChart();
                 _chartForm.Location = new Point(this.Left, this.Bottom + 8);
@@ -1232,6 +1243,7 @@ namespace NetInfoCheckerX
             try
             {
                 int freq = GetPingFrequency();
+                _timeoutOnlyOutput = AppSettings.PingTimeoutOutputOnly && freq >= 8;
                 long intervalTicks = (long)(Stopwatch.Frequency / (double)freq);
                 _useBufferedOutput = freq >= 4;
                 _whiteTextOnly = freq > 8;
@@ -1441,19 +1453,22 @@ namespace NetInfoCheckerX
                             PrintTestSettings("系统默认 (ICMP兼容模式)");
 
                             Color rowColor = GetRttColor(rtt);
-                            AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
-                            string ttlInfo = "";
-                            if (reply.Address.AddressFamily == AddressFamily.InterNetwork)
+                            if (!_timeoutOnlyOutput)
                             {
-                                ttlInfo = $" TTL={reply.Options?.Ttl}";
-                            }
-                            if (rtt == 0.1)
-                            {
-                                AppendColorText($"ICMP成功: {reply.Address} <1ms{ttlInfo}", rowColor, true);
-                            }
-                            else
-                            {
-                                AppendColorText($"ICMP成功: {reply.Address} ={FormatRtt(rtt)}ms{ttlInfo}", rowColor, true);
+                                AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
+                                string ttlInfo = "";
+                                if (reply.Address.AddressFamily == AddressFamily.InterNetwork)
+                                {
+                                    ttlInfo = $" TTL={reply.Options?.Ttl}";
+                                }
+                                if (rtt == 0.1)
+                                {
+                                    AppendColorText($"ICMP成功: {reply.Address} <1ms{ttlInfo}", rowColor, true);
+                                }
+                                else
+                                {
+                                    AppendColorText($"ICMP成功: {reply.Address} ={FormatRtt(rtt)}ms{ttlInfo}", rowColor, true);
+                                }
                             }
                         }
                     }
@@ -1607,8 +1622,11 @@ namespace NetInfoCheckerX
                             PrintTestSettings(actualIp);
                             string limitInfo = ttl > 0 ? $"TTL={ttl}" : "";
                             Color rowColor = GetRttColor(rtt);
-                            AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
-                            AppendColorText($"ICMP成功: {replyAddress} ={FormatRtt(rtt)}ms {limitInfo}", rowColor, true);
+                            if (!_timeoutOnlyOutput)
+                            {
+                                AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
+                                AppendColorText($"ICMP成功: {replyAddress} ={FormatRtt(rtt)}ms {limitInfo}", rowColor, true);
+                            }
                         }
                     }
                     else if (!token.IsCancellationRequested)
@@ -1756,8 +1774,11 @@ namespace NetInfoCheckerX
                             successCount++;
                             UpdateDelay(rtt);
                             Color rowColor = GetRttColor(rtt);
-                            AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
-                            AppendColorText($"ICMPv6成功: {targetIp} ={FormatRtt(rtt)}ms", rowColor, true);
+                            if (!_timeoutOnlyOutput)
+                            {
+                                AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
+                                AppendColorText($"ICMPv6成功: {targetIp} ={FormatRtt(rtt)}ms", rowColor, true);
+                            }
                         }
                     }
                     else if (!token.IsCancellationRequested)
@@ -2272,6 +2293,8 @@ namespace NetInfoCheckerX
                 return;
             }
 
+            if (AppSettings.DisablePingPerformanceCheck) return;
+
             int freq = GetPingFrequency();
             if (freq < 4) return;
 
@@ -2420,7 +2443,22 @@ namespace NetInfoCheckerX
 
             settingsLine += $" / Tick{GetPingFrequency()}";
 
-            AppendColorText(settingsLine + "\n", Color.LightPink, true);
+            AppendColorText(settingsLine, Color.LightPink, true);
+
+            var activeSettingHints = new List<string>();
+            if (AppSettings.DisablePingLineChart)
+                activeSettingHints.Add("禁用折线图");
+            if (AppSettings.DisablePingPerformanceCheck)
+                activeSettingHints.Add("禁用性能损耗检测");
+            if (AppSettings.PingTimeoutOutputOnly)
+                activeSettingHints.Add("只输出超时");
+
+            if (activeSettingHints.Count > 0)
+            {
+                AppendColorText("[提示] 当前已设置 " + string.Join("/", activeSettingHints), Color.Yellow, true);
+            }
+
+            AppendColorText(string.Empty, Color.White, true);
         }
 
         private int GetPingFrequency()
