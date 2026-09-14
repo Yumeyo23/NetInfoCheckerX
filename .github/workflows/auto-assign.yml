@@ -1,0 +1,18 @@
+name: "Auto Assign Issue"
+
+# 当有新的 Issue 被 opened（新建）时触发
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  auto-assign:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write  # 赋予 GitHub Actions 修改/分配 Issue 的权限
+    steps:
+      - name: "Auto-assign issue to Yumeyo23"
+        uses: pozil/auto-assign-issue@v4
+        with:
+          assignees: Yumeyo23   # 这里填你的 GitHub 账号名
+          allowSelfAssign: true # 如果是你自己发 Issue，也同样会自动 assign 给你
