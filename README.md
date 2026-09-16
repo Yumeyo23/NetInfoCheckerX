@@ -10,39 +10,60 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 《网络综合查询器X》是由與夢Yumeyo原创开发、基于易语言版《[网络综合查询器](https://github.com/Yumeyo23/NetInfoChecker)》重制、以“小而美”为设计理念的全能向网络工具箱，适合网络爱好者常备日常使用。
 
 > [!CAUTION]
-> **本软件主要为中国大陆的中文用户设计. 非中文/中国大陆用户可能无法获得最佳体验, 甚至无法使用.**
+> **本软件主要为中国大陆的中文用户设计. 非中文/中国大陆用户可能无法获得最佳体验.**
 > 
 > **由于是个人软件，没有严格的开发、测试流程，介绍、实际功能等可能随时改变，软件也可能随时停更、停用.**
 > 
 > **This software is designed for Chinese-speaking users in mainland China.**
 >
-> **Non-Chinese/mainland China users may not have the best experience, or may even be unable to use.**
+> **Non-Chinese/mainland China users may not have the best experience.**
 
 > [!IMPORTANT]
 >
 > 本项目为**部分开源**。作者**不会**从本项目主动获取**任何**利益和用户隐私等不当信息，作者衷心地向所有API、服务器等提供商表示感谢，程序中已列出用到的所有API。
 >
-> 为防API轻易滥用及保护软件更新动力，本项目采用部分开源：**公开绝大多数测试的核心方法供交流学习，UI 等高原创部分暂时保持不开源**。
+> 为~~防API轻易滥用及~~保护软件更新动力，本项目采用部分开源：**公开绝大多数测试的核心方法供交流学习，UI 等高原创部分暂时保持不开源**。
 
+## 下载
+- **因个人习惯，GitHub页面更新不是很及时，最新版软件/DLC及其安装方法可+QQ群：1013442261下载，有BUG/建议也可以直接来反馈**
+- GitHub请在[release](https://github.com/Yumeyo23/NetInfoCheckerX/releases)下载最新版.
+- **软件完全绿色，但用到了一些外部依赖（后面一一列出），release时为WINRAR自解压文件**
+- **既可双击临时运行，也可解压后固定目录运行**。长期使用建议解压后运行
+  
 ## 介绍/Wiki
 
-软件核心功能为查询/记录/修改本机IP、多出口测试(简洁版/Dashboard)、NAT类型测试、TCP/UDP/ICMP全协议Ping+/Trace+、最大连接数测试、DNS劫持测试、DNS解析测速、UPnP控制台、IPERF内网测速、一键搭建LibreSpeed服务器、网速测试(上传/下载)、本机配置检测、延迟(到骨干网/CS2)测试、UDP游戏延迟模拟测试、DHCP/PPPoE服务器扫描、一键/Renew、IPv6有效期查询、手动查询IP/MAC地址、快速跳转控制面板、速查剪贴板、悬浮显示信息等。
+软件核心功能为：
 
-https://www.bilibili.com/video/BV1cyibBkEbJ/
+- 查询/记录/修改本机IP
+- 多出口测试(简洁版/Dashboard)
+- NAT类型测试
+- TCP/UDP/ICMP全协议Ping+/Trace+
+- 最大连接数测试
+- DNS劫持测试
+- DNS解析测速
+- UPnP控制台
+- IPERF内网测速
+- 一键搭建LibreSpeed服务器
+- 网速测试(上传/下载)
+- 本机配置检测
+- 延迟(到骨干网/CS2/国际DNS/Steam数据中心)测试
+- UDP游戏延迟模拟测试
+- DHCP/PPPoE服务器扫描
+- 一键/Renew
+- IPv6有效期查询
+- 手动查询IP/MAC地址
+- 快速跳转控制面板
+- 速查剪贴板
+- 常用网站一键打开
+- 悬浮显示信息等。
 
 **Wiki持续更新中...绝大多数功能已撰写官方Wiki，可在[Wiki](https://github.com/Yumeyo23/NetInfoCheckerX/wiki)查看**
 
 觉得好的话，可以[请我喝杯咖啡](https://github.com/Yumeyo23/NetInfoCheckerX/wiki/%E8%AF%B7%E6%88%91%E5%96%9D%E6%9D%AF%E5%92%96%E5%95%A1-Buy-me-a-coffee)
 
-## 下载
-- **因个人习惯，GitHub页面更新不是很及时，最新版软件/DLC及其安装方法可+QQ群：1013442261下载**
-- GitHub请在[release](https://github.com/Yumeyo23/NetInfoCheckerX/releases)下载最新版.
-- **软件完全绿色，但用到了一些外部依赖（后面一一列出），release时为WINRAR自解压文件**
-- **既可双击临时运行，也可解压后固定目录运行**。长期使用建议解压后运行
-  
 > [!NOTE]
 >
-> 由于用到了外部依赖，**部分依赖存在报毒问题**，建议关闭或者信任后使用，
+> 由于用到了外部依赖，**部分依赖存在报毒问题**，建议关闭杀毒软件，或加信任后使用，
 >
 > 发布程序使用[ConfuserEx](https://github.com/mkaring/ConfuserEx)做基本保护。
 >
