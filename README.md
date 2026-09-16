@@ -26,7 +26,7 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 
 ## 介绍/Wiki
 
-软件核心功能为查询/记录/修改本机IP、多出口测试(简洁版/Dashboard)、NAT类型测试、TCP/UDP/ICMP全协议Ping+/Trace+、最大连接数测试、DNS劫持测试、DNS解析测速、UPnP控制台、IPERF内网测速、一键搭建LibreSpeed服务器、本机配置检测、延迟(到骨干网/CS2)测试、UDP游戏延迟模拟测试、DHCP/PPPoE服务器扫描、一键/Renew、IPv6有效期查询、手动查询IP/MAC地址、快速跳转控制面板、速查剪贴板、悬浮显示信息等。
+软件核心功能为查询/记录/修改本机IP、多出口测试(简洁版/Dashboard)、NAT类型测试、TCP/UDP/ICMP全协议Ping+/Trace+、最大连接数测试、DNS劫持测试、DNS解析测速、UPnP控制台、IPERF内网测速、一键搭建LibreSpeed服务器、网速测试(上传/下载)、本机配置检测、延迟(到骨干网/CS2)测试、UDP游戏延迟模拟测试、DHCP/PPPoE服务器扫描、一键/Renew、IPv6有效期查询、手动查询IP/MAC地址、快速跳转控制面板、速查剪贴板、悬浮显示信息等。
 
 https://www.bilibili.com/video/BV1cyibBkEbJ/
 
