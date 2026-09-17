@@ -24,6 +24,14 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 >
 > 为~~防API轻易滥用及~~保护软件更新动力，本项目采用部分开源：**公开绝大多数测试的核心方法供交流学习，UI 等高原创部分暂时保持不开源**。
 
+> [!NOTE]
+>
+> 由于用到了外部依赖，**部分依赖存在报毒问题**，建议关闭杀毒软件，或加信任后使用，后面介绍有详细的依赖列表
+>
+> 发布程序使用[ConfuserEx](https://github.com/mkaring/ConfuserEx)做基本保护。
+>
+> 如对本程序安全问题存在任何疑惑，可自行决定是否使用本项目。
+
 ## 下载
 - **因个人习惯，GitHub页面更新不是很及时，最新版软件/DLC及其安装方法可+QQ群：1013442261下载，有BUG/建议也可以直接来反馈**
 - GitHub请在[release](https://github.com/Yumeyo23/NetInfoCheckerX/releases)下载最新版.
@@ -32,8 +40,21 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
   
 ## 介绍/Wiki
 
-软件核心功能为：
+核心功能大图预览，多图警告~
 
+<img width="3000" height="1875" alt="核心功能260917_06##" src="https://github.com/user-attachments/assets/5964b073-7c35-463b-99eb-c72587d792b5" />
+
+<img width="3000" height="1875" alt="核心功能260917_07##" src="https://github.com/user-attachments/assets/ba870425-43d4-4b95-9d00-88ac1bd5a84d" />
+
+<img width="3000" height="1875" alt="核心功能260917_08##" src="https://github.com/user-attachments/assets/0a57fcff-aed6-495b-82b2-e561def18dc3" />
+
+<img width="3000" height="1875" alt="核心功能260917_09##" src="https://github.com/user-attachments/assets/71f6ef1e-1ece-4721-8540-09c71f33769a" />
+
+<img width="3000" height="1875" alt="核心功能260917_10##" src="https://github.com/user-attachments/assets/92f32f82-c93f-453e-92e6-f9fb15156048" />
+
+<img width="3000" height="1875" alt="核心功能260917_11##" src="https://github.com/user-attachments/assets/e8e5094f-bf71-461d-bd79-4972414d608e" />
+
+全部功能为：
 - 查询/记录/修改本机IP
 - 多出口测试(简洁版/Dashboard)
 - NAT类型测试
@@ -60,14 +81,6 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 **Wiki持续更新中...绝大多数功能已撰写官方Wiki，可在[Wiki](https://github.com/Yumeyo23/NetInfoCheckerX/wiki)查看**
 
 觉得好的话，可以[请我喝杯咖啡](https://github.com/Yumeyo23/NetInfoCheckerX/wiki/%E8%AF%B7%E6%88%91%E5%96%9D%E6%9D%AF%E5%92%96%E5%95%A1-Buy-me-a-coffee)
-
-> [!NOTE]
->
-> 由于用到了外部依赖，**部分依赖存在报毒问题**，建议关闭杀毒软件，或加信任后使用，
->
-> 发布程序使用[ConfuserEx](https://github.com/mkaring/ConfuserEx)做基本保护。
->
-> 如对本程序安全问题存在任何疑惑，可自行决定是否使用本项目。
 
 ## 注意
 - 本程序是**专业向工具**，非**专业工具**，所有功能均以个人日常需求开发。
