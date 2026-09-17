@@ -184,8 +184,9 @@ namespace NetInfoCheckerX
             AppendColorText("      ==== 欢迎使用 延迟测试-UDP游戏模拟 ❤ 网络综合查询器X by Yumeyo ====", Global.Yumeyo2, true);
             AppendColorText("本功能基于CS抓包+模拟抓包结果实现，请先阅读下列提示：", Color.LightSkyBlue, true);
             AppendColorText("          🔰查询器X不内置服务器，请自备服务器运行服务端🔰", Color.Yellow, true);
-            AppendColorText("        ❤协议：UDP，Tick：64，发包方式/计算逻辑等，已尽量参照Valve官方设定", Color.LightGreen, true);
-            AppendColorText("        ❤采用随机数据填充，模拟游戏同等负载，测试结果仍可能与实际游戏有出入", Color.White, true);
+            AppendColorText("        ❤协议：UDP，Tick：64，发包方式/计算逻辑等，已尽量参照CS2官方设定", Color.LightGreen, true);
+            AppendColorText("        ❤采用随机数据填充，可指定负载，测试结果仍可能与实际游戏有出入", Color.White, true);
+            AppendColorText("        ❤其他与CS2同类的FPS游戏，可兼做参考", Color.White, true);
             AppendColorText("    🚀 各参数介绍可鼠标悬停查看，测试结果仅供参考，具体以实际游戏为准 ❤\n", Color.Gold, true);
             AppendColorText("    ❤ 延迟颜色对照表", Color.LightSkyBlue, true);
             AppendColorMap();
@@ -758,20 +759,24 @@ namespace NetInfoCheckerX
                     if (!_reconnecting && _sessionId != 0)
                     {
                         long now = UdpGameProtocol.NowMicroseconds();
-                        UdpGamePacket packet = new UdpGamePacket
+                        int[] sizes = UdpGameProtocol.GetUpstreamPacketSizes(_load, _random);
+                        uint tick = ++_upTickSequence;
+                        for (int part = 0; part < sizes.Length; part++)
                         {
-                            Type = UdpGameMessageType.UpstreamData,
-                            SessionId = _sessionId,
-                            PacketSequence = ++_upPacketSequence,
-                            TickSequence = ++_upTickSequence,
-                            PartIndex = 0,
-                            PartCount = 1,
-                            SendMicroseconds = now,
-                            Load = (byte)_load,
-                            BufferTicks = (byte)_bufferTicks
-                        };
-                        int size = UdpGameProtocol.GetUpstreamPacketSize(_load, _random);
-                        _socket.Send(UdpGameProtocol.CreatePacket(packet, size, _random));
+                            UdpGamePacket packet = new UdpGamePacket
+                            {
+                                Type = UdpGameMessageType.UpstreamData,
+                                SessionId = _sessionId,
+                                PacketSequence = ++_upPacketSequence,
+                                TickSequence = tick,
+                                PartIndex = (ushort)part,
+                                PartCount = (ushort)sizes.Length,
+                                SendMicroseconds = now,
+                                Load = (byte)_load,
+                                BufferTicks = (byte)_bufferTicks
+                            };
+                            _socket.Send(UdpGameProtocol.CreatePacket(packet, sizes[part], _random));
+                        }
                     }
                 }
                 catch (SocketException ex)
