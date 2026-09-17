@@ -277,7 +277,7 @@ namespace NetInfoCheckerX
                 if (!_sessions.TryGetValue(key, out session) || session.Nonce != packet.Nonce)
                 {
                     uint id = NextSessionId();
-                    int load = Math.Max(1, Math.Min(4, (int)packet.Load));
+                    int load = Math.Max(1, Math.Min(8, (int)packet.Load));
                     int bufferTicks = Math.Max(0, Math.Min(2, (int)packet.BufferTicks));
                     session = new ClientSession
                     {
