@@ -17,6 +17,7 @@ namespace NetInfoCheckerX
         {
             public string Text;
             public IPAddress Address;
+            public bool AllInterfaces;
             public override string ToString() { return Text; }
         }
 
@@ -133,18 +134,55 @@ namespace NetInfoCheckerX
         {
             this.MinimumSize = this.Size;
             ApplyServerTheme();
-            comboServer.DropDownStyle = ComboBoxStyle.DropDownList;
-            comboServer.Items.Clear();
-            comboServer.Items.Add(new BindItem { Text = "Any (所有网卡)", Address = null });
-            foreach (NicAddressInfo nic in NicHelper.GetUsableIPAddresses())
-                comboServer.Items.Add(new BindItem { Text = nic.DisplayText, Address = nic.Address });
-            comboServer.SelectedIndex = 0;
+            PopulateBindAddresses();
+            comboServer.DropDownStyle = ComboBoxStyle.DropDown;
+            label1.MouseDown += label1_MouseDown;
             CloudControl.UsedTimesCounter("PingUDPGameServer");
             lblStatus.Text = "服务未启动\r\n";
             _runtimeWarmupTask = Task.Run(() => UdpGameRuntimeWarmup.Run(typeof(UDPGameTestServer)));
             _statusTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             _statusTimer.Tick += StatusTimer_Tick;
             _statusTimer.Start();
+        }
+
+        private void PopulateBindAddresses(string preferredText = null)
+        {
+            string preferredValue = ExtractBindValue(preferredText);
+            comboServer.Items.Clear();
+            comboServer.Items.Add(new BindItem { Text = "Any (全部网卡)", AllInterfaces = true });
+            comboServer.Items.Add(new BindItem { Text = "0.0.0.0 (IPv4 Any)", Address = IPAddress.Any });
+            comboServer.Items.Add(new BindItem { Text = ":: (IPv6 Any)", Address = IPAddress.IPv6Any });
+            foreach (NicAddressInfo nic in NicHelper.GetUsableIPAddresses())
+                comboServer.Items.Add(new BindItem { Text = nic.DisplayText, Address = nic.Address });
+
+            foreach (BindItem item in comboServer.Items)
+            {
+                string itemValue = item.AllInterfaces ? "+" : item.Address?.ToString();
+                if ((!string.IsNullOrEmpty(preferredText) && item.Text == preferredText) ||
+                    (!string.IsNullOrEmpty(preferredValue) && itemValue == preferredValue))
+                {
+                    comboServer.SelectedItem = item;
+                    return;
+                }
+            }
+            if (comboServer.Items.Count > 0) comboServer.SelectedIndex = 0;
+        }
+
+        private static string ExtractBindValue(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            text = text.Trim();
+            if (text.StartsWith("Any", StringComparison.OrdinalIgnoreCase) || text == "+") return "+";
+            int descriptionIndex = text.IndexOf(" (", StringComparison.Ordinal);
+            if (descriptionIndex > 0) text = text.Substring(0, descriptionIndex);
+            IPAddress address;
+            return IPAddress.TryParse(text, out address) ? address.ToString() : null;
+        }
+
+        private void label1_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Right && !_running)
+                PopulateBindAddresses(comboServer.Text);
         }
 
         private async void btnStart_Click(object sender, EventArgs e)
@@ -168,11 +206,34 @@ namespace NetInfoCheckerX
                 return;
             }
 
+            PopulateBindAddresses(comboServer.Text);
             BindItem item = comboServer.SelectedItem as BindItem;
-            IPAddress selectedAddress = item == null ? null : item.Address;
+            if (item == null)
+            {
+                MessageBox.Show("请选择有效的监听网卡 IP。", "监听地址无效",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            IPAddress selectedAddress = item.Address;
+            if (!item.AllInterfaces && (selectedAddress.Equals(IPAddress.Any) ||
+                                        selectedAddress.Equals(IPAddress.IPv6Any)))
+            {
+                IPAddress detected = NicHelper.GetDefaultLocalAddress(selectedAddress.AddressFamily);
+                if (detected == null)
+                {
+                    MessageBox.Show(selectedAddress.AddressFamily == AddressFamily.InterNetworkV6
+                            ? "未找到可用的系统默认 IPv6 出口网卡。"
+                            : "未找到可用的系统默认 IPv4 出口网卡。",
+                        "监听地址不可用", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                selectedAddress = detected;
+                SelectBindAddress(detected);
+            }
             try
             {
-                _socket = CreateBoundSocket(selectedAddress, port);
+                _socket = CreateBoundSocket(item.AllInterfaces ? null : selectedAddress, port);
                 _socket.ReceiveTimeout = 500;
                 _cts = new CancellationTokenSource();
                 lock (_sessionsLock) _sessions.Clear();
@@ -194,6 +255,19 @@ namespace NetInfoCheckerX
                 _socket = null;
                 MessageBox.Show("服务启动失败：\r\n" + ex.Message, "启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private void SelectBindAddress(IPAddress address)
+        {
+            foreach (BindItem item in comboServer.Items)
+            {
+                if (item.Address != null && item.Address.Equals(address))
+                {
+                    comboServer.SelectedItem = item;
+                    return;
+                }
+            }
+            comboServer.Text = address.ToString();
         }
 
         private static Socket CreateBoundSocket(IPAddress address, int port)
