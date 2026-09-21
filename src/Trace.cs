@@ -663,6 +663,7 @@ namespace NetInfoCheckerX
                 selectedText.Contains("ICMP兼容模式") || selectedText.StartsWith("0.0.0.0") ||
                 selectedText.StartsWith("::")) return;
 
+            comboLocalEnd.Text = "0.0.0.0 (Any)";
             // 刷新 IPv4/IPv6 网卡列表。
             comboLocalEnd.Items.Clear();
             comboLocalEnd.Items.Add("0.0.0.0 (Any)");
@@ -688,7 +689,7 @@ namespace NetInfoCheckerX
                     break;
                 }
             }
-            if (!found && comboLocalEnd.Items.Count > 0) comboLocalEnd.SelectedIndex = 0;
+            if (!found) comboLocalEnd.SelectedItem = "0.0.0.0 (Any)";
         }
 
         private async void Trace_Load(object sender, EventArgs e)
@@ -4485,32 +4486,25 @@ namespace NetInfoCheckerX
         }
         private void lblLocalEnd_MouseDown(object sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Right)
+            if (e.Button != MouseButtons.Right) return;
+
+            DialogResult result = MessageBox.Show(
+                "确定以管理员身份重启查询器X？\r\n重启后将自动重新打开 Trace 窗口。",
+                "提权确认框", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (result != DialogResult.Yes) return;
+
+            if (isRunning && cts != null) cts.Cancel();
+            SaveSettings();
+
+            string error;
+            if (Program.TryRestartAsAdministrator("Trace", out error))
             {
-                DialogResult result = MessageBox.Show(
-                    "确定以管理员身份重启程序？\n(TCP/UDP Trace需管理员身份运行，如误点请取消)",
-                    "提权确认框",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question);
-
-                if (result == DialogResult.Yes)
-                {
-                    if (isRunning && cts != null) cts.Cancel();
-                    ProcessStartInfo startInfo = new ProcessStartInfo();
-                    startInfo.FileName = Application.ExecutablePath;
-                    startInfo.WorkingDirectory = Environment.CurrentDirectory;
-                    startInfo.Verb = "runas";
-
-                    try
-                    {
-                        Process.Start(startInfo);
-                        Environment.Exit(0);
-                    }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show("提权失败: " + ex.Message, "提权已取消", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    }
-                }
+                Application.Exit();
+            }
+            else
+            {
+                MessageBox.Show("提权失败或已取消：" + error, "提权已取消",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
         private void CheckIpSearcherDependencies()
