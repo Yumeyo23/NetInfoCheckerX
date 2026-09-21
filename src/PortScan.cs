@@ -111,6 +111,7 @@ namespace NetInfoCheckerX
             if (string.IsNullOrEmpty(selectedText)) return;
             if (selectedText.Contains("Any") || selectedText.StartsWith("0.0.0.0", StringComparison.Ordinal)) return;
 
+            comboLocalEnd.Text = "0.0.0.0 (Any)";
             InitNetworkInterfaces();
 
             bool found = false;
@@ -147,6 +148,22 @@ namespace NetInfoCheckerX
 
             if (comboLocalEnd.Items.Count > 0) comboLocalEnd.SelectedIndex = 0;
         }
+        private void lbl5780LocalEnd_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right || _isScanning) return;
+            string selectedText = comboLocalEnd.Text;
+            InitNetworkInterfaces();
+            foreach (object item in comboLocalEnd.Items)
+            {
+                if (item.ToString() == selectedText)
+                {
+                    comboLocalEnd.SelectedItem = item;
+                    break;
+                }
+            }
+            toolTip1.Show("网卡列表已刷新", lbl5780LocalEnd, 0, lbl5780LocalEnd.Height, 800);
+        }
+
         private async Task ApplyPortScanThemeAsync()
         {
             // 1. 获取全局颜色配置
