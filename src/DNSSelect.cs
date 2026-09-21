@@ -154,6 +154,7 @@ namespace NetInfoCheckerX
             if (string.IsNullOrEmpty(selectedText)) return;
             if (selectedText.Contains("Any") || selectedText.StartsWith("0.0.0.0") || selectedText.StartsWith("::")) return;
 
+            comboLocalEnd.Text = "0.0.0.0 (Any)";
             DNSSelectLoadALL();
 
             bool found = false;
@@ -193,6 +194,22 @@ namespace NetInfoCheckerX
             }
             // 开发调试服务器列表（仅在窗口载入时加载一次，此处不再重复加载）
             CloudControl.ApplyDevTitle(this);
+        }
+
+        private void lblLocalEnd_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right || isTesting) return;
+            string selectedText = comboLocalEnd.Text;
+            DNSSelectLoadALL();
+            foreach (object item in comboLocalEnd.Items)
+            {
+                if (item.ToString() == selectedText)
+                {
+                    comboLocalEnd.SelectedItem = item;
+                    break;
+                }
+            }
+            toolTip1.Show("网卡列表已刷新", lblLocalEnd, 0, lblLocalEnd.Height, 800);
         }
 
         private async void btnStart_Click(object sender, EventArgs e)
