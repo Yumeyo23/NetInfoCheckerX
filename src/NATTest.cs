@@ -667,6 +667,15 @@ namespace NetInfoCheckerX
             LoadLocalIPs(true);
         }
 
+        private void lblLocalEnd_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right || !combo5780LocalEnd.Enabled || !combo3489LocalEnd.Enabled)
+                return;
+            LoadLocalIPs(true);
+            Label label = sender as Label;
+            if (label != null) toolTip1.Show("网卡列表已刷新", label, 0, label.Height, 800);
+        }
+
         private async void LoadLocalIPs(bool preserveSelections = false)
         {
             string saved5780 = preserveSelections ? combo5780LocalEnd.Text : null;
