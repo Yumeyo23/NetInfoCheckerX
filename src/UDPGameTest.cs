@@ -437,6 +437,26 @@ namespace NetInfoCheckerX
             comboLocalEnd.SelectedIndex = 0;
         }
 
+        private void lblLocalEnd_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right || _active) return;
+            LocalEndItem selected = comboLocalEnd.SelectedItem as LocalEndItem;
+            IPAddress selectedAddress = selected?.Address;
+            PopulateLocalEndpoints();
+            if (selectedAddress == null) return;
+
+            for (int i = 0; i < comboLocalEnd.Items.Count; i++)
+            {
+                LocalEndItem item = comboLocalEnd.Items[i] as LocalEndItem;
+                if (item != null && AddressesEqual(item.Address, selectedAddress))
+                {
+                    comboLocalEnd.SelectedIndex = i;
+                    break;
+                }
+            }
+            toolTip1.Show("网卡列表已刷新", lblLocalEnd, 0, lblLocalEnd.Height, 800);
+        }
+
         private async void btnStart_Click(object sender, EventArgs e)
         {
             if (_active)
@@ -618,6 +638,7 @@ namespace NetInfoCheckerX
             if (selected.Address.Equals(IPAddress.Any) || selected.Address.Equals(IPAddress.IPv6Any)) return;
 
             IPAddress selectedAddress = selected.Address;
+            comboLocalEnd.Text = "0.0.0.0 (Any)";
             PopulateLocalEndpoints();
             for (int i = 0; i < comboLocalEnd.Items.Count; i++)
             {
