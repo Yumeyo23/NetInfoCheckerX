@@ -1,9 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -17,6 +17,13 @@ namespace NetInfoCheckerX
 {
     public partial class LibreSpeed : Form
     {
+        private sealed class BindItem
+        {
+            public string Text { get; set; }
+            public string Value { get; set; }
+            public override string ToString() { return Text; }
+        }
+
         private WebServer _server;
         private bool _isServerRunning = false;
         private const int GarbageChunksPerResponse = 500;
@@ -133,65 +140,102 @@ namespace NetInfoCheckerX
         private void EnsureSelectedNICValid()
         {
             string selectedText = comboServer.Text;
-            if (string.IsNullOrEmpty(selectedText)) return;
-            if (selectedText.Contains("Any") || selectedText.Contains("所有网卡")) return;
+            PopulateBindAddresses(selectedText);
+        }
 
-            // 保存当前选择的Text和Value
-            string savedText = selectedText;
-            string savedValue = "+";
-            if (comboServer.SelectedValue != null)
-                savedValue = comboServer.SelectedValue.ToString();
+        private void PopulateBindAddresses(string preferredText = null)
+        {
+            string preferredValue = ExtractBindValue(preferredText);
+            comboServer.DataSource = null;
+            comboServer.DropDownStyle = ComboBoxStyle.DropDown;
+            comboServer.Items.Clear();
+            comboServer.Items.Add(new BindItem { Text = "Any (全部网卡)", Value = "+" });
+            comboServer.Items.Add(new BindItem { Text = "0.0.0.0 (IPv4 Any)", Value = "0.0.0.0" });
+            comboServer.Items.Add(new BindItem { Text = ":: (IPv6 Any)", Value = "::" });
 
-            // 重新加载网卡列表
-            var items = new List<dynamic>();
-            items.Add(new { Text = "Any (所有网卡)", Value = "+" });
             try
             {
                 foreach (NicAddressInfo nicAddress in NicHelper.GetUsableIPAddresses())
-                {
-                    items.Add(new { Text = nicAddress.DisplayText, Value = nicAddress.AddressText });
-                }
+                    comboServer.Items.Add(new BindItem { Text = nicAddress.DisplayText, Value = nicAddress.AddressText });
             }
-            catch { }
-
-            comboServer.DataSource = null;
-            comboServer.DisplayMember = "Text";
-            comboServer.ValueMember = "Value";
-            comboServer.DataSource = items;
-
-            // 尝试恢复原选中项
-            bool found = false;
-            foreach (dynamic item in comboServer.Items)
+            catch
             {
-                if (item.Text == savedText)
+            }
+
+            foreach (BindItem item in comboServer.Items)
+            {
+                if ((!string.IsNullOrEmpty(preferredText) && item.Text == preferredText) ||
+                    (!string.IsNullOrEmpty(preferredValue) && item.Value == preferredValue))
                 {
                     comboServer.SelectedItem = item;
-                    found = true;
-                    break;
+                    return;
                 }
             }
-            if (!found && comboServer.Items.Count > 0) comboServer.SelectedIndex = 0;
+            if (comboServer.Items.Count > 0) comboServer.SelectedIndex = 0;
+        }
+
+        private static string ExtractBindValue(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            text = text.Trim();
+            if (text.StartsWith("Any", StringComparison.OrdinalIgnoreCase) || text == "+") return "+";
+            int descriptionIndex = text.IndexOf(" (", StringComparison.Ordinal);
+            if (descriptionIndex > 0) text = text.Substring(0, descriptionIndex);
+            IPAddress address;
+            return IPAddress.TryParse(text, out address) ? address.ToString() : null;
+        }
+
+        private string ResolveSelectedBindValue()
+        {
+            BindItem item = comboServer.SelectedItem as BindItem;
+            string value = item == null ? ExtractBindValue(comboServer.Text) : item.Value;
+            if (value == "+") return value;
+
+            IPAddress address;
+            if (!IPAddress.TryParse(value, out address))
+                throw new InvalidOperationException("请选择有效的监听网卡 IP。");
+
+            if (address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any))
+            {
+                IPAddress detected = NicHelper.GetDefaultLocalAddress(address.AddressFamily);
+                if (detected == null)
+                    throw new InvalidOperationException(address.AddressFamily == AddressFamily.InterNetworkV6
+                        ? "未找到可用的系统默认 IPv6 出口网卡。"
+                        : "未找到可用的系统默认 IPv4 出口网卡。");
+                value = detected.ToString();
+                SelectBindAddress(detected);
+            }
+            return value;
+        }
+
+        private void SelectBindAddress(IPAddress address)
+        {
+            foreach (BindItem item in comboServer.Items)
+            {
+                if (item.Value == address.ToString())
+                {
+                    comboServer.SelectedItem = item;
+                    return;
+                }
+            }
+            comboServer.Text = address.ToString();
+        }
+
+        private void label1_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right || _isServerRunning) return;
+            EnsureSelectedNICValid();
         }
 
         private void LibreSpeed_Load(object sender, EventArgs e)
         {
             this.MinimumSize = this.Size;
             _ = ApplyLibreThemeAsync();
-
-            var items = new List<dynamic>();
-
-            items.Add(new { Text = "Any (所有网卡)", Value = "+" });
+            comboServer.DropDownStyle = ComboBoxStyle.DropDown;
 
             try
             {
-                foreach (NicAddressInfo nicAddress in NicHelper.GetUsableIPAddresses())
-                {
-                    items.Add(new
-                    {
-                        Text = nicAddress.DisplayText,
-                        Value = nicAddress.AddressText
-                    });
-                }
+                PopulateBindAddresses();
                 CheckDlc();
                 lblStatus.Text = "初始化完成, 等待开服" + DlcSuffix;
             }
@@ -201,11 +245,6 @@ namespace NetInfoCheckerX
 
             }
 
-            comboServer.DisplayMember = "Text";
-            comboServer.ValueMember = "Value";
-            comboServer.DataSource = items;
-
-            if (comboServer.Items.Count > 0) comboServer.SelectedIndex = 0;
             CloudControl.UsedTimesCounter("LibreSpeed");
 
             _statusTimer = new System.Windows.Forms.Timer { Interval = 1000 };
@@ -224,11 +263,7 @@ namespace NetInfoCheckerX
             {
                 if (!int.TryParse(txtPort.Text, out int portInt)) { portInt = 9123; }
 
-                string selectedValue = "+";
-                if (comboServer.SelectedValue != null)
-                {
-                    selectedValue = comboServer.SelectedValue.ToString();
-                }
+                string selectedValue = ResolveSelectedBindValue();
 
                 _activeClients.Clear();
                 Interlocked.Exchange(ref _bytesReceived, 0);
