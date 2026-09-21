@@ -865,6 +865,7 @@ namespace NetInfoCheckerX
                 selectedText.Contains("ICMP兼容模式") || selectedText.StartsWith("0.0.0.0") ||
                 selectedText.StartsWith("::")) return;
 
+            comboLocalEnd.Text = "0.0.0.0 (Any)";
             PingPPLoadAll();
 
             bool found = false;
@@ -877,7 +878,7 @@ namespace NetInfoCheckerX
                     break;
                 }
             }
-            if (!found && comboLocalEnd.Items.Count > 0) comboLocalEnd.SelectedIndex = 0;
+            if (!found) comboLocalEnd.SelectedItem = "0.0.0.0 (Any)";
         }
 
         private void PingPPLoadAll()
@@ -2135,6 +2136,30 @@ namespace NetInfoCheckerX
                 newForm.Show();
                 this.Close();
                 this.Dispose();
+            }
+        }
+
+        private void lblLocalEnd_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right) return;
+
+            DialogResult result = MessageBox.Show(
+                "确定以管理员身份重启查询器X？\r\n重启后将自动重新打开 Ping+ 窗口。",
+                "提权确认框", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (result != DialogResult.Yes) return;
+
+            if (isRunning) _cts?.Cancel();
+            SaveSettings();
+
+            string error;
+            if (Program.TryRestartAsAdministrator("PingPP", out error))
+            {
+                Application.Exit();
+            }
+            else
+            {
+                MessageBox.Show("提权失败或已取消：" + error, "提权已取消",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
 
