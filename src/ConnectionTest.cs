@@ -225,6 +225,7 @@ namespace NetInfoCheckerX
             this.MinimumSize = this.Size;
             ApplyConnectionTheme();
             var portStatus = GetSystemDynamicPortRange();
+            comboNIC.Text = "0.0.0.0 (Any)";
             InitNICList();
             lblVersion.Text = Global.exeName + " " + Global.Version + " | " + Others.GetCurrentTime();
             this.Text = $"最大连接数测试(TCP) ✧ NICX (mP:{portStatus.num}({portStatus.start}))";
@@ -242,6 +243,7 @@ namespace NetInfoCheckerX
             if (string.IsNullOrEmpty(selectedText)) return;
             if (selectedText.Contains("Any") || selectedText.StartsWith("0.0.0.0") || selectedText.StartsWith("::")) return;
 
+            comboNIC.Text = "0.0.0.0 (Any)";
             InitNICList();
 
             bool found = false;
@@ -288,6 +290,28 @@ namespace NetInfoCheckerX
             }
 
             if (comboNIC.Items.Count > 0) comboNIC.SelectedIndex = 0;
+        }
+
+        private void lblNIC_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right || isTesting || isReleasingConnections) return;
+
+            string selectedText = comboNIC.Text;
+            InitNICList();
+
+            foreach (object item in comboNIC.Items)
+            {
+                dynamic nicItem = item;
+                if ((nicItem.Text ?? "") == selectedText)
+                {
+                    comboNIC.SelectedItem = item;
+                    toolTip1.Show("网卡列表已刷新", lblNIC, 0, lblNIC.Height, 800);
+                    return;
+                }
+            }
+
+            if (comboNIC.Items.Count > 0) comboNIC.SelectedIndex = 0;
+            toolTip1.Show("网卡列表已刷新，已回退到 0.0.0.0", lblNIC, 0, lblNIC.Height, 1200);
         }
 
         private async Task<string> HandleDNSAsync(string input)
@@ -1127,9 +1151,11 @@ namespace NetInfoCheckerX
 
                 ConnectionTest newForm = new ConnectionTest();
 
-                if (this.pictureBox1.Image != null)
+                Form1 mainForm = Application.OpenForms.OfType<Form1>().FirstOrDefault();
+                if (mainForm == null || !mainForm.TryCopyMainPictureTo(newForm.pictureBox1))
                 {
-                    newForm.pictureBox1.Image = this.pictureBox1.Image;
+                    if (this.pictureBox1.Image != null)
+                        newForm.pictureBox1.Image = new Bitmap(this.pictureBox1.Image);
                 }
 
                 newForm.StartPosition = FormStartPosition.Manual;
