@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Windows.Forms;
 
 namespace NetInfoCheckerX
 {
@@ -253,6 +254,85 @@ namespace NetInfoCheckerX
                         DisplayText = $"{ipText} ({adapter.Name})"
                     };
                 }
+            }
+        }
+
+        public static bool IsUsableLocalAddress(IPAddress address)
+        {
+            if (address == null || address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any))
+                return true;
+
+            return GetUsableIPAddresses(
+                    includeIPv4: address.AddressFamily == AddressFamily.InterNetwork,
+                    includeIPv6: address.AddressFamily == AddressFamily.InterNetworkV6)
+                .Any(item => item.Address.Equals(address));
+        }
+
+        public static IPAddress GetDefaultLocalAddress(AddressFamily family)
+        {
+            try
+            {
+                IPAddress probe = family == AddressFamily.InterNetworkV6
+                    ? IPAddress.Parse("2001:4860:4860::8888")
+                    : IPAddress.Parse("8.8.8.8");
+                using (Socket socket = new Socket(family, SocketType.Dgram, ProtocolType.Udp))
+                {
+                    socket.Connect(new IPEndPoint(probe, 53));
+                    IPEndPoint local = socket.LocalEndPoint as IPEndPoint;
+                    if (local != null && !local.Address.Equals(IPAddress.Any) &&
+                        !local.Address.Equals(IPAddress.IPv6Any))
+                        return local.Address;
+                }
+            }
+            catch
+            {
+            }
+
+            return GetUsableIPAddresses(
+                    includeIPv4: family == AddressFamily.InterNetwork,
+                    includeIPv6: family == AddressFamily.InterNetworkV6)
+                .Select(item => item.Address)
+                .FirstOrDefault();
+        }
+
+        public static bool RefreshAddressCombo(ComboBox combo, IEnumerable<string> defaultItems,
+            bool includeIPv4, bool includeIPv6, string preferredText, string fallbackText)
+        {
+            if (combo == null) return false;
+
+            combo.BeginUpdate();
+            try
+            {
+                combo.Items.Clear();
+                foreach (string item in defaultItems)
+                    combo.Items.Add(item);
+                foreach (NicAddressInfo nicAddress in GetUsableIPAddresses(includeIPv4, includeIPv6))
+                    combo.Items.Add(nicAddress.DisplayText);
+
+                foreach (object item in combo.Items)
+                {
+                    if (!string.IsNullOrEmpty(preferredText) && item.ToString() == preferredText)
+                    {
+                        combo.SelectedItem = item;
+                        return true;
+                    }
+                }
+
+                foreach (object item in combo.Items)
+                {
+                    if (item.ToString() == fallbackText)
+                    {
+                        combo.SelectedItem = item;
+                        return false;
+                    }
+                }
+
+                if (combo.Items.Count > 0) combo.SelectedIndex = 0;
+                return false;
+            }
+            finally
+            {
+                combo.EndUpdate();
             }
         }
 
