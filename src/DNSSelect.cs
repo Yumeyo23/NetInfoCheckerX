@@ -250,8 +250,8 @@ namespace NetInfoCheckerX
                 btnStart.Text = "停止";
                 ToggleUI(false);
                 this.Text = Global.isUnlimitedTime
-                    ? "DNS真选 ✧ NICX (0)"
-                    : "DNS真选 ✧ NICX (300)";
+                    ? "DNS真选测速 ✧ NICX (0)"
+                    : "DNS真选测速 ✧ NICX (300)";
                 CloudControl.ApplyDevTitle(this);
                 cts = new CancellationTokenSource();
                 remainingSeconds = Global.isUnlimitedTime ? 0 : 300;
@@ -438,7 +438,7 @@ namespace NetInfoCheckerX
             cts?.Dispose();
             cts = null;
             timer1.Stop();
-            this.Text = "DNS真选 ✧ NICX (已停止)";
+            this.Text = "DNS真选测速 ✧ NICX (已停止)";
             CloudControl.ApplyDevTitle(this);
             btnStart.Text = "开测";
             ToggleUI(true); // 恢复输入框
@@ -578,7 +578,7 @@ namespace NetInfoCheckerX
             if (Global.isUnlimitedTime)
             {
                 remainingSeconds++;
-                this.Text = $"DNS真选 ✧ NICX ({remainingSeconds})";
+                this.Text = $"DNS真选测速 ✧ NICX ({remainingSeconds})";
                 CloudControl.ApplyDevTitle(this);
             }
             else
@@ -590,7 +590,7 @@ namespace NetInfoCheckerX
                 }
                 else
                 {
-                    this.Text = $"DNS真选 ✧ NICX ({remainingSeconds})";
+                    this.Text = $"DNS真选测速 ✧ NICX ({remainingSeconds})";
                     CloudControl.ApplyDevTitle(this);
                 }
             }
