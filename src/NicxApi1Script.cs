@@ -457,7 +457,8 @@ namespace NetInfoCheckerX
                         Name = endpoint.Name,
                         ToolTip = toolTip,
                         GetIP = (localIP, token, setTitle) =>
-                            ExecuteAsync(endpoint, token, setTitle, localIP)
+                            ExecuteAsync(endpoint, token, setTitle, localIP,
+                                systemDefaultIPv4: localIP == null)
                     });
                 }
 
@@ -741,7 +742,8 @@ namespace NetInfoCheckerX
             EndpointDefinition endpoint,
             CancellationToken token,
             Action<string> setTitle = null,
-            IPAddress bindIP = null)
+            IPAddress bindIP = null,
+            bool systemDefaultIPv4 = false)
         {
             var variables = CreateVariables();
 
@@ -754,7 +756,7 @@ namespace NetInfoCheckerX
                 {
                     if (request.Condition == null || ToBool(Evaluate(request.Condition, variables)))
                         variables[request.Variable] = await ExecuteRequestAsync(
-                            request, variables, token, bindIP);
+                            request, variables, token, bindIP, systemDefaultIPv4);
                     continue;
                 }
 
@@ -797,7 +799,8 @@ namespace NetInfoCheckerX
             RequestStatement request,
             IDictionary<string, object> variables,
             CancellationToken token,
-            IPAddress bindIP = null)
+            IPAddress bindIP = null,
+            bool systemDefaultIPv4 = false)
         {
             string url = GetStringProperty(request, "url", variables, true);
             string methodText = GetStringProperty(request, "method", variables, false) ?? "GET";
@@ -813,6 +816,11 @@ namespace NetInfoCheckerX
             bool useRandomUA = GetBoolProperty(request, "useRandomUA", variables, true);
             bool forceIPv4 = GetBoolProperty(request, "forceIPv4", variables, false);
             bool forceIPv6 = GetBoolProperty(request, "forceIPv6", variables, false);
+            if (systemDefaultIPv4)
+            {
+                forceIPv4 = true;
+                forceIPv6 = false;
+            }
             int timeoutMs = GetIntProperty(request, "timeoutMs", variables, 0);
             int attempts = Math.Max(1, GetIntProperty(request, "attempts", variables, 1));
 
@@ -852,7 +860,8 @@ namespace NetInfoCheckerX
                     {
                         effectiveToken.ThrowIfCancellationRequested();
                         await HttpHelper.SendWithCookiesAsync(
-                            cookieWarmup, effectiveToken, cookies, bindIP: bindIP);
+                            cookieWarmup, effectiveToken, cookies,
+                            forceIPv4: forceIPv4, forceIPv6: forceIPv6, bindIP: bindIP);
                         if (!string.IsNullOrWhiteSpace(ensureCookieName) &&
                             cookies.GetCookies(host)[ensureCookieName] == null)
                         {
@@ -861,8 +870,10 @@ namespace NetInfoCheckerX
                         }
                         last = await HttpHelper.SendWithCookiesAsync(
                             url, effectiveToken, cookies, method, postData,
-                            headers.Count == 0 ? null : headers, useRandomUA,
-                            bindIP: bindIP);
+                            headers.Count == 0 ? null : headers,
+                            useCurlUA: useCurlUA, useRandomUA: useRandomUA, encoding: encoding,
+                            forceIPv4: forceIPv4, forceIPv6: forceIPv6,
+                            bindIP: bindIP, responseHeaderName: responseHeader);
                         if (string.IsNullOrWhiteSpace(successJsonPath) ||
                             string.Equals(TextHelper.ExtractJsonValue(last, successJsonPath),
                                 "true", StringComparison.OrdinalIgnoreCase))
