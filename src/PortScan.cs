@@ -219,10 +219,10 @@ namespace NetInfoCheckerX
             {
                 richResult.BackColor = textBack;
                 richResult.ForeColor = baseContrastColor;
-                richResult.BorderStyle = isLight ? BorderStyle.Fixed3D : BorderStyle.FixedSingle;
+                //richResult.BorderStyle = isLight ? BorderStyle.Fixed3D : BorderStyle.FixedSingle;
             }
 
-            Control[] buttons = { btnOK, btnPaste, btnSave, btnMinimum, btnFull };
+            Control[] buttons = { btnOK, btnPaste, btnSave, btnMinimum, btnFull, btnReadCustom };
             foreach (var b in buttons)
             {
                 if (b != null && b is Button btn)
@@ -248,6 +248,7 @@ namespace NetInfoCheckerX
         }
         private void PortScan_Load(object sender, EventArgs e)
         {
+            this.MinimumSize = this.Size;
             _ = ApplyPortScanThemeAsync();
             lblExeName.Text = Global.exeName + " " + Global.Version;
             InitNetworkInterfaces();
@@ -275,6 +276,12 @@ namespace NetInfoCheckerX
         private void btnMinimum_Click(object sender, EventArgs e)
         {
             txtPort.Text = commonPorts;
+        }
+
+        private void btnReadCustom_Click(object sender, EventArgs e)
+        {
+            if (_isScanning) return;
+            txtPort.Text = AppSettings.GetCustomPortScanPorts();
         }
 
         private void btnFull_Click(object sender, EventArgs e)
@@ -474,9 +481,8 @@ namespace NetInfoCheckerX
             SetControlsEnabled(false);
             richResult.Clear();
 
-            richResult.AppendText($"[扫描目标] {target} ({targetIp}) / {ports.Count} 个端口\n");
-            richResult.AppendText($"[使用网卡] {finalLocalInfo}\n");
-            richResult.AppendText($"[扫描设置] 并发 {concurrency} / 超时 {timeout}ms\n");
+            richResult.AppendText($"[扫描目标] {target} ({targetIp}) 的 {ports.Count} 个端口\n");
+            richResult.AppendText($"[扫描设置] 网卡{finalLocalInfo} / 并发 {concurrency} / 超时 {timeout}ms\n");
             richResult.AppendText($"[开始时间] {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n");
             richResult.AppendText("[TCP端口] ");
             richResult.ScrollToCaret();
@@ -580,6 +586,7 @@ namespace NetInfoCheckerX
             txtTimeout.Enabled = enabled;
             btnPaste.Enabled = enabled;
             btnMinimum.Enabled = enabled;
+            btnReadCustom.Enabled = enabled;
             btnFull.Enabled = enabled;
             btnSave.Enabled = enabled;
             comboLocalEnd.Enabled = enabled;
