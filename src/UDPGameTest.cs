@@ -226,6 +226,9 @@ namespace NetInfoCheckerX
 
         private void ApplyHighDpiOutputFont()
         {
+            // 禁用优化时保留设计器中的新宋体，也不加载或注册私有字体。
+            if (AppSettings.DisableHighDpiFontOptimization) return;
+
             float dpi = DeviceDpi;
             try
             {
