@@ -387,10 +387,10 @@ namespace NetInfoCheckerX
             string clientSelected = comboClientNIC.Text;
 
             comboServerIP.Items.Clear();
-            comboServerIP.Items.Add("0.0.0.0 (Any)");
+            comboServerIP.Items.Add("(系统默认网卡)");
 
             comboClientNIC.Items.Clear();
-            comboClientNIC.Items.Add("0.0.0.0 (Any / 系统默认)");
+            comboClientNIC.Items.Add("(系统默认网卡)");
 
             try
             {
