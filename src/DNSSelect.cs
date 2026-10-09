@@ -222,7 +222,7 @@ namespace NetInfoCheckerX
                 if (string.IsNullOrEmpty(tld)) { MessageBox.Show("请填入根域名"); return; }
 
                 int timeout;
-                if (!int.TryParse(txtTimeout.Text, out timeout)) timeout = 2000;
+                if (!int.TryParse(txtTimeout.Text, out timeout)) timeout = 1000;
 
                 string selectedIpInfo = comboLocalEnd.Text;
                 string finalIp = selectedIpInfo.Split(' ')[0];
