@@ -436,9 +436,13 @@ namespace NetInfoCheckerX
             }
         }
 
-        private void lnkPing_MouseDown(object sender, MouseEventArgs e)
+        private void lnkPing_MouseUp(object sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Middle)
+            if (e.Button == MouseButtons.Left)
+            {
+                lnkPing_Click(sender, e);
+            }
+            else if (e.Button == MouseButtons.Middle)
             {
                 PingPP secondForm = new PingPP();
                 secondForm.Show();
@@ -450,9 +454,13 @@ namespace NetInfoCheckerX
             }
         }
 
-        private void lnkTracert_MouseDown(object sender, MouseEventArgs e)
+        private void lnkTracert_MouseUp(object sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Middle)
+            if (e.Button == MouseButtons.Left)
+            {
+                lnkTracert_Click(sender, e);
+            }
+            else if (e.Button == MouseButtons.Middle)
             {
                 Trace secondForm = new Trace();
                 secondForm.Show();
@@ -464,6 +472,16 @@ namespace NetInfoCheckerX
             }
         }
 
+        private void lnkNetworkTool_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode != Keys.Enter && e.KeyCode != Keys.Space) return;
+
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            if (sender == lnkPing) lnkPing_Click(sender, e);
+            else if (sender == lnkTracert) lnkTracert_Click(sender, e);
+        }
+
         private void lnkCustomSearch_MouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button != MouseButtons.Left && e.Button != MouseButtons.Right) return;
@@ -473,8 +491,8 @@ namespace NetInfoCheckerX
             if (string.IsNullOrEmpty(ip)) return;
 
             SystemSounds.Beep.Play();
-            string template = AppSettings.GetSearchUrl(e.Button == MouseButtons.Left);
-            string url = template.Replace("[IP]", Uri.EscapeDataString(ip));
+            string template = AppSettings.GetFindIPSearchUrl(e.Button == MouseButtons.Left);
+            string url = AppSettings.ApplySearchIpTemplate(template, ip);
 
             try
             {
