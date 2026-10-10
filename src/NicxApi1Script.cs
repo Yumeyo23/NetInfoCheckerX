@@ -587,7 +587,7 @@ namespace NetInfoCheckerX
         }
 
         private static readonly HashSet<string> SupportedFunctions =
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            new HashSet<string>(StringComparer.Ordinal)
             {
                 // 当前推荐名称。
                 "ExtractIP", "ValidateIP", "GetJson", "GetKeysJson",
@@ -613,17 +613,17 @@ namespace NetInfoCheckerX
         {
             foreach (ProviderDefinition provider in catalog.Providers)
             {
-                ValidateEndpoint(provider.IPv4);
-                ValidateEndpoint(provider.IPv6);
+                ValidateEndpoint(provider.IPv4, false);
+                ValidateEndpoint(provider.IPv6, false);
             }
             foreach (EndpointDefinition endpoint in catalog.GeoEndpoints.Values)
-                ValidateEndpoint(endpoint);
+                ValidateEndpoint(endpoint, true);
         }
 
-        private static void ValidateEndpoint(EndpointDefinition endpoint)
+        private static void ValidateEndpoint(EndpointDefinition endpoint, bool isGeo)
         {
             if (endpoint == null) return;
-            bool hasReturn = false;
+            bool hasRequiredReturn = false;
             foreach (Statement statement in endpoint.Statements)
             {
                 var request = statement as RequestStatement;
@@ -649,6 +649,13 @@ namespace NetInfoCheckerX
                     continue;
                 }
 
+                var expressionStatement = statement as ExpressionStatement;
+                if (expressionStatement != null)
+                {
+                    ValidateExpression(expressionStatement.Expression);
+                    continue;
+                }
+
                 var title = statement as SetTitleStatement;
                 if (title != null)
                 {
@@ -660,6 +667,8 @@ namespace NetInfoCheckerX
                 var conditional = statement as ConditionalReturnStatement;
                 if (conditional != null)
                 {
+                    if (isGeo)
+                        throw new FormatException(endpoint.Name + " 是 geo 方法，只允许使用 returnGeo/returnGeoIf");
                     ValidateExpression(conditional.Condition);
                     ValidateExpression(conditional.Expression);
                     continue;
@@ -668,20 +677,27 @@ namespace NetInfoCheckerX
                 var result = statement as ReturnStatement;
                 if (result != null)
                 {
+                    if (isGeo)
+                        throw new FormatException(endpoint.Name + " 是 geo 方法，只允许使用 returnGeo/returnGeoIf");
                     ValidateExpression(result.Expression);
-                    hasReturn = true;
+                    hasRequiredReturn = true;
+                    continue;
                 }
 
                 var geoResult = statement as ReturnGeoStatement;
                 if (geoResult != null)
                 {
+                    if (!isGeo)
+                        throw new FormatException(endpoint.Name + " 是 API1 方法，只允许使用 return/returnIf");
                     ValidateExpression(geoResult.Condition);
                     ValidateExpression(geoResult.Location);
                     ValidateExpression(geoResult.AS);
-                    hasReturn = true;
+                    hasRequiredReturn = true;
                 }
             }
-            if (!hasReturn) throw new FormatException(endpoint.Name + " 缺少最终 return");
+            if (!hasRequiredReturn)
+                throw new FormatException(endpoint.Name +
+                    (isGeo ? " 缺少最终 returnGeo" : " 缺少最终 return"));
         }
 
         private static void ValidateExpression(Expression expression)
@@ -715,6 +731,12 @@ namespace NetInfoCheckerX
                 if (let != null)
                 {
                     variables[let.Variable] = Evaluate(let.Expression, variables);
+                    continue;
+                }
+                var expressionStatement = statement as ExpressionStatement;
+                if (expressionStatement != null)
+                {
+                    Evaluate(expressionStatement.Expression, variables);
                     continue;
                 }
                 var geo = statement as ReturnGeoStatement;
@@ -764,6 +786,13 @@ namespace NetInfoCheckerX
                 if (let != null)
                 {
                     variables[let.Variable] = Evaluate(let.Expression, variables);
+                    continue;
+                }
+
+                var expressionStatement = statement as ExpressionStatement;
+                if (expressionStatement != null)
+                {
+                    Evaluate(expressionStatement.Expression, variables);
                     continue;
                 }
 
@@ -1304,6 +1333,11 @@ namespace NetInfoCheckerX
             internal Expression Expression;
         }
 
+        private sealed class ExpressionStatement : Statement
+        {
+            internal Expression Expression;
+        }
+
         private sealed class ReturnStatement : Statement
         {
             internal Expression Expression;
@@ -1607,7 +1641,9 @@ namespace NetInfoCheckerX
                     else if (IsIdentifier("return")) endpoint.Statements.Add(ParseReturn());
                     else if (IsIdentifier("returnGeo")) endpoint.Statements.Add(ParseReturnGeo(false));
                     else if (IsIdentifier("returnGeoIf")) endpoint.Statements.Add(ParseReturnGeo(true));
-                    else throw Error("接口中只允许 request/requestIf/let/setTitle/setTitleIf/returnIf/return/returnGeo/returnGeoIf");
+                    else if (IsIdentifier("MessageBox") || IsIdentifier("Debug"))
+                        endpoint.Statements.Add(ParseDebugExpressionStatement());
+                    else throw Error("接口中只允许 request/requestIf/let/setTitle/setTitleIf/returnIf/return/returnGeo/returnGeoIf/MessageBox/Debug");
                 }
                 ExpectSymbol("}");
                 return endpoint;
@@ -1667,6 +1703,15 @@ namespace NetInfoCheckerX
                 statement.Expression = ParseExpression();
                 ExpectSymbol(";");
                 return statement;
+            }
+
+            private ExpressionStatement ParseDebugExpressionStatement()
+            {
+                Expression expression = ParseExpression();
+                if (!(expression is CallExpression))
+                    throw Error("MessageBox/Debug 必须使用方法调用形式");
+                ExpectSymbol(";");
+                return new ExpressionStatement { Expression = expression };
             }
 
             private SetTitleStatement ParseSetTitle(bool conditional)
