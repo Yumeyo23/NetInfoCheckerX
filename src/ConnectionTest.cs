@@ -7,6 +7,7 @@ using System.Linq;
 using System.Media;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -220,9 +221,29 @@ namespace NetInfoCheckerX
                 txt.Text = val.ToString();
         }
 
+        [DllImport("user32.dll")]
+        public static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll")]
+        public static extern bool SendMessage(IntPtr hwnd, int wMsg, int wParam, int lParam);
+
+        private const int WM_SYSCOMMAND = 0x0112;
+        private const int SC_MOVE = 0xF010;
+        private const int HTCAPTION = 0x0002;
+
+        private void MyMouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                ReleaseCapture();
+                SendMessage(this.Handle, WM_SYSCOMMAND, SC_MOVE + HTCAPTION, 0);
+            }
+        }
         private void ConnectionTest_Load(object sender, EventArgs e)
         {
             this.MinimumSize = this.Size;
+            this.MouseDown += MyMouseDown;
+            pictureBox1.MouseDown += MyMouseDown;
             ApplyConnectionTheme();
             var portStatus = GetSystemDynamicPortRange();
             comboNIC.Text = "0.0.0.0 (Any)";
