@@ -6,7 +6,7 @@
 
 如你需使用其他自行收集/自购的 API 来回显你的 IP 地址 / IP 地理位置，阅读本文后可自行编写。也可将本文交给 AI 阅读，让 AI 帮你编写。
 
-截至11.2609.1.0版本，IP 回显/定位 支持以下 API 配置文件：
+截至11.2610.4.0版本，IP 回显/定位 支持以下 API 配置文件：
 
 - `NICX_Api1.nicxapi`：公网 IPv4/IPv6 回显接口（API1）。
 - `NICX_Api2.nicxapi`：指定 IP 的地理位置等信息查询接口（API2）。
@@ -147,7 +147,7 @@ provider IPCN 3
 }
 ```
 
-该选项会在`国内方向IP回显接口`下拉框中显示为 `3`。由于下拉框空间所限，接口名称不设置单独显示。建议在对应的鼠标提示（本例为`tooltip GEOCN`）中说明 `3` 代表哪一家的接口。
+该选项会在`国内方向IP回显接口`下拉框中显示为 `3`。由于下拉框空间所限，接口名称不设置单独显示。建议在对应的鼠标提示（本例为`tooltip IPCN`）中说明 `3` 代表哪一家的接口。
 
 注意：
 
@@ -423,7 +423,7 @@ returnGeoIf failed, text1, text2;
 
 ### 6.6 特例：`return` 四行返回值
 
-若你的 API 返回的字符串中，同时包含 IP 和该 IP 的地理位置，且你希望直接使用该信息作为最终查询结果，不需要再用 API2 里的 API 发起地理位置查询，则可以使用“四行返回值”特例，直接在 API1 中就 `return`并最终显示，不再发起 API2 查询。该特例仅适用于 API1 `return`。
+若你的 API 返回的字符串中，同时包含 IP 和该 IP 的地理位置，且你希望直接使用该信息作为最终查询结果，不需要再用 API2 里的 API 发起地理位置查询，则可以使用“四行返回值”特例，直接在 API1 中就 `return`并最终显示，不再发起 API2 查询。该特例适用于 API1 的 `IPCN`、`IPGFW` IPv4/IPv6 接口；用于 `IPCNYX` 双栈优先测试时会取第一行 IP 进行协议判断。
 
 排版规则为：按行分割，第 1 行作为 API1 返回的最终 IP 地址，第 2 行自动替代 API2 的返回值1，第 3~4 行自动合并后替代 API2 的返回值2。建议换行符格式为`Windows (CR+LF)`。
 
@@ -571,8 +571,8 @@ let mobile = CheckJson(json, "[Mobile]", "network.is_mobile");
 | `GetMidText(text, left, right)` | 相当于易语言“文本_取中间”（例：原文=`12345`,`GetMidText(原文, "2", "4")`=`3`） |
 | `GetLeftText(text, marker)` | 相当于易语言“文本_取左边”，按字符定位（例：原文=`12345`,`GetLeftText(原文, "2")`=`1`） |
 | `GetRightText(text, marker)` | 相当于易语言“文本_取右边”，按字符定位（例：原文=`12345`,`GetRightText(原文, "3")`=`45`） |
-| `DelLeftText(text, [num] length)` | 相当于易语言“文本_删左边”，按长度删（例：原文=`12345`,`DeleteLeftText(原文, "2")`=`345`） |
-| `DelRightText(text, [num] length)` | 相当于易语言“文本_删右边”，按长度删（例：原文=`12345`,`DeleteRightText(原文, "3")`=`12`） |
+| `DelLeftText(text, [num] length)` | 相当于易语言“文本_删左边”，按长度删（例：原文=`12345`,`DelLeftText(原文, "2")`=`345`） |
+| `DelRightText(text, [num] length)` | 相当于易语言“文本_删右边”，按长度删（例：原文=`12345`,`DelRightText(原文, "3")`=`12`） |
 | `ReplaceText(text, old1, new1, old2, new2, ...)` | 替换文本。可单个使用，和 C# .Replace() 一样，也可连续使用（可将所有欲替换和替换后的文本一次性输入，避免反复嵌套）。 |
 | `DecodeUnicode(text)` | 解码 `\uXXXX` 等 Unicode 转义 |
 | `Trim(text)` | 删除首尾空白字符 |
@@ -658,7 +658,7 @@ let node = SelectMaxJson(
 
 ### 8.6 调试输出
 
-如需临时查看、输出内部部分文本字符串，可使用下列调试输出函数
+如需临时查看、输出内部部分文本字符串，可使用下列调试输出函数。两个函数均可像语句一样独立使用，不需要通过 `let` 接收返回值；应放在最终的 `return` 或 `returnGeo` 之前，否则方法已经返回，不会执行调试输出。
 
 | 函数 | 说明 |
 | --- | --- |
@@ -671,9 +671,15 @@ let node = SelectMaxJson(
 Debug(response, "ip138", "E:\\NetInfoCheckerX\\bin\\Release");
 ```
 
-上述示例将 `response` 保存到该目录下的 `ip138.txt`。文件后缀固定为 `.txt`无需设置。
+上述 `Debug` 示例将 `response` 保存到该目录下的 `ip138.txt`。文件后缀固定为 `.txt`，无需设置。
 
 `name` 或 `place` 任意值为空、目标目录不存在或指定位置保存失败时，程序会尝试保存到主程序旁边，默认文件名格式为：`NICX_Temp_yymmdd_HHmmss.txt`
+
+`MessageBox` 示例：
+
+```
+MessageBox(response);
+```
 
 ## 九、故障切换 (Fallback) 结构示例
 
