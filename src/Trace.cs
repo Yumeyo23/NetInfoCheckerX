@@ -1313,6 +1313,7 @@ namespace NetInfoCheckerX
             _ipToHop.Clear();
             _mtrRuntimeNotice = null;
             CancellationToken token = cts.Token;
+            IDisposable geoUsageCountScope = GeoProvider.BeginUsageCountScope();
 
             if (!int.TryParse(txtHops.Text, out int maxHops) || maxHops < 1 || maxHops > 255)
             {
@@ -1434,6 +1435,7 @@ namespace NetInfoCheckerX
             }
             finally
             {
+                geoUsageCountScope.Dispose();
                 if (!this.IsDisposed)
                 {
                     isRunning = false;
@@ -1619,7 +1621,7 @@ namespace NetInfoCheckerX
         // ==========================================
         // 第一部分：校验和计算
         // ==========================================
-        private string GetLocalGeoInfo(string ip)
+        private static string GetLocalGeoInfo(string ip)
         {
             if (string.IsNullOrWhiteSpace(ip))
                 return string.Empty;
@@ -1732,6 +1734,51 @@ namespace NetInfoCheckerX
             {
                 GeoRateGate.Release();
             }
+        }
+
+        internal static async Task<string> ResolveSharedGeoAsync(
+            int providerIndex, string ip, CancellationToken token)
+        {
+            string local = GetLocalGeoInfo(ip);
+            if (string.IsNullOrEmpty(IanaReservedIP.Check(ip)) &&
+                providerIndex > 0 && providerIndex < Api2.GeoCN_Providers.Count)
+            {
+                GeoProvider provider = Api2.GeoCN_Providers[providerIndex];
+                if (TryGetTraceGeoSessionCache(provider, ip, out string cached))
+                    return cached;
+
+                SemaphoreSlim sessionGate = GetTraceGeoSessionGate(provider, ip);
+                bool entered = false;
+                try
+                {
+                    await sessionGate.WaitAsync(token);
+                    entered = true;
+                    if (TryGetTraceGeoSessionCache(provider, ip, out cached))
+                        return cached;
+
+                    await WaitForGeoRequestSlotAsync(token);
+                    GeoResult result = await provider.GetGeoTaskIgnoringPrivacy(ip, token);
+                    string online = FormatOnlineGeoResult(result);
+                    if (!string.IsNullOrWhiteSpace(online))
+                    {
+                        CacheTraceGeoSessionResult(provider, ip, online);
+                        return online;
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    return local;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[GEO-DNSExit] 在线查询失败 ip={ip}: {ex.Message}");
+                }
+                finally
+                {
+                    if (entered) sessionGate.Release();
+                }
+            }
+            return local;
         }
 
         private string ResolveGeoInfo(string ip, CancellationToken token)
