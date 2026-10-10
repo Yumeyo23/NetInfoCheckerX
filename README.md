@@ -56,12 +56,13 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 
 全部功能为：
 - 查询/记录/修改本机IP
-- 多出口测试(简洁版/Dashboard)
+- 多出口测试(简洁版/全能版/教育网/SpeedTest.Net)
 - NAT类型测试
 - TCP/UDP/ICMP全协议Ping+/Trace+
 - 最大连接数测试
 - DNS劫持测试
 - DNS解析测速
+- DNS出口（泄漏）测试
 - UPnP控制台
 - IPERF内网测速
 - 一键搭建LibreSpeed服务器
@@ -118,6 +119,7 @@ release的程序完整包使用到了以下依赖及NuGet，在此致谢：
 | [WinDivert](https://github.com/basil00/WinDivert)            | Trace+高精度测试                                             | 同上                                                         |
 | [Merged-IP-Data](https://github.com/NetworkCats/Merged-IP-Data)  | 本地IP数据库DLC | 同上                                                         |
 | [obfuscar](https://www.nuget.org/packages/Obfuscar)          | 备用混淆器, 发布版目前使用[ConfuserEx](https://github.com/mkaring/ConfuserEx) | 同上                                                         |
+| [SpeedTest.Net节点](https://github.com/SukkaW/speedtest-net-servers)          | 多出口测试SpeedTest.Net版本使用 | 同上                                                         |
 
 ## To do list （重制阶段用，重制完毕后的新功能不计入此列表）
 
