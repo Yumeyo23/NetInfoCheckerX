@@ -93,6 +93,22 @@ namespace NetInfoCheckerX
         public FindIP()
         {
             InitializeComponent();
+            UpdateCustomSearchToolTip();
+            lnkCustomSearch.MouseEnter += lnkCustomSearch_MouseEnter;
+        }
+
+        private void lnkCustomSearch_MouseEnter(object sender, EventArgs e)
+        {
+            // 用户可能刚在记事本中保存配置，每次移入时重新读取当前链接。
+            UpdateCustomSearchToolTip();
+        }
+
+        private void UpdateCustomSearchToolTip()
+        {
+            toolTip1.SetToolTip(lnkCustomSearch,
+                "使用设置的链接查询当前 IP（支持左右键分别设置）\r\n" +
+                "左键：" + AppSettings.GetFindIPSearchUrl(true) + "\r\n" +
+                "右键：" + AppSettings.GetFindIPSearchUrl(false));
         }
 
         private async Task ApplyFindIPThemeAsync()
