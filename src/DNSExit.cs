@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -12,6 +14,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace NetInfoCheckerX
 {
@@ -21,7 +24,9 @@ namespace NetInfoCheckerX
         private const string AnyV6Text = ":: (IPv6 Any)";
         private const string SystemDefaultText = "系统默认 (兼容模式)";
         private const string IniSection = "DNSExit";
-        private const string BaseTitle = "DNS出口/泄露测试 ✧ NetInfoCheckerX";
+        private const string BaseTitle = "DNS出口/泄漏测试 ✧ NetInfoCheckerX";
+        private const string DnsClientPolicyPath = @"SOFTWARE\Policies\Microsoft\Windows NT\DNSClient";
+        private const string DisableSmartNameResolutionValue = "DisableSmartNameResolution";
 
         private readonly Dictionary<string, DataGridViewRow> _rows =
             new Dictionary<string, DataGridViewRow>(StringComparer.OrdinalIgnoreCase);
@@ -30,6 +35,7 @@ namespace NetInfoCheckerX
         private readonly System.Windows.Forms.Timer _titleTimer;
         private readonly Stopwatch _testStopwatch = new Stopwatch();
         private CancellationTokenSource _testCts;
+        private CancellationTokenSource _geoCts;
         private bool _isRunning;
         private bool _isStopping;
         private bool _unlimitedTime;
@@ -39,6 +45,15 @@ namespace NetInfoCheckerX
         private IPAddress _bindIp;
         private bool _forceIPv4;
         private bool _forceIPv6;
+        private bool _useBoundDns;
+        private BoundDnsEndpoint[] _boundDnsEndpoints = new BoundDnsEndpoint[0];
+        private int _boundDnsCursor;
+
+        private sealed class BoundDnsEndpoint
+        {
+            internal IPAddress Server { get; set; }
+            internal IPAddress LocalAddress { get; set; }
+        }
 
         private string IniPath => System.IO.Path.Combine(
             Application.StartupPath, "NetInfoCheckerX.ini");
@@ -82,8 +97,9 @@ namespace NetInfoCheckerX
             _geoProviderIndex = ReadGeoProviderIndex();
             Text = BaseTitle;
             ApplyDNSExitTheme();
+            UpdateWindowsDnsPolicyButton();
             lblVersion.Text = Global.exeName + " " + Global.Version;
-            CloudControl.UsedTimesCounter("DNS泄露");
+            CloudControl.UsedTimesCounter("DNS泄漏");
         }
 
         private void ConfigureResultGrid()
@@ -159,6 +175,7 @@ namespace NetInfoCheckerX
             lnkProxy.ActiveLinkColor = foreground;
             lnkProxy.VisitedLinkColor = accent;
             ApplyButtonTheme(btnStart);
+            ApplyButtonTheme(btnSetWinDNS);
 
             dataGridView1.EnableHeadersVisualStyles = false;
             dataGridView1.BackgroundColor = controlBackground;
@@ -212,8 +229,8 @@ namespace NetInfoCheckerX
                 ? comboNIC.Text
                 : comboNIC.SelectedItem.ToString());
             return NicHelper.RefreshAddressCombo(comboNIC,
-                new[] { AnyV4Text, AnyV6Text, SystemDefaultText },
-                true, true, selected, AnyV4Text);
+                new[] { SystemDefaultText, AnyV4Text, AnyV6Text },
+                true, true, selected, SystemDefaultText);
         }
 
         private void lblNIC_MouseDown(object sender, MouseEventArgs e)
@@ -224,15 +241,18 @@ namespace NetInfoCheckerX
             bool retained = RefreshNicList(selected);
             string message = retained
                 ? "网卡列表已刷新"
-                : "网卡列表已刷新，原网卡不存在，已回退到 0.0.0.0";
+                : "网卡列表已刷新，原网卡不存在，已回退到系统默认";
             toolTip1.Show(message, lblNIC, 0, lblNIC.Height, retained ? 800 : 1500);
         }
 
-        private void ResolveAndValidateSelectedNic()
+        private bool ResolveAndValidateSelectedNic()
         {
             _bindIp = null;
             _forceIPv4 = false;
             _forceIPv6 = false;
+            _useBoundDns = false;
+            _boundDnsEndpoints = new BoundDnsEndpoint[0];
+            _boundDnsCursor = 0;
 
             string selected = comboNIC.Text ?? string.Empty;
             AddressFamily? requestedFamily = null;
@@ -248,31 +268,94 @@ namespace NetInfoCheckerX
                     selected = comboNIC.Text;
                 else
                 {
-                    _forceIPv4 = requestedFamily.Value == AddressFamily.InterNetwork;
-                    _forceIPv6 = requestedFamily.Value == AddressFamily.InterNetworkV6;
-                    return;
+                    MessageBox.Show(
+                        requestedFamily.Value == AddressFamily.InterNetwork
+                            ? "未检测到可用的 IPv4 默认出口，请选择系统默认或具体网卡。"
+                            : "未检测到可用的 IPv6 默认出口，请选择系统默认或具体网卡。",
+                        "DNS出口测试", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
                 }
             }
 
-            if (selected.Contains("系统默认")) return;
+            if (selected.Contains("系统默认")) return true;
 
             string ipText = selected.Split(' ')[0];
             if (!IPAddress.TryParse(ipText, out IPAddress selectedIp) ||
                 !NicHelper.IsUsableLocalAddress(selectedIp))
             {
-                RefreshNicList(AnyV4Text);
-                IPAddress actual = NicHelper.GetDefaultLocalAddress(AddressFamily.InterNetwork);
-                if (actual == null || !SelectNicAddress(actual))
-                {
-                    _forceIPv4 = true;
-                    return;
-                }
-                selectedIp = actual;
+                RefreshNicList(SystemDefaultText);
+                toolTip1.Show("所选网卡已失效，已回退到系统默认", lblNIC,
+                    0, lblNIC.Height, 1500);
+                return true;
             }
 
             _bindIp = selectedIp;
             _forceIPv4 = selectedIp.AddressFamily == AddressFamily.InterNetwork;
             _forceIPv6 = selectedIp.AddressFamily == AddressFamily.InterNetworkV6;
+
+            // “使用系统代理”优先级最高：代理负责目标解析和实际出口。
+            if (AppSettings.ProxyMode == ApiProxyMode.System) return true;
+
+            if (!TryConfigureBoundDns(selectedIp))
+            {
+                MessageBox.Show(
+                    "所选网卡没有可用于严格诊断的 DNS 服务器或本地地址。\r\n" +
+                    "请选择“系统默认”，或检查该网卡的 DNS 配置。",
+                    "DNS出口测试", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            _useBoundDns = true;
+            return true;
+        }
+
+        private bool TryConfigureBoundDns(IPAddress selectedIp)
+        {
+            NicAddressInfo selectedInfo = NicHelper.GetUsableIPAddresses()
+                .FirstOrDefault(item => AddressesEqualIgnoringScope(item.Address, selectedIp));
+            if (selectedInfo == null || selectedInfo.Adapter == null ||
+                !NicHelper.TryGetIPProperties(selectedInfo.Adapter,
+                    out IPInterfaceProperties properties))
+                return false;
+
+            var localAddresses = properties.UnicastAddresses
+                .Where(NicHelper.IsUsableUnicastAddress)
+                .Select(item => item.Address)
+                .ToList();
+            var endpoints = new List<BoundDnsEndpoint>();
+
+            foreach (IPAddress server in properties.DnsAddresses)
+            {
+                if (server == null || IPAddress.IsLoopback(server) ||
+                    server.Equals(IPAddress.Any) || server.Equals(IPAddress.IPv6Any))
+                    continue;
+
+                IPAddress local = server.AddressFamily == selectedIp.AddressFamily
+                    ? selectedIp
+                    : localAddresses.FirstOrDefault(address =>
+                        address.AddressFamily == server.AddressFamily);
+                if (local == null) continue;
+
+                if (!endpoints.Any(item => item.Server.Equals(server) &&
+                    AddressesEqualIgnoringScope(item.LocalAddress, local)))
+                {
+                    endpoints.Add(new BoundDnsEndpoint
+                    {
+                        Server = server,
+                        LocalAddress = local
+                    });
+                }
+            }
+
+            _boundDnsEndpoints = endpoints.ToArray();
+            return _boundDnsEndpoints.Length > 0;
+        }
+
+        private static bool AddressesEqualIgnoringScope(IPAddress left, IPAddress right)
+        {
+            if (left == null || right == null || left.AddressFamily != right.AddressFamily)
+                return false;
+            return left.GetAddressBytes().SequenceEqual(right.GetAddressBytes());
         }
 
         private bool SelectNicAddress(IPAddress address)
@@ -343,8 +426,7 @@ namespace NetInfoCheckerX
                 return false;
             }
 
-            ResolveAndValidateSelectedNic();
-            return true;
+            return ResolveAndValidateSelectedNic();
         }
 
         private async void btnStart_Click(object sender, EventArgs e)
@@ -368,6 +450,7 @@ namespace NetInfoCheckerX
             _geoTasks.Clear();
             _geoProviderIndex = ReadGeoProviderIndex();
             _testCts = new CancellationTokenSource();
+            _geoCts = new CancellationTokenSource();
             _totalSeconds = totalSeconds;
             if (!_unlimitedTime)
                 _testCts.CancelAfter(TimeSpan.FromSeconds(totalSeconds));
@@ -381,16 +464,21 @@ namespace NetInfoCheckerX
             try
             {
                 await Task.WhenAll(CreateProbeTasks(token));
-                await Task.WhenAll(_geoTasks.ToArray());
             }
             catch (OperationCanceledException) { }
             finally
             {
-                geoUsageCountScope.Dispose();
                 _titleTimer.Stop();
                 _testStopwatch.Stop();
+                if (_geoTasks.Any(task => !task.IsCompleted) && !IsDisposed)
+                    Text = string.Format(BaseTitle + " | 位置查询中 ({0}个出口)",
+                        _rows.Count);
+                await WaitForGeoTasksAsync();
+                geoUsageCountScope.Dispose();
                 _testCts.Dispose();
                 _testCts = null;
+                _geoCts.Dispose();
+                _geoCts = null;
                 _isRunning = false;
                 _isStopping = false;
                 btnStart.Text = "开测";
@@ -467,7 +555,7 @@ namespace NetInfoCheckerX
                             IEnumerable<string> addresses = await probe(requestCts.Token)
                                 .ConfigureAwait(false);
                             foreach (string address in addresses ?? Enumerable.Empty<string>())
-                                PostResult(address, source, totalToken);
+                                PostResult(address, source);
                         }
                         catch (OperationCanceledException) { }
                         catch (Exception ex)
@@ -492,10 +580,175 @@ namespace NetInfoCheckerX
             }
         }
 
-        private Task<string> FetchAsync(string url, CancellationToken token)
+        private async Task<string> FetchAsync(string url, CancellationToken token)
         {
-            return HttpHelper.SendAsync(url, token, forceIPv4: _forceIPv4,
-                forceIPv6: _forceIPv6, bindIP: _bindIp);
+            IPAddress resolvedAddress = null;
+            if (_useBoundDns)
+            {
+                Uri uri = new Uri(url);
+                AddressFamily family = _forceIPv6
+                    ? AddressFamily.InterNetworkV6 : AddressFamily.InterNetwork;
+                resolvedAddress = await ResolveThroughBoundDnsAsync(
+                    uri.DnsSafeHost, family, token).ConfigureAwait(false);
+                if (resolvedAddress == null) return null;
+            }
+
+            return await HttpHelper.SendAsync(url, token, forceIPv4: _forceIPv4,
+                forceIPv6: _forceIPv6, bindIP: _bindIp,
+                preResolvedAddress: resolvedAddress).ConfigureAwait(false);
+        }
+
+        private async Task<IPAddress> ResolveThroughBoundDnsAsync(string host,
+            AddressFamily family, CancellationToken token)
+        {
+            BoundDnsEndpoint[] endpoints = _boundDnsEndpoints;
+            if (endpoints == null || endpoints.Length == 0) return null;
+
+            int start = (Interlocked.Increment(ref _boundDnsCursor) & int.MaxValue) %
+                endpoints.Length;
+            for (int i = 0; i < endpoints.Length; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                BoundDnsEndpoint endpoint = endpoints[(start + i) % endpoints.Length];
+                IPAddress result = await QueryBoundDnsAsync(
+                    endpoint, host, family, token).ConfigureAwait(false);
+                if (result != null) return result;
+            }
+            return null;
+        }
+
+        private Task<IPAddress> QueryBoundDnsAsync(BoundDnsEndpoint endpoint,
+            string host, AddressFamily answerFamily, CancellationToken token)
+        {
+            return Task.Run(() =>
+            {
+                token.ThrowIfCancellationRequested();
+                ushort queryId = unchecked((ushort)Interlocked.Increment(ref _dnsQueryId));
+                byte[] request = BuildDnsQuery(host, answerFamily, queryId);
+
+                using (var socket = new Socket(endpoint.Server.AddressFamily,
+                    SocketType.Dgram, ProtocolType.Udp))
+                using (token.Register(() => { try { socket.Close(); } catch { } }))
+                {
+                    socket.ReceiveTimeout = Math.Max(100, _requestTimeoutMs);
+                    socket.SendTimeout = Math.Max(100, _requestTimeoutMs);
+                    socket.Bind(new IPEndPoint(endpoint.LocalAddress, 0));
+                    socket.Connect(new IPEndPoint(endpoint.Server, 53));
+                    socket.Send(request);
+
+                    byte[] response = new byte[4096];
+                    try
+                    {
+                        int length = socket.Receive(response);
+                        return ParseDnsAddress(response, length, queryId, answerFamily);
+                    }
+                    catch (SocketException ex)
+                    {
+                        if (token.IsCancellationRequested)
+                            throw new OperationCanceledException(token);
+                        Debug.WriteLine("[DNSExit-DNS] " + endpoint.Server + ": " + ex.Message);
+                        return null;
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        return null;
+                    }
+                }
+            }, token);
+        }
+
+        private static int _dnsQueryId = Environment.TickCount;
+
+        private static byte[] BuildDnsQuery(string host, AddressFamily family, ushort queryId)
+        {
+            var packet = new List<byte>
+            {
+                (byte)(queryId >> 8), (byte)queryId,
+                0x01, 0x00,
+                0x00, 0x01,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+            };
+
+            foreach (string label in host.TrimEnd('.').Split('.'))
+            {
+                byte[] bytes = Encoding.ASCII.GetBytes(label);
+                if (bytes.Length == 0 || bytes.Length > 63)
+                    throw new FormatException("DNS 域名标签长度无效。");
+                packet.Add((byte)bytes.Length);
+                packet.AddRange(bytes);
+            }
+            packet.Add(0x00);
+            packet.AddRange(family == AddressFamily.InterNetworkV6
+                ? new byte[] { 0x00, 0x1C }
+                : new byte[] { 0x00, 0x01 });
+            packet.AddRange(new byte[] { 0x00, 0x01 });
+            return packet.ToArray();
+        }
+
+        private static IPAddress ParseDnsAddress(byte[] response, int length,
+            ushort queryId, AddressFamily family)
+        {
+            if (response == null || length < 12 ||
+                response[0] != (byte)(queryId >> 8) || response[1] != (byte)queryId ||
+                (response[2] & 0x80) == 0 || (response[3] & 0x0F) != 0)
+                return null;
+
+            int questionCount = ReadDnsUInt16(response, 4);
+            int recordCount = ReadDnsUInt16(response, 6) +
+                ReadDnsUInt16(response, 8) + ReadDnsUInt16(response, 10);
+            int offset = 12;
+
+            for (int i = 0; i < questionCount; i++)
+            {
+                if (!SkipDnsName(response, length, ref offset) || offset + 4 > length)
+                    return null;
+                offset += 4;
+            }
+
+            int expectedType = family == AddressFamily.InterNetworkV6 ? 28 : 1;
+            int expectedLength = family == AddressFamily.InterNetworkV6 ? 16 : 4;
+            for (int i = 0; i < recordCount; i++)
+            {
+                if (!SkipDnsName(response, length, ref offset) || offset + 10 > length)
+                    return null;
+                int type = ReadDnsUInt16(response, offset);
+                int dataLength = ReadDnsUInt16(response, offset + 8);
+                offset += 10;
+                if (offset + dataLength > length) return null;
+
+                if (type == expectedType && dataLength == expectedLength)
+                {
+                    byte[] bytes = new byte[dataLength];
+                    Buffer.BlockCopy(response, offset, bytes, 0, dataLength);
+                    return new IPAddress(bytes);
+                }
+                offset += dataLength;
+            }
+            return null;
+        }
+
+        private static int ReadDnsUInt16(byte[] buffer, int offset)
+        {
+            return (buffer[offset] << 8) | buffer[offset + 1];
+        }
+
+        private static bool SkipDnsName(byte[] buffer, int length, ref int offset)
+        {
+            while (offset < length)
+            {
+                byte value = buffer[offset++];
+                if (value == 0) return true;
+                if ((value & 0xC0) == 0xC0)
+                {
+                    if (offset >= length) return false;
+                    offset++;
+                    return true;
+                }
+                if ((value & 0xC0) != 0 || offset + value > length) return false;
+                offset += value;
+            }
+            return false;
         }
 
         private async Task<IEnumerable<string>> ProbeNetEaseAsync(CancellationToken token)
@@ -615,14 +868,14 @@ namespace NetInfoCheckerX
             return builder.ToString(0, length);
         }
 
-        private void PostResult(string ip, string source, CancellationToken token)
+        private void PostResult(string ip, string source)
         {
             if (string.IsNullOrWhiteSpace(ip) || IsDisposed || !IsHandleCreated) return;
-            try { Invoke((Action)(() => AddOrUpdateResult(ip, source, token))); }
+            try { Invoke((Action)(() => AddOrUpdateResult(ip, source))); }
             catch (InvalidOperationException) { }
         }
 
-        private void AddOrUpdateResult(string ip, string source, CancellationToken token)
+        private void AddOrUpdateResult(string ip, string source)
         {
             if (_rows.TryGetValue(ip, out DataGridViewRow existing))
             {
@@ -637,11 +890,28 @@ namespace NetInfoCheckerX
                 return;
             }
 
-            int index = dataGridView1.Rows.Add(_rows.Count + 1, ip, "查询中...", source);
+            string localLocation = Trace.ResolveSharedLocalGeo(ip);
+            if (string.IsNullOrWhiteSpace(localLocation)) localLocation = "未知";
+            int index = dataGridView1.Rows.Add(_rows.Count + 1, ip, localLocation, source);
             DataGridViewRow row = dataGridView1.Rows[index];
             _rows[ip] = row;
-            _geoTasks.Add(UpdateGeoAsync(ip, row, token));
+            if (_geoProviderIndex > 0 &&
+                _geoProviderIndex < Api2.GeoCN_Providers.Count &&
+                string.IsNullOrEmpty(IanaReservedIP.Check(ip)))
+            {
+                CancellationToken geoToken = _geoCts == null
+                    ? CancellationToken.None : _geoCts.Token;
+                _geoTasks.Add(UpdateGeoAsync(ip, row, geoToken));
+            }
             UpdateRunningTitle();
+        }
+
+        private async Task WaitForGeoTasksAsync()
+        {
+            Task[] tasks = _geoTasks.ToArray();
+            if (tasks.Length == 0) return;
+            try { await Task.WhenAll(tasks); }
+            catch (OperationCanceledException) { }
         }
 
         private async Task UpdateGeoAsync(string ip, DataGridViewRow row,
@@ -660,14 +930,10 @@ namespace NetInfoCheckerX
             }
             catch (OperationCanceledException)
             {
-                if (!IsDisposed && row.DataGridView != null)
-                    row.Cells[colGEO.Name].Value = "已取消";
             }
             catch (Exception ex)
             {
                 Debug.WriteLine("[DNSExit-GEO] " + ex.Message);
-                if (!IsDisposed && row.DataGridView != null)
-                    row.Cells[colGEO.Name].Value = "查询失败";
             }
             finally
             {
@@ -680,16 +946,117 @@ namespace NetInfoCheckerX
             MessageBox.Show(
                 "查询器X设置中的“是否走系统代理”设置项【优先于】系统设置，\r\n可在“设置关于”窗口查看当前是否走代理状态\r\n\r\n" +
                 "默认代理参数：\r\n" +
-                "【0.0.0.0】【::】或【具体网卡IP】时，【不走】系统代理，使用指定网卡IP出口；\r\n" +
+                "【0.0.0.0】【::】或【具体网卡IP】时，【不走】系统代理，HTTP 与 DNS 均使用对应网卡出口；\r\n" +
                 "【系统默认】或【设置-使用系统代理-选中】时，【走】系统代理，不指定网卡IP出口，系统代理决定实际出口\r\n\r\n" +
                 "查询器X设置不影响 TUN/VPN/路由器透明代理 等路由层代理，仅涉及系统代理。",
                 "系统代理说明", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void UpdateWindowsDnsPolicyButton()
+        {
+            bool disabled = IsSmartMultiHomedNameResolutionDisabled();
+            btnSetWinDNS.Text = disabled ? "恢复默认DNS优化" : "禁用跨网卡DNS优化";
+        }
+
+        private static bool IsSmartMultiHomedNameResolutionDisabled()
+        {
+            try
+            {
+                RegistryView view = Environment.Is64BitOperatingSystem
+                    ? RegistryView.Registry64
+                    : RegistryView.Registry32;
+                using (RegistryKey localMachine = RegistryKey.OpenBaseKey(
+                    RegistryHive.LocalMachine, view))
+                using (RegistryKey key = localMachine.OpenSubKey(
+                    DnsClientPolicyPath, false))
+                {
+                    object value = key?.GetValue(DisableSmartNameResolutionValue);
+                    return value != null && Convert.ToInt32(value) == 1;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void btnSetWinDNS_Click(object sender, EventArgs e)
+        {
+            bool currentlyDisabled = IsSmartMultiHomedNameResolutionDisabled();
+            string message = currentlyDisabled
+                ? "【启用】Windows跨网卡DNS优化（智能多宿主名称解析），点击确认\r\n\r\n" +
+                  "此设置需要管理员权限，建议重启确保生效"
+                : "【禁用】Windows跨网卡DNS优化（智能多宿主名称解析），点击确认\r\n\r\n" +
+                  "此设置需要管理员权限，建议重启确保生效";
+
+            if (MessageBox.Show(message, "操作确认", MessageBoxButtons.YesNo,
+                currentlyDisabled ? MessageBoxIcon.Question : MessageBoxIcon.Warning) !=
+                DialogResult.Yes)
+                return;
+
+            bool expectedDisabled = !currentlyDisabled;
+            if (!RunElevatedDnsPolicyCommand(expectedDisabled)) return;
+
+            bool actualDisabled = IsSmartMultiHomedNameResolutionDisabled();
+            UpdateWindowsDnsPolicyButton();
+            if (actualDisabled != expectedDisabled)
+            {
+                MessageBox.Show(
+                    "系统没有保留该策略设置。设备可能受域策略管理，或当前 Windows 版本不支持此策略。",
+                    "设置未生效", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            MessageBox.Show(expectedDisabled
+                    ? "跨网卡发起DNS（智能多宿主名称解析）已关闭"
+                    : "跨网卡发起DNS（智能多宿主名称解析）已恢复",
+                "操作成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private bool RunElevatedDnsPolicyCommand(bool disable)
+        {
+            const string fullKey = @"HKLM\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient";
+            string arguments = disable
+                ? "ADD \"" + fullKey + "\" /v " + DisableSmartNameResolutionValue +
+                  " /t REG_DWORD /d 1 /f"
+                : "DELETE \"" + fullKey + "\" /v " + DisableSmartNameResolutionValue +
+                  " /f";
+            try
+            {
+                var startInfo = new ProcessStartInfo("reg.exe", arguments)
+                {
+                    Verb = "runas",
+                    UseShellExecute = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                using (Process process = Process.Start(startInfo))
+                {
+                    if (process == null) throw new InvalidOperationException("无法启动注册表设置程序。");
+                    process.WaitForExit();
+                    if (process.ExitCode != 0)
+                        throw new InvalidOperationException(
+                            "注册表设置程序返回错误代码 " + process.ExitCode + "。");
+                }
+                return true;
+            }
+            catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+            {
+                MessageBox.Show("管理员授权已取消，系统设置没有改变。", "操作已取消",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "设置出错了", MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+            return false;
         }
 
         private void DNSExit_FormClosing(object sender, FormClosingEventArgs e)
         {
             _titleTimer.Stop();
             _testCts?.Cancel();
+            _geoCts?.Cancel();
         }
     }
 }
