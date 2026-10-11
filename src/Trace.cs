@@ -1650,6 +1650,11 @@ namespace NetInfoCheckerX
             }
         }
 
+        internal static string ResolveSharedLocalGeo(string ip)
+        {
+            return GetLocalGeoInfo(ip);
+        }
+
         private static string NormalizeOnlineGeoPart(string value)
         {
             if (string.IsNullOrWhiteSpace(value)) return null;
