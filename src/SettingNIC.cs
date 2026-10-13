@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -42,27 +43,25 @@ namespace NetInfoCheckerX
                 SendMessage(this.Handle, WM_SYSCOMMAND, SC_MOVE + HTCAPTION, 0);
             }
         }
-        private readonly string[] requiredFiles;
-        private bool _filesValidated = false;
         private bool _suppressMaskSync = false;
         private System.Windows.Forms.Timer _btnSaveTimer;
         private System.Windows.Forms.Timer _btnReadTimer;
         private bool _btnSavePending = false;
         private bool _btnReadPending = false;
+        private bool _loadedIPv6DnsAuto = true;
+        private string _loadedIPv6Dns1 = "::";
+        private string _loadedIPv6Dns2 = "::";
+        private bool _loadedDHCPv6;
+        private bool _loadedDHCPv6Dns;
+        private bool _loadedSlaac;
+        private bool _loadedSlaacDns;
+        private bool _loadedIPv6StackEnabled;
+        private bool _loadingNicInfo;
+        private bool _ipv4AddressDirty;
+        private bool _ipv4DnsDirty;
 
         public SettingNIC()
         {
-            requiredFiles = new string[]
-            {
-            "IPAddressControlLib.dll",
-            };
-
-            if (!CheckRequiredFiles())
-            {
-                _filesValidated = false;
-                return;
-            }
-
             var existingForm = Application.OpenForms.OfType<SettingNIC>()
                                   .FirstOrDefault(f => f != this);
             if (existingForm != null)
@@ -74,40 +73,6 @@ namespace NetInfoCheckerX
             }
 
             InitializeComponent();
-            _filesValidated = true;
-        }
-        private bool CheckRequiredFiles()
-        {
-            try
-            {
-                string appPath = Application.StartupPath;
-                List<string> missingFiles = new List<string>();
-
-                foreach (string file in requiredFiles)
-                {
-                    string filePath = Path.Combine(appPath, file);
-                    if (!File.Exists(filePath))
-                    {
-                        missingFiles.Add(file);
-                    }
-                }
-
-                if (missingFiles.Count > 0)
-                {
-                    string message = $"缺少运行修改本机网卡必要的文件：\n{string.Join("\n", missingFiles)}\n\n建议重新打开/解压查询器X/检查杀毒软件喵。";
-                    MessageBox.Show(message, "文件缺失了",
-                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return false;
-                }
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"检查文件时出错：{ex.Message}", "错误",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return false;
-            }
         }
         private async Task ApplyNICThemeAsync()
         {
@@ -121,10 +86,10 @@ namespace NetInfoCheckerX
 
             this.BackColor = isLight ? Global.themeLight : Global.themeBlack;
 
-            Control[] yumeyoLabels = { lblIPV4, lblMask, lblGateway, lblDNS1, lblDNS2, };
+            Control[] yumeyoLabels = { lblIPV4, lblMask, lblGateway, lblDNS1, lblDNS2, lblIPv6, lblV6DNS1, lblV6DNS2 };
             foreach (var c in yumeyoLabels) { if (c != null) c.ForeColor = yumeyoColor; }
 
-            Control[] editControls = { ipIPV4, ipMask, ipGateway, ipDNS1, ipDNS2, txtHops, comboNIC, txtMAC, txtMask };
+            Control[] editControls = { ipIPV4, ipMask, ipGateway, ipDNS1, ipDNS2, txtV6DNS1, txtV6DNS2, txtHops, comboNIC, txtMAC, txtMask };
             foreach (var c in editControls)
             {
                 if (c != null)
@@ -137,7 +102,6 @@ namespace NetInfoCheckerX
                         cb.FlatStyle = FlatStyle.Flat;
                     }
 
-                    // 针对 IPAddressControlLib，强制重绘防止背景色残留
                     c.Invalidate();
                 }
             }
@@ -165,7 +129,8 @@ namespace NetInfoCheckerX
                 }
             }
 
-            Control[] checkBoxes = { checkDHCP, checkDNS, checkHops, checkChangeIPV6State, checkIPV6State, checkMAC };
+            Control[] checkBoxes = { checkDHCP, checkDNS, checkHops, checkChangeIPV6State, checkIPV6State,
+                checkMAC, checkDHCPv6, checkDHCPv6DNS, checkSLAAC, checkSLAACDNS, checkIPv6DNS };
             foreach (var cb in checkBoxes)
             {
                 if (cb != null)
@@ -186,39 +151,37 @@ namespace NetInfoCheckerX
 
         private Dictionary<string, NicInfo> _nicDictionary = new Dictionary<string, NicInfo>();
 
-        /// <summary>
-        /// 自动调整 IP 地址输入框的宽度，适配高 DPI 屏幕
-        /// </summary>
-        private void AutoScaleIPControlsWidth()
-        {
-            int paddingRight = 12;
-
-            Control[] ipControls = { ipIPV4, ipMask, ipGateway, ipDNS1, ipDNS2 };
-
-            foreach (var ctrl in ipControls)
-            {
-                if (ctrl != null)
-                {
-                    ctrl.Width = this.ClientSize.Width - ctrl.Left - paddingRight;
-                    ctrl.MinimumSize = new Size(0, 0);
-                }
-            }
-        }
-
         private void SettingNIC_Load(object sender, EventArgs e)
         {
-
             this.MouseDown += MyMouseDown;
-
-            if (!_filesValidated)
-            {
-                this.Close();
-                return;
-            }
+            pictureBox2.MouseDown += MyMouseDown;
+            lblVersion.Text = Global.exeName + " " + Global.Version;
+            CloudControl.UsedTimesCounter("手动设置网卡");
 
             _ = ApplyNICThemeAsync();
-            AutoScaleIPControlsWidth();
+            foreach (TextBox textBox in new[]
+            {
+                ipIPV4, ipMask, ipGateway, ipDNS1, ipDNS2,
+                txtV6DNS1, txtV6DNS2, txtMAC, txtMask, txtHops
+            })
+            {
+                textBox.CharacterCasing = CharacterCasing.Lower;
+                textBox.TextChanged += ForceLowercaseTextBox;
+            }
+
+            foreach (TextBox textBox in new[] { ipIPV4, ipMask, ipGateway, ipDNS1, ipDNS2, txtV6DNS1, txtV6DNS2 })
+            {
+                IpAddressTextBoxHelper.Attach(textBox);
+            }
             RefreshNICList();
+
+            ipIPV4.TextChanged += (s, args) => MarkDirty(ref _ipv4AddressDirty);
+            ipMask.TextChanged += (s, args) => MarkDirty(ref _ipv4AddressDirty);
+            ipGateway.TextChanged += (s, args) => MarkDirty(ref _ipv4AddressDirty);
+            ipDNS1.TextChanged += (s, args) => MarkDirty(ref _ipv4DnsDirty);
+            ipDNS2.TextChanged += (s, args) => MarkDirty(ref _ipv4DnsDirty);
+            checkDHCP.Click += (s, args) => MarkDirty(ref _ipv4AddressDirty);
+            checkDNS.Click += (s, args) => MarkDirty(ref _ipv4DnsDirty);
 
             ipMask.TextChanged += ipMask_TextChanged;
             ipMask.Leave += ipMask_Leave;
@@ -237,10 +200,27 @@ namespace NetInfoCheckerX
             }
         }
 
-        private void RefreshNICList()
+        private static void ForceLowercaseTextBox(object sender, EventArgs e)
         {
-            string lastSelectedId = (comboNIC.SelectedItem is NetworkInterface lastNic) ? lastNic.Id : null;
-            int lastSelectedIndex = comboNIC.SelectedIndex;
+            TextBox textBox = sender as TextBox;
+            if (textBox == null || string.IsNullOrEmpty(textBox.Text)) return;
+
+            string lowercase = textBox.Text.ToLowerInvariant();
+            if (lowercase == textBox.Text) return;
+
+            int selectionStart = textBox.SelectionStart;
+            int selectionLength = textBox.SelectionLength;
+            textBox.Text = lowercase;
+            textBox.SelectionStart = Math.Min(selectionStart, textBox.TextLength);
+            textBox.SelectionLength = Math.Min(selectionLength, textBox.TextLength - textBox.SelectionStart);
+        }
+
+        private void RefreshNICList(bool preserveSelection = true)
+        {
+            string lastSelectedId = preserveSelection && comboNIC.SelectedItem is NetworkInterface lastNic
+                ? lastNic.Id
+                : null;
+            int lastSelectedIndex = preserveSelection ? comboNIC.SelectedIndex : -1;
 
             comboNIC.Items.Clear();
 
@@ -261,7 +241,31 @@ namespace NetInfoCheckerX
             {
                 bool found = false;
 
-                if (!string.IsNullOrEmpty(lastSelectedId))
+                if (!preserveSelection)
+                {
+                    NetworkInterface defaultNic = NicHelper.GetCandidateAdapters(
+                            requireUp: true,
+                            preferGateway: true,
+                            filterVirtualAdapters: false,
+                            filterNoGatewayAdapters: false,
+                            filterUncommonAdapterTypes: false,
+                            filterNoUsableAddressAdapters: false)
+                        .FirstOrDefault();
+                    if (defaultNic != null)
+                    {
+                        for (int i = 0; i < comboNIC.Items.Count; i++)
+                        {
+                            if (((NetworkInterface)comboNIC.Items[i]).Id == defaultNic.Id)
+                            {
+                                comboNIC.SelectedIndex = i;
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!found && !string.IsNullOrEmpty(lastSelectedId))
                 {
                     for (int i = 0; i < comboNIC.Items.Count; i++)
                     {
@@ -304,6 +308,21 @@ namespace NetInfoCheckerX
 
         private void LoadNicInfo(NetworkInterface nic)
         {
+            _loadingNicInfo = true;
+            try
+            {
+                LoadNicInfoCore(nic);
+            }
+            finally
+            {
+                _loadingNicInfo = false;
+                UpdateIPv6OptionsEnabledState();
+                ResetDirtyState();
+            }
+        }
+
+        private void LoadNicInfoCore(NetworkInterface nic)
+        {
             if (!NicHelper.TryGetIPProperties(nic, out IPInterfaceProperties props))
             {
                 checkDHCP.Checked = false;
@@ -311,6 +330,7 @@ namespace NetInfoCheckerX
                 SyncTxtMaskFromIpMask();
                 checkDNS.Checked = true;
                 ipDNS1.Text = ipDNS2.Text = "0.0.0.0";
+                ResetIPv6Controls();
                 txtMAC.Text = nic.GetPhysicalAddress().ToString();
                 return;
             }
@@ -360,6 +380,8 @@ namespace NetInfoCheckerX
                 ipDNS2.Text = liveDns.Count > 1 ? liveDns[1] : "0.0.0.0";
             }
 
+            LoadIPv6Info(nic, props);
+
             try
             {
                 string query = $"SELECT * FROM Win32_NetworkAdapterConfiguration WHERE SettingID='{nic.Id}'";
@@ -393,6 +415,17 @@ namespace NetInfoCheckerX
                 txtHops.Enabled = false;
             }
         }
+
+        private void MarkDirty(ref bool dirtyFlag)
+        {
+            if (!_loadingNicInfo) dirtyFlag = true;
+        }
+
+        private void ResetDirtyState()
+        {
+            _ipv4AddressDirty = false;
+            _ipv4DnsDirty = false;
+        }
         private bool IsDnsAuto(string nicId, out string[] dnsServers)
         {
             dnsServers = Array.Empty<string>();
@@ -418,6 +451,157 @@ namespace NetInfoCheckerX
             }
 
             return true;
+        }
+
+        private bool IsIPv6DnsAuto(string nicId, int interfaceIndex, out string[] dnsServers)
+        {
+            dnsServers = Array.Empty<string>();
+            string registryPath = $@"SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces\{nicId}";
+
+            using (RegistryKey key = Registry.LocalMachine.OpenSubKey(registryPath))
+            {
+                string nameServer = key?.GetValue("NameServer") as string;
+                if (!string.IsNullOrWhiteSpace(nameServer))
+                {
+                    dnsServers = nameServer.Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries);
+                    return false;
+                }
+            }
+
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "netsh.exe",
+                    Arguments = "interface ipv6 show dnsservers name=" + interfaceIndex,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                using (Process process = Process.Start(psi))
+                {
+                    string output = process.StandardOutput.ReadToEnd();
+                    process.WaitForExit();
+                    if (process.ExitCode == 0)
+                        return output.IndexOf("DHCP", StringComparison.OrdinalIgnoreCase) >= 0;
+                }
+            }
+            catch { }
+
+            return true;
+        }
+
+        private void ResetIPv6Controls()
+        {
+            _loadedIPv6StackEnabled = false;
+            checkIPV6State.Checked = false;
+            checkDHCPv6.Checked = false;
+            checkDHCPv6DNS.Checked = false;
+            checkSLAAC.Checked = false;
+            checkSLAACDNS.Checked = false;
+            checkIPv6DNS.Checked = true;
+            txtV6DNS1.Text = txtV6DNS2.Text = "::";
+        }
+
+        private void LoadIPv6Info(NetworkInterface nic, IPInterfaceProperties props)
+        {
+            ResetIPv6Controls();
+            _loadedIPv6StackEnabled = nic.Supports(NetworkInterfaceComponent.IPv6);
+            checkIPV6State.Checked = _loadedIPv6StackEnabled;
+
+            int interfaceIndex;
+            try
+            {
+                interfaceIndex = props.GetIPv6Properties().Index;
+            }
+            catch
+            {
+                return;
+            }
+
+            try
+            {
+                string query = "SELECT Dhcp, RouterDiscovery, ManagedAddressConfiguration, " +
+                    "OtherStatefulConfiguration FROM MSFT_NetIPInterface WHERE InterfaceIndex=" +
+                    interfaceIndex + " AND AddressFamily=23";
+                using (var searcher = new ManagementObjectSearcher(@"root\StandardCimv2", query))
+                using (var results = searcher.Get())
+                {
+                    ManagementObject item = results.Cast<ManagementObject>().FirstOrDefault();
+                    if (item != null)
+                    {
+                        // Dhcp 表示本机是否允许 IPv6 DHCP；ManagedAddressConfiguration 在启用
+                        // Router Discovery 时会被 RA 的 M 标志覆盖，不能代表用户是否允许 DHCPv6
+                        checkDHCPv6.Checked = Convert.ToUInt32(item["Dhcp"]) == 1;
+                        checkSLAAC.Checked = Convert.ToUInt32(item["RouterDiscovery"]) != 0;
+                        checkDHCPv6DNS.Checked = Convert.ToUInt32(item["OtherStatefulConfiguration"]) == 1;
+                    }
+                }
+            }
+            catch
+            {
+                checkDHCPv6.Checked = props.UnicastAddresses.Any(a =>
+                    a.Address.AddressFamily == AddressFamily.InterNetworkV6 && a.PrefixOrigin == PrefixOrigin.Dhcp);
+                checkSLAAC.Checked = props.UnicastAddresses.Any(a =>
+                    a.Address.AddressFamily == AddressFamily.InterNetworkV6 && a.PrefixOrigin == PrefixOrigin.RouterAdvertisement);
+            }
+
+            if (TryReadRaDnsState(interfaceIndex, out bool raDnsEnabled))
+            {
+                checkSLAACDNS.Checked = raDnsEnabled;
+            }
+
+            bool dnsAuto = IsIPv6DnsAuto(nic.Id, interfaceIndex, out string[] manualDns);
+            checkIPv6DNS.Checked = dnsAuto;
+            IEnumerable<string> dns = dnsAuto
+                ? props.DnsAddresses.Where(d => d.AddressFamily == AddressFamily.InterNetworkV6).Select(d => d.ToString())
+                : manualDns.Where(d => System.Net.IPAddress.TryParse(d, out System.Net.IPAddress parsed) &&
+                    parsed.AddressFamily == AddressFamily.InterNetworkV6);
+            string[] addresses = dns.Take(2).ToArray();
+            txtV6DNS1.Text = addresses.Length > 0 ? addresses[0] : "::";
+            txtV6DNS2.Text = addresses.Length > 1 ? addresses[1] : "::";
+            _loadedIPv6DnsAuto = checkIPv6DNS.Checked;
+            _loadedIPv6Dns1 = txtV6DNS1.Text;
+            _loadedIPv6Dns2 = txtV6DNS2.Text;
+            _loadedDHCPv6 = checkDHCPv6.Checked;
+            _loadedDHCPv6Dns = checkDHCPv6DNS.Checked;
+            _loadedSlaac = checkSLAAC.Checked;
+            _loadedSlaacDns = checkSLAACDNS.Checked;
+        }
+
+        private bool TryReadRaDnsState(int interfaceIndex, out bool enabled)
+        {
+            enabled = false;
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "netsh.exe",
+                    Arguments = "interface ipv6 show interface " + interfaceIndex,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                using (Process process = Process.Start(psi))
+                {
+                    string output = process.StandardOutput.ReadToEnd();
+                    process.WaitForExit();
+                    string line = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                        .FirstOrDefault(value => value.IndexOf("RFC 6106", StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (line == null) return false;
+                    string valueText = line.Substring(line.LastIndexOf(':') + 1).Trim();
+                    enabled = valueText.IndexOf("disabled", StringComparison.OrdinalIgnoreCase) < 0 &&
+                              valueText.IndexOf("禁用", StringComparison.OrdinalIgnoreCase) < 0 &&
+                              valueText.IndexOf("关闭", StringComparison.OrdinalIgnoreCase) < 0;
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private string GetRegistryPath(string nicId)
@@ -585,6 +769,11 @@ namespace NetInfoCheckerX
             ipDNS1.Enabled = ipDNS2.Enabled = !isAutoDNS;
         }
 
+        private void checkIPv6DNS_CheckedChanged(object sender, EventArgs e)
+        {
+            UpdateIPv6OptionsEnabledState();
+        }
+
         private void checkHops_CheckedChanged(object sender, EventArgs e)
         {
             txtHops.Enabled = checkHops.Checked;
@@ -600,46 +789,222 @@ namespace NetInfoCheckerX
             {
                 checkIPV6State.Text = "关";
             }
+
+            UpdateIPv6OptionsEnabledState();
         }
 
         private void checkChangeIPV6State_CheckedChanged(object sender, EventArgs e)
         {
-            if (checkChangeIPV6State.Checked == true)
+            checkIPV6State.Enabled = checkChangeIPV6State.Checked;
+            if (!checkChangeIPV6State.Checked && !_loadingNicInfo)
             {
-                checkIPV6State.Enabled = true;
+                checkIPV6State.Checked = _loadedIPv6StackEnabled;
             }
-            else
-            {
-                checkIPV6State.Enabled = false;
-            }
+
+            UpdateIPv6OptionsEnabledState();
         }
 
-        private async Task<bool> ExecuteAdminCommandsAsync(string commands)
+        private void UpdateIPv6OptionsEnabledState()
         {
-            if (string.IsNullOrEmpty(commands)) return false;
+            bool ipv6Enabled = checkChangeIPV6State.Checked
+                ? checkIPV6State.Checked
+                : _loadedIPv6StackEnabled;
+
+            checkDHCPv6.Enabled = ipv6Enabled;
+            checkDHCPv6DNS.Enabled = ipv6Enabled;
+            checkSLAAC.Enabled = ipv6Enabled;
+            checkSLAACDNS.Enabled = ipv6Enabled;
+            checkIPv6DNS.Enabled = ipv6Enabled;
+            lblV6DNS1.Enabled = ipv6Enabled;
+            lblV6DNS2.Enabled = ipv6Enabled;
+            txtV6DNS1.Enabled = ipv6Enabled && !checkIPv6DNS.Checked;
+            txtV6DNS2.Enabled = ipv6Enabled && !checkIPv6DNS.Checked;
+        }
+
+        private sealed class AdminCommand
+        {
+            public string Title { get; set; }
+            public string Command { get; set; }
+        }
+
+        private sealed class AdminCommandResult
+        {
+            public bool Success { get; set; }
+            public int ExitCode { get; set; }
+            public string FailedStep { get; set; }
+            public string Output { get; set; }
+        }
+
+        private async Task<AdminCommandResult> ExecuteAdminCommandsAsync(IList<AdminCommand> commands)
+        {
+            if (commands == null || commands.Count == 0)
+            {
+                return new AdminCommandResult { Success = true, Output = "没有需要应用的更改" };
+            }
 
             return await Task.Run(() =>
             {
-                ProcessStartInfo psi = new ProcessStartInfo();
-                psi.FileName = "cmd.exe";
-                psi.Arguments = $"/c {commands}";
-                psi.Verb = "runas";
-                psi.WindowStyle = ProcessWindowStyle.Hidden;
-                psi.CreateNoWindow = true;
+                string token = Guid.NewGuid().ToString("N");
+                string batchPath = Path.Combine(Path.GetTempPath(), "nicx_" + token + ".cmd");
+                string logPath = Path.Combine(Path.GetTempPath(), "nicx_" + token + ".log");
+                Encoding commandEncoding = new UTF8Encoding(false);
 
                 try
                 {
-                    using (Process p = Process.Start(psi))
+                    var batch = new StringBuilder();
+                    batch.AppendLine("@echo off");
+                    batch.AppendLine("chcp 65001 > nul");
+                    batch.AppendLine("call :nicx_main > \"" + logPath.Replace("%", "%%") + "\" 2>&1");
+                    batch.AppendLine("exit /b %errorlevel%");
+                    batch.AppendLine(":nicx_main");
+                    for (int i = 0; i < commands.Count; i++)
                     {
-                        p.WaitForExit();
-                        return p.ExitCode == 0;
+                        batch.AppendLine("echo __NICX_STEP_" + i + "__");
+                        batch.AppendLine(commands[i].Command.Replace("%", "%%"));
+                        batch.AppendLine("if errorlevel 1 exit /b %errorlevel%");
+                    }
+                    batch.AppendLine("exit /b 0");
+                    File.WriteAllText(batchPath, batch.ToString(), commandEncoding);
+
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = "cmd.exe",
+                        Arguments = "/d /c \"\"" + batchPath + "\"\"",
+                        Verb = "runas",
+                        WindowStyle = ProcessWindowStyle.Hidden,
+                        CreateNoWindow = true,
+                        UseShellExecute = true
+                    };
+
+                    using (Process process = Process.Start(psi))
+                    {
+                        process.WaitForExit();
+                        string output = File.Exists(logPath) ? File.ReadAllText(logPath, commandEncoding).Trim() : string.Empty;
+                        int failedIndex = FindLastCommandMarker(output, commands.Count);
+                        string cleanOutput = RemoveCommandMarkers(output);
+                        return new AdminCommandResult
+                        {
+                            Success = process.ExitCode == 0,
+                            ExitCode = process.ExitCode,
+                            FailedStep = process.ExitCode == 0 || failedIndex < 0 ? null : commands[failedIndex].Title,
+                            Output = cleanOutput
+                        };
                     }
                 }
-                catch (Exception)
+                catch (Win32Exception ex)
                 {
-                    return false;
+                    string message = ex.NativeErrorCode == 1223
+                        ? "管理员权限请求被取消"
+                        : ex.Message;
+                    return new AdminCommandResult { Success = false, ExitCode = ex.NativeErrorCode, Output = message };
+                }
+                catch (Exception ex)
+                {
+                    return new AdminCommandResult { Success = false, ExitCode = -1, Output = ex.Message };
+                }
+                finally
+                {
+                    try { if (File.Exists(batchPath)) File.Delete(batchPath); } catch { }
+                    try { if (File.Exists(logPath)) File.Delete(logPath); } catch { }
                 }
             });
+        }
+
+        private static int FindLastCommandMarker(string output, int commandCount)
+        {
+            int result = -1;
+            int lastPosition = -1;
+            for (int i = 0; i < commandCount; i++)
+            {
+                int position = (output ?? string.Empty).LastIndexOf("__NICX_STEP_" + i + "__", StringComparison.Ordinal);
+                if (position > lastPosition)
+                {
+                    lastPosition = position;
+                    result = i;
+                }
+            }
+            return result;
+        }
+
+        private static string RemoveCommandMarkers(string output)
+        {
+            if (string.IsNullOrWhiteSpace(output)) return string.Empty;
+            return string.Join(Environment.NewLine, output
+                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
+                .Where(line => !line.StartsWith("__NICX_STEP_", StringComparison.Ordinal))
+                .Where(line => !string.IsNullOrWhiteSpace(line)))
+                .Trim();
+        }
+
+        private static void AddCommand(ICollection<AdminCommand> commands, string title, string command)
+        {
+            commands.Add(new AdminCommand { Title = title, Command = command });
+        }
+
+        private static bool IsAddress(string text, AddressFamily addressFamily, bool allowUnspecified)
+        {
+            if (!System.Net.IPAddress.TryParse((text ?? string.Empty).Trim(), out System.Net.IPAddress address) ||
+                address.AddressFamily != addressFamily)
+            {
+                return false;
+            }
+
+            return allowUnspecified ||
+                   (!address.Equals(System.Net.IPAddress.Any) && !address.Equals(System.Net.IPAddress.IPv6Any));
+        }
+
+        private bool ValidateNetworkSettings()
+        {
+            if (!checkDHCP.Checked)
+            {
+                if (!IsAddress(ipIPV4.Text, AddressFamily.InterNetwork, false) ||
+                    MaskToCidr(ipMask.Text) < 0 ||
+                    !IsAddress(ipGateway.Text, AddressFamily.InterNetwork, true))
+                {
+                    MessageBox.Show("请填写有效的 IPv4 地址、连续子网掩码和默认网关", "IPv4 设置无效",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+            }
+
+            if (!checkDNS.Checked &&
+                (!IsAddress(ipDNS1.Text, AddressFamily.InterNetwork, false) ||
+                 (!string.IsNullOrWhiteSpace(ipDNS2.Text) && ipDNS2.Text != "0.0.0.0" &&
+                  !IsAddress(ipDNS2.Text, AddressFamily.InterNetwork, false))))
+            {
+                MessageBox.Show("请填写有效的 IPv4 DNS 地址", "IPv4 DNS 无效",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            bool noPrimaryIPv6Dns = string.IsNullOrWhiteSpace(txtV6DNS1.Text) || txtV6DNS1.Text == "::";
+            bool hasSecondaryIPv6Dns = !string.IsNullOrWhiteSpace(txtV6DNS2.Text) && txtV6DNS2.Text != "::";
+            bool ipv6OptionsEnabled = checkChangeIPV6State.Checked
+                ? checkIPV6State.Checked
+                : _loadedIPv6StackEnabled;
+            if (ipv6OptionsEnabled && !checkIPv6DNS.Checked &&
+                ((!noPrimaryIPv6Dns && !IsAddress(txtV6DNS1.Text, AddressFamily.InterNetworkV6, false)) ||
+                 (hasSecondaryIPv6Dns && (noPrimaryIPv6Dns ||
+                  !IsAddress(txtV6DNS2.Text, AddressFamily.InterNetworkV6, false)))))
+            {
+                MessageBox.Show("请填写有效的 IPv6 DNS 地址", "IPv6 DNS 无效",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            if (checkHops.Checked && (!int.TryParse(txtHops.Text, out int metric) || metric < 1 || metric > 999))
+            {
+                MessageBox.Show("跃点数必须是 1 到 999 之间的整数", "跃点数无效",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            return true;
+        }
+
+        private static string EscapePowerShellSingleQuoted(string value)
+        {
+            return (value ?? string.Empty).Replace("'", "''");
         }
 
         private async void btnOK_Click(object sender, EventArgs e)
@@ -675,43 +1040,128 @@ namespace NetInfoCheckerX
                 }
             }
 
-            btnOK.Enabled = false;
-            btnOK.Text = "修改中...";
+            if (!ValidateNetworkSettings()) return;
 
             string nicName = nic.Name;
-            StringBuilder cmdBuilder = new StringBuilder();
+            string nicDisplayName = string.IsNullOrWhiteSpace(nic.Description) ? nicName : nic.Description;
+            string escapedNicName = EscapePowerShellSingleQuoted(nicName);
+            var commands = new List<AdminCommand>();
+            var restartChanges = new List<string>();
+            bool restartAdapter = false;
 
-            if (checkDHCP.Checked)
+            bool systemDhcpV4 = false;
+            try
             {
-                cmdBuilder.Append($"netsh interface ip set address name=\"{nicName}\" source=dhcp & ");
+                IPInterfaceProperties currentProperties = nic.GetIPProperties();
+                systemDhcpV4 = NicHelper.TryGetIPv4Properties(currentProperties, out IPv4InterfaceProperties currentIpv4) &&
+                    currentIpv4.IsDhcpEnabled;
             }
-            else
+            catch { }
+
+            if (_ipv4AddressDirty && checkDHCP.Checked && !systemDhcpV4)
             {
-                cmdBuilder.Append($"netsh interface ip set address name=\"{nicName}\" source=static address={ipIPV4.Text} mask={ipMask.Text} gateway={ipGateway.Text} & ");
+                // Re-check in the elevated process as well.  Windows' netsh returns exit code 1
+                // when DHCP is already enabled, although the requested state has been reached.
+                // The PowerShell guard keeps this operation idempotent without hiding real errors.
+                AddCommand(commands, "IPv4 自动获取地址",
+                    $"powershell -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $i=Get-NetIPInterface -InterfaceAlias '{escapedNicName}' -AddressFamily IPv4 -ErrorAction Stop; if ($i.Dhcp -ne 'Enabled') {{ Set-NetIPInterface -InputObject $i -Dhcp Enabled -Confirm:$false -ErrorAction Stop }}\"");
+            }
+            else if (_ipv4AddressDirty && !checkDHCP.Checked)
+            {
+                AddCommand(commands, "IPv4 静态地址", $"netsh interface ip set address name=\"{nicName}\" source=static address={ipIPV4.Text} mask={ipMask.Text} gateway={ipGateway.Text}");
             }
 
-            if (checkDNS.Checked)
+            bool systemDnsAutoV4 = IsDnsAuto(nic.Id, out string[] ignoredDnsServers);
+            if (_ipv4DnsDirty && checkDNS.Checked && !systemDnsAutoV4)
             {
-                cmdBuilder.Append($"netsh interface ip set dns name=\"{nicName}\" source=dhcp & ");
+                AddCommand(commands, "IPv4 自动 DNS", $"netsh interface ip set dns name=\"{nicName}\" source=dhcp");
             }
-            else
+            else if (_ipv4DnsDirty && !checkDNS.Checked)
             {
-                cmdBuilder.Append($"netsh interface ip set dns name=\"{nicName}\" source=static address={ipDNS1.Text} register=primary & ");
+                AddCommand(commands, "IPv4 首选 DNS", $"netsh interface ip set dns name=\"{nicName}\" source=static address={ipDNS1.Text} register=primary validate=no");
                 if (!string.IsNullOrEmpty(ipDNS2.Text) && ipDNS2.Text != "0.0.0.0")
                 {
-                    cmdBuilder.Append($"netsh interface ip add dns name=\"{nicName}\" address={ipDNS2.Text} index=2 & ");
+                    AddCommand(commands, "IPv4 备选 DNS", $"netsh interface ip add dns name=\"{nicName}\" address={ipDNS2.Text} index=2 validate=no");
                 }
             }
 
             if (checkHops.Checked)
             {
-                cmdBuilder.Append($"netsh interface ipv4 set interface \"{nicName}\" metric={txtHops.Text} & ");
+                AddCommand(commands, "IPv4 跃点数", $"netsh interface ipv4 set interface \"{nicName}\" metric={txtHops.Text}");
             }
 
-            if (checkChangeIPV6State.Checked)
+            bool applyIPv6Options = checkChangeIPV6State.Checked
+                ? checkIPV6State.Checked
+                : _loadedIPv6StackEnabled;
+            bool dhcpv6Changed = checkDHCPv6.Checked != _loadedDHCPv6;
+            bool dhcpv6DnsChanged = checkDHCPv6DNS.Checked != _loadedDHCPv6Dns;
+            bool slaacChanged = checkSLAAC.Checked != _loadedSlaac;
+            bool slaacDnsChanged = checkSLAACDNS.Checked != _loadedSlaacDns;
+            bool ipv6DnsChanged = checkIPv6DNS.Checked != _loadedIPv6DnsAuto ||
+                !string.Equals(txtV6DNS1.Text, _loadedIPv6Dns1, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(txtV6DNS2.Text, _loadedIPv6Dns2, StringComparison.OrdinalIgnoreCase);
+
+            // When IPv6 is being enabled, bind the protocol before applying its options.
+            if (checkChangeIPV6State.Checked && checkIPV6State.Checked)
             {
-                string stateCmd = checkIPV6State.Checked ? "Enable" : "Disable";
-                cmdBuilder.Append($"powershell -Command \"{stateCmd}-NetAdapterBinding -Name '{nicName}' -ComponentID ms_tcpip6\" & ");
+                AddCommand(commands, "IPv6 协议栈", $"powershell -NoProfile -NonInteractive -Command \"Enable-NetAdapterBinding -Name '{escapedNicName}' -ComponentID ms_tcpip6 -Confirm:$false\"");
+            }
+
+            if (applyIPv6Options)
+            {
+                string enabledDhcp = checkDHCPv6.Checked ? "Enabled" : "Disabled";
+                string enabledDhcpDns = checkDHCPv6DNS.Checked ? "enabled" : "disabled";
+                string enabledSlaac = checkSLAAC.Checked ? "enabled" : "disabled";
+                string enabledSlaacDns = checkSLAACDNS.Checked ? "enabled" : "disabled";
+
+                if (dhcpv6Changed)
+                {
+                    AddCommand(commands, "DHCPv6 地址", $"powershell -NoProfile -NonInteractive -Command \"Set-NetIPInterface -InterfaceAlias '{escapedNicName}' -AddressFamily IPv6 -Dhcp {enabledDhcp} -Confirm:$false\"");
+                    restartChanges.Add((checkDHCPv6.Checked ? "启用" : "禁用") + "DHCPv6 地址");
+                    restartAdapter = true;
+                }
+                if (dhcpv6DnsChanged)
+                {
+                    AddCommand(commands, "DHCPv6 DNS（当前会话）", $"netsh interface ipv6 set interface interface=\"{nicName}\" otherstateful={enabledDhcpDns} store=active");
+                    AddCommand(commands, "DHCPv6 DNS（永久配置）", $"netsh interface ipv6 set interface interface=\"{nicName}\" otherstateful={enabledDhcpDns} store=persistent");
+                    restartChanges.Add((checkDHCPv6DNS.Checked ? "启用" : "禁用") + "DHCPv6 DNS");
+                    restartAdapter = true;
+                }
+                if (slaacChanged)
+                {
+                    AddCommand(commands, "SLAAC/路由发现（当前会话）", $"netsh interface ipv6 set interface interface=\"{nicName}\" routerdiscovery={enabledSlaac} store=active");
+                    AddCommand(commands, "SLAAC/路由发现（永久配置）", $"netsh interface ipv6 set interface interface=\"{nicName}\" routerdiscovery={enabledSlaac} store=persistent");
+                    restartChanges.Add((checkSLAAC.Checked ? "启用" : "禁用") + "SLAAC 地址");
+                    restartAdapter = true;
+                }
+                if (slaacDnsChanged)
+                {
+                    AddCommand(commands, "SLAAC RA DNS（当前会话）", $"netsh interface ipv6 set interface interface=\"{nicName}\" rabaseddnsconfig={enabledSlaacDns} store=active");
+                    AddCommand(commands, "SLAAC RA DNS（永久配置）", $"netsh interface ipv6 set interface interface=\"{nicName}\" rabaseddnsconfig={enabledSlaacDns} store=persistent");
+                    restartChanges.Add((checkSLAACDNS.Checked ? "启用" : "禁用") + "SLAAC DNS");
+                    restartAdapter = true;
+                }
+
+                if (ipv6DnsChanged && checkIPv6DNS.Checked)
+                {
+                    AddCommand(commands, "IPv6 自动 DNS", $"netsh interface ipv6 set dnsservers name=\"{nicName}\" source=dhcp");
+                }
+                else if (ipv6DnsChanged)
+                {
+                    bool clearIPv6Dns = string.IsNullOrWhiteSpace(txtV6DNS1.Text) || txtV6DNS1.Text == "::";
+                    if (clearIPv6Dns)
+                    {
+                        AddCommand(commands, "清空 IPv6 DNS", $"netsh interface ipv6 set dnsservers name=\"{nicName}\" source=static address=none");
+                    }
+                    else
+                    {
+                        AddCommand(commands, "IPv6 首选 DNS", $"netsh interface ipv6 set dnsservers name=\"{nicName}\" source=static address={txtV6DNS1.Text} register=primary validate=no");
+                    }
+                    if (!clearIPv6Dns && !string.IsNullOrWhiteSpace(txtV6DNS2.Text) && txtV6DNS2.Text != "::")
+                    {
+                        AddCommand(commands, "IPv6 备选 DNS", $"netsh interface ipv6 add dnsservers name=\"{nicName}\" address={txtV6DNS2.Text} index=2 validate=no");
+                    }
+                }
             }
 
             if (checkMAC.Checked)
@@ -723,39 +1173,69 @@ namespace NetInfoCheckerX
 
                     if (string.IsNullOrEmpty(newMac))
                     {
-                        cmdBuilder.Append($"reg delete \"HKEY_LOCAL_MACHINE\\{regPath}\" /v \"NetworkAddress\" /f & ");
+                        AddCommand(commands, "恢复默认 MAC", $"reg delete \"HKEY_LOCAL_MACHINE\\{regPath}\" /v \"NetworkAddress\" /f");
+                        restartChanges.Add("恢复默认 MAC");
                     }
                     else
                     {
-                        cmdBuilder.Append($"reg add \"HKEY_LOCAL_MACHINE\\{regPath}\" /v \"NetworkAddress\" /t REG_SZ /d {newMac} /f & ");
+                        AddCommand(commands, "修改 MAC", $"reg add \"HKEY_LOCAL_MACHINE\\{regPath}\" /v \"NetworkAddress\" /t REG_SZ /d {newMac} /f");
+                        restartChanges.Add("修改 MAC 地址");
                     }
-
-                    cmdBuilder.Append($"powershell -Command \"Restart-NetAdapter -Name '{nicName}'\" & ");
+                    restartAdapter = true;
                 }
             }
 
-            string finalCmd = cmdBuilder.ToString().TrimEnd(' ', '&');
+            // When IPv6 is being disabled, apply the binding change last and skip all
+            // subordinate IPv6 settings because they cannot have an effect.
+            if (checkChangeIPV6State.Checked && !checkIPV6State.Checked)
+            {
+                AddCommand(commands, "IPv6 协议栈", $"powershell -NoProfile -NonInteractive -Command \"Disable-NetAdapterBinding -Name '{escapedNicName}' -ComponentID ms_tcpip6 -Confirm:$false\"");
+            }
 
-            bool success = await ExecuteAdminCommandsAsync(finalCmd);
+            if (restartAdapter)
+            {
+                string changedItems = string.Join(string.Empty, restartChanges.Select(item => "【" + item + "】"));
+                DialogResult confirmation = MessageBox.Show(
+                    $"当前已修改{changedItems}，\r\n需重启网卡【{nicDisplayName}】才能生效，网络将临时断开确认继续吗？",
+                    "确认重启网卡",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+                if (confirmation != DialogResult.Yes)
+                {
+                    return;
+                }
 
+                AddCommand(commands, "重启网卡", $"powershell -NoProfile -NonInteractive -Command \"Restart-NetAdapter -Name '{escapedNicName}' -Confirm:$false\"");
+                AddCommand(commands, "刷新 DNS 缓存", "ipconfig /flushdns");
+            }
+
+            btnOK.Enabled = false;
+            btnOK.Text = "修改中...";
+
+            AdminCommandResult result = await ExecuteAdminCommandsAsync(commands);
+
+            if (result.Success)
             {
                 MessageBox.Show("修改成功!", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                await Task.Delay(100);
+                await Task.Delay(restartAdapter ? 2500 : 100);
                 var mainForm = Application.OpenForms["Form1"];
                 if (mainForm != null)
                 {
                     var btnRefresh = mainForm.Controls.Find("btnRefreshNIC", true).FirstOrDefault() as Button;
                     btnRefresh?.PerformClick();
                 }
-                btnRefreshList.PerformClick();
-
-                var updatedNic = NetworkInterface.GetAllNetworkInterfaces()
-                                    .FirstOrDefault(n => n.Id == nic.Id);
-
-                if (updatedNic != null)
-                {
-                    LoadNicInfo(updatedNic);
-                }
+                // Rebuild from fresh NetworkInterface instances.  A restarted adapter may
+                // temporarily disappear, so do not restore the pre-restart selection.
+                RefreshNICList(preserveSelection: !restartAdapter);
+            }
+            else
+            {
+                string failedStep = string.IsNullOrEmpty(result.FailedStep) ? "未知步骤" : result.FailedStep;
+                string details = string.IsNullOrWhiteSpace(result.Output) ? "系统未返回错误文本" : result.Output;
+                if (details.Length > 3000) details = details.Substring(details.Length - 3000);
+                MessageBox.Show($"修改未完成\r\n\r\n失败步骤：{failedStep}\r\n退出码：{result.ExitCode}\r\n\r\n系统返回：\r\n{details}",
+                    "修改失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
 
             btnOK.Enabled = true;
@@ -952,6 +1432,13 @@ namespace NetInfoCheckerX
                 WritePrivateProfileString(IniSection, "Hops", txtHops.Text, IniPath);
                 WritePrivateProfileString(IniSection, "ChangeIPV6", checkChangeIPV6State.Checked ? "1" : "0", IniPath);
                 WritePrivateProfileString(IniSection, "IPV6State", checkIPV6State.Checked ? "1" : "0", IniPath);
+                WritePrivateProfileString(IniSection, "DHCPv6", checkDHCPv6.Checked ? "1" : "0", IniPath);
+                WritePrivateProfileString(IniSection, "DHCPv6DNS", checkDHCPv6DNS.Checked ? "1" : "0", IniPath);
+                WritePrivateProfileString(IniSection, "SLAAC", checkSLAAC.Checked ? "1" : "0", IniPath);
+                WritePrivateProfileString(IniSection, "SLAACDNS", checkSLAACDNS.Checked ? "1" : "0", IniPath);
+                WritePrivateProfileString(IniSection, "IPv6DNSAuto", checkIPv6DNS.Checked ? "1" : "0", IniPath);
+                WritePrivateProfileString(IniSection, "IPv6DNS1", txtV6DNS1.Text, IniPath);
+                WritePrivateProfileString(IniSection, "IPv6DNS2", txtV6DNS2.Text, IniPath);
                 WritePrivateProfileString(IniSection, "MACChecked", checkMAC.Checked ? "1" : "0", IniPath);
                 WritePrivateProfileString(IniSection, "MAC", txtMAC.Text, IniPath);
                 WritePrivateProfileString(IniSection, "CIDRMask", txtMask.Text, IniPath);
@@ -1009,6 +1496,34 @@ namespace NetInfoCheckerX
 
                 GetPrivateProfileString(IniSection, "IPV6State", "", sb, sb.Capacity, IniPath);
                 if (!string.IsNullOrEmpty(val = sb.ToString())) checkIPV6State.Checked = val == "1";
+                sb.Clear();
+
+                GetPrivateProfileString(IniSection, "DHCPv6", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) checkDHCPv6.Checked = val == "1";
+                sb.Clear();
+
+                GetPrivateProfileString(IniSection, "DHCPv6DNS", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) checkDHCPv6DNS.Checked = val == "1";
+                sb.Clear();
+
+                GetPrivateProfileString(IniSection, "SLAAC", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) checkSLAAC.Checked = val == "1";
+                sb.Clear();
+
+                GetPrivateProfileString(IniSection, "SLAACDNS", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) checkSLAACDNS.Checked = val == "1";
+                sb.Clear();
+
+                GetPrivateProfileString(IniSection, "IPv6DNSAuto", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) checkIPv6DNS.Checked = val == "1";
+                sb.Clear();
+
+                GetPrivateProfileString(IniSection, "IPv6DNS1", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtV6DNS1.Text = val;
+                sb.Clear();
+
+                GetPrivateProfileString(IniSection, "IPv6DNS2", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtV6DNS2.Text = val;
                 sb.Clear();
 
                 GetPrivateProfileString(IniSection, "MACChecked", "", sb, sb.Capacity, IniPath);
