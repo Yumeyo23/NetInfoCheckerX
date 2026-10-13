@@ -12,17 +12,15 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 > [!CAUTION]
 > **本软件主要为中国大陆的中文用户设计. 非中文/中国大陆用户可能无法获得最佳体验.**
 > 
-> **由于是个人软件，没有严格的开发、测试流程，介绍、实际功能等可能随时改变，软件也可能随时停更、停用.**
-> 
-> **This software is designed for Chinese-speaking users in mainland China.**
+> **本项目是个人软件，没有严格的开发、测试流程，介绍、实际功能等可能随时改变，也可能随时停更、停用；软件仅限用于个人学习和测试、研究目的；不得将相关内容用于商业或非法用途，一切后果由用户自负.**
 >
-> **Non-Chinese/mainland China users may not have the best experience.**
+> **This software is designed for Chinese-speaking users in mainland China. Non-Chinese/mainland China users may not have the best experience.**
 
 > [!IMPORTANT]
 >
-> 本项目为**部分开源**。作者**不会**从本项目主动获取**任何**利益和用户隐私等不当信息，作者衷心地向所有API、服务器等提供商表示感谢，程序中已列出用到的所有API。
+> 本项目是非盈利性的个人项目，所有内容均为非商业用途，如有用户打赏均为自愿捐赠，非项目收费。为~~防API轻易滥用及~~保护软件更新动力，本项目采用**部分开源**：**公开绝大多数测试的核心方法供交流学习，UI 等高原创部分暂时保持不开源**。
 >
-> 为~~防API轻易滥用及~~保护软件更新动力，本项目采用部分开源：**公开绝大多数测试的核心方法供交流学习，UI 等高原创部分暂时保持不开源**。
+> **作者不会从本项目主动获取任何利益和用户隐私等不当信息**，作者衷心地向所有API、服务器等提供商表示感谢，程序中已列出用到的所有API。
 
 > [!NOTE]
 >
@@ -55,7 +53,8 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 <img width="3000" height="1875" alt="核心功能260917_11##" src="https://github.com/user-attachments/assets/e8e5094f-bf71-461d-bd79-4972414d608e" />
 
 全部功能为：
-- 查询/记录/修改本机IP
+- 查询/记录本机外网IP、地理位置（支持自行编辑需使用的API）
+- 修改本机网卡(IPv4/DHCPv6/SLAAC/DNS（v4v6）/MAC地址（需驱动支持）/跃点数)
 - 多出口测试(简洁版/全能版/教育网/SpeedTest.Net)
 - NAT类型测试
 - TCP/UDP/ICMP全协议Ping+/Trace+
@@ -90,7 +89,7 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 - 本程序架构**C# NET Framework 4.7.2 WinForm窗口程序**，且作者**无任何升/换框架/跨平台欲望**
 - 感谢陪伴awa
 
-## 灵感/致谢/依赖列表
+## 灵感/致谢
 - NAT类型测试灵感源自于[NatTypeTester](https://github.com/HMBSbige/NatTypeTester)(未使用其代码)，并加入了大量的优化功能：例如**显示debug信息、设置端口模式/起手、列出可用网卡+指定IP测试** ~~(其实我也忍不了一个纯NAT测试要100MB)~~
 - 本机配置检测，为了开发方便+数据准确，全部使用[图吧工具箱](https://www.tbtool.cn/sdk/index.html)公开的硬件检测SDK (~~包括WMI版和~~C++预览版都有使用，WMI已原生实现).
 - iPerf工具来自于最新的[iperf3-win-builds](https://github.com/ar51an/iperf3-win-builds/releases)，受制于技术，只做了设置GUI用于拼接启动代码.
@@ -99,26 +98,29 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 - 感谢所有AI教我写程序!!!
 - 如有未尽之处，深表歉意，衷心感谢.
 
-release的程序完整包使用到了以下依赖及NuGet，在此致谢：
+## 第三方依赖及许可
 
-| 名字                                                         | 用途                                                         | 备注                                                         |
-| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| [图吧工具箱硬件检测引擎](https://www.tbtool.cn/sdk/index.html) | 本机配置检测(推荐、备用)                                     | 直接使用图吧工具箱提供的专业API，配置检测更准，开发更快。<br />(推荐)使用的是C++版，直接使用<br />~~(备用)使用的是WMI版，编译了图吧官方提供例程使用~~ **WMI版本已不再使用，改为自有实现** |
-| [iperf3-win-builds](https://github.com/ar51an/iperf3-win-builds/releases) | iPerf3测速工具                                               | 未修改                                                       |
-| [librespeed](https://github.com/librespeed/speedtest)        | LibreSpeed开服器                                             | 精简绝大部分组件(缩小体积)、修改UI/块大小(符合软件需要)      |
-| [OpenSpeedTest](https://github.com/librespeed/speedtest)        | LibreSpeed开服器DLC                                             | 未修改      |
-| [IEEE官方MAC地址表](http://standards-oui.ieee.org/oui/oui.csv)<br />[WireShark提供的MAC地址表](https://www.wireshark.org/download/automated/data/manuf.gz) | 手动查询MAC地址                                              | 未修改                                                       |
-| [Curl for Windows](https://curl.se/windows/)                 | 备用, 访问部分API使用                                        | 未修改，带证书                                               |
-| [Open.Nat](https://www.nuget.org/packages/Open.NAT/2.1.0?_src=template) | UPnP控制台                                                   | NuGet直接使用                                                |
-| [EmbedIO](https://www.nuget.org/packages/EmbedIO)            | LibreSpeed开服用                                             | 同上，其附属NuGet包此处省略                                  |
-| [ScottPlot](https://www.nuget.org/packages/ScottPlot.WinForms) | Ping+统计图绘制                                              | 同上                                                         |
-| [IP2Region](https://www.nuget.org/packages/IP2Region.Net/)   | 程序内置的IP地理位置数据库(主窗口、手动查询IP、Trace+使用)   | 同上                                  |
-| [MaxMind.Db](https://www.nuget.org/packages/MaxMind.DB)      | 程序内置的IP地理位置数据库(主窗口、手动查询IP、Trace+使用)   | 同上，数据库使用[GeoCN](https://github.com/ljxi/GeoCN)       |
-| [DnsClient](https://www.nuget.org/packages/DnsClient/)       | DNS劫持测试                                                  | 同上                                                         |
-| [WinDivert](https://github.com/basil00/WinDivert)            | Trace+高精度测试                                             | 同上                                                         |
-| [Merged-IP-Data](https://github.com/NetworkCats/Merged-IP-Data)  | 本地IP数据库DLC | 同上                                                         |
-| [obfuscar](https://www.nuget.org/packages/Obfuscar)          | 备用混淆器, 发布版目前使用[ConfuserEx](https://github.com/mkaring/ConfuserEx) | 同上                                                         |
-| [SpeedTest.Net节点](https://github.com/SukkaW/speedtest-net-servers)          | 多出口测试SpeedTest.Net版本使用 | 同上                                                         |
+程序完整包使用到了以下依赖及NuGet，在此致谢：
+
+| 名字 | 协议 | 备注 |
+|---|---|---|
+| [图吧工具箱硬件检测引擎](https://www.tbtool.cn/sdk/index.html) | 免费使用 | 本机配置检测。直接使用图吧官方提供的 C++ 版，未修改；原 WMI 版本已停用，改为自有实现 |
+| [iperf3-win-builds](https://github.com/ar51an/iperf3-win-builds/releases) | Apache-2.0 | iPerf3 测速工具，未修改。实际构建可能包含其他第三方组件，相关许可另行适用 |
+| [LibreSpeed](https://github.com/librespeed/speedtest) | LGPL-3.0-or-later | LibreSpeed 测速服务。精简部分组件、修改 UI 及数据块大小以符合软件需求 |
+| [OpenSpeedTest](https://github.com/openspeedtest/Speed-Test) | MIT | LibreSpeed 开服器 DLC（不附带，可选组件），未修改 |
+| [Open.NAT](https://www.nuget.org/packages/Open.NAT/2.1.0) | MIT | UPnP 控制台，NuGet 包直接使用，未修改 |
+| [EmbedIO](https://www.nuget.org/packages/EmbedIO) | MIT | LibreSpeed 服务端，NuGet 包直接使用，未修改 |
+| [ScottPlot.WinForms](https://www.nuget.org/packages/ScottPlot.WinForms) | MIT | Ping 统计图绘制，NuGet 包直接使用，未修改。 |
+| [IP2Region.Net](https://www.nuget.org/packages/IP2Region.Net/) | Apache-2.0 | 程序内置 IP 地理位置数据库读取功能，用于主窗口、手动查询 IP 和 Trace+；NuGet 包直接使用，未修改   |
+| [MaxMind.DB](https://www.nuget.org/packages/MaxMind.DB) | Apache-2.0 | IP 地理位置数据库读取功能，用于主窗口、手动查询 IP 和 Trace+；NuGet 包直接使用，未修改。实际数据库使用 [GeoCN](https://github.com/ljxi/GeoCN)，其再分发授权待确认。 |
+| [DnsClient](https://www.nuget.org/packages/DnsClient/) | Apache-2.0 | DNS 劫持测试，NuGet 包直接使用，未修改 |
+| [WinDivert](https://github.com/basil00/WinDivert) | LGPL-3.0 或 GPL-2.0 | Trace+ 高精度测试，未修改；程序按 LGPL-3.0 路径处理 |
+| [Merged-IP-Data](https://github.com/NetworkCats/Merged-IP-Data) | MIT (项目), GeoLite2/IPinfo (CC BY-SA 4.0), DB-IP (CC BY 4.0), Origin ASN (CDLA-Permissive 2.0), OpenProxyDB (CC0 1.0), X4B (MIT), NordVPN | 本地 IP 数据库 DLC（不附带，可选组件），未修改 |
+| [Obfuscar](https://www.nuget.org/packages/Obfuscar) | MIT | 备用混淆器，目前发布版使用 [ConfuserEx](https://github.com/mkaring/ConfuserEx) |
+| [ConfuserEx](https://github.com/mkaring/ConfuserEx) | MIT | 当前发布版使用的混淆器 |
+| [SpeedTest.Net 节点](https://github.com/SukkaW/speedtest-net-servers) | MIT | 多出口测试 SpeedTest.Net 节点列表|
+| [IEEE 官方 MAC 地址表](http://standards-oui.ieee.org/oui/oui.csv)、[Wireshark MAC 地址表](https://www.wireshark.org/download/automated/data/manuf.gz) | 官方数据 | 用于手动查询 MAC 地址，数据文件未修改 |
+
 
 ## To do list （重制阶段用，重制完毕后的新功能不计入此列表）
 
