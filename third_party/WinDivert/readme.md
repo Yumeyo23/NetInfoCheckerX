@@ -6,7 +6,7 @@ Version / Release: 2.2.2
 
 Source code: https://github.com/basil00/WinDivert/archive/refs/tags/v2.2.2.zip
 
-License: LGPL-3.0
+License selected for this distribution: GNU Lesser General Public License, version 3 (LGPL-3.0).
 
 Files distributed:
 - WinDivert.dll
