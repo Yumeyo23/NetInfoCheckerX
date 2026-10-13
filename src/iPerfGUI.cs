@@ -5,7 +5,6 @@ using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -112,8 +111,6 @@ namespace NetInfoCheckerX
                 txtClientPort.Focus();
                 return;
             }
-
-            SelectDefaultClientNIC(serverIp, clientPort);
 
             string normalizedLimit = null;
             if (!string.IsNullOrWhiteSpace(txtLimit.Text))
@@ -369,7 +366,8 @@ namespace NetInfoCheckerX
         {
             string text = combo.Text.Trim();
             if (string.IsNullOrEmpty(text)) return null;
-            if (text == "(Any)" || text == "(系统默认)" || text.StartsWith("0.0.0.0")) return null;
+            if (text == "(Any)" || text.Contains("系统默认") ||
+                text.StartsWith("0.0.0.0")) return null;
 
             // "192.168.1.5 (以太网)" → "192.168.1.5"
             if (text.Contains(" ")) text = text.Split(' ')[0];
@@ -448,46 +446,6 @@ namespace NetInfoCheckerX
         private void RefreshNICList_MouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Right) InitNICList();
-        }
-
-        private void SelectDefaultClientNIC(string serverHost, int serverPort)
-        {
-            if (!comboClientNIC.Text.Contains("系统默认") && !comboClientNIC.Text.StartsWith("0.0.0.0"))
-                return;
-
-            try
-            {
-                IPAddress literal;
-                IPAddress[] targets = IPAddress.TryParse(serverHost, out literal)
-                    ? new[] { literal }
-                    : Dns.GetHostAddresses(serverHost);
-
-                foreach (IPAddress target in targets)
-                {
-                    if (target.AddressFamily != AddressFamily.InterNetwork &&
-                        target.AddressFamily != AddressFamily.InterNetworkV6) continue;
-
-                    using (Socket socket = new Socket(target.AddressFamily, SocketType.Dgram, ProtocolType.Udp))
-                    {
-                        socket.Connect(target, serverPort);
-                        IPEndPoint local = socket.LocalEndPoint as IPEndPoint;
-                        if (local == null) continue;
-
-                        for (int i = 0; i < comboClientNIC.Items.Count; i++)
-                        {
-                            if (comboClientNIC.Items[i].ToString().StartsWith(local.Address + " ("))
-                            {
-                                comboClientNIC.SelectedIndex = i;
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-            catch
-            {
-                // Keep 0.0.0.0/system default when route detection is unavailable.
-            }
         }
 
         private void iPerfGUI_FormClosing(object sender, FormClosingEventArgs e)
