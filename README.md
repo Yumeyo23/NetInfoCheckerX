@@ -26,15 +26,13 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 >
 > 由于用到了外部依赖，**部分依赖存在报毒问题**，建议关闭杀毒软件，或加信任后使用，后面介绍有详细的依赖列表
 >
-> 发布程序使用[ConfuserEx](https://github.com/mkaring/ConfuserEx)做基本保护。
->
-> 如对本程序安全问题存在任何疑惑，可自行决定是否使用本项目。
+> 发布程序使用[ConfuserEx](https://github.com/mkaring/ConfuserEx)做基本保护。如对本程序安全问题存在任何疑惑，可自行决定是否使用本项目。
 
 ## 下载
-- **因个人习惯，GitHub页面更新不是很及时，最新版软件/DLC及其安装方法可+QQ群：1013442261下载，有BUG/建议也可以直接来反馈**
+- **因个人习惯，GitHub页面更新不是很及时，可+Q群：1013442261，抢先下载最新完整包和DLC，有BUG/建议也可以直接来反馈**
 - GitHub请在[release](https://github.com/Yumeyo23/NetInfoCheckerX/releases)下载最新版.
-- **软件完全绿色，但用到了一些外部依赖（后面一一列出），release时为WINRAR自解压文件**
-- **既可双击临时运行，也可解压后固定目录运行**。长期使用建议解压后运行
+- **软件完全免费、绿色，但用到了一些外部依赖（后面一一列出），release时均为WINRAR自解压文件**
+- **既可双击临时运行，也可解压后固定目录运行**。长期使用建议解压后运行，可解锁更多记忆功能
   
 ## 介绍/Wiki
 
@@ -114,7 +112,7 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 | [IP2Region.Net](https://www.nuget.org/packages/IP2Region.Net/) | Apache-2.0 | 程序内置 IP 地理位置数据库读取功能，用于主窗口、手动查询 IP 和 Trace+；NuGet 包直接使用，未修改   |
 | [MaxMind.DB](https://www.nuget.org/packages/MaxMind.DB) | Apache-2.0 | IP 地理位置数据库读取功能，用于主窗口、手动查询 IP 和 Trace+；NuGet 包直接使用，未修改。实际数据库使用 [GeoCN](https://github.com/ljxi/GeoCN)，其再分发授权待确认。 |
 | [DnsClient](https://www.nuget.org/packages/DnsClient/) | Apache-2.0 | DNS 劫持测试，NuGet 包直接使用，未修改 |
-| [WinDivert](https://github.com/basil00/WinDivert) | LGPL-3.0 或 GPL-2.0 | Trace+ 高精度测试，未修改；程序按 LGPL-3.0 路径处理 |
+| [WinDivert](https://github.com/basil00/WinDivert) | LGPL-3.0 或 GPL-2.0 （本项目选择并整改符合 LGPL-3.0） | Trace+ 高精度测试，未修改 |
 | [Merged-IP-Data](https://github.com/NetworkCats/Merged-IP-Data) | MIT (项目), GeoLite2/IPinfo (CC BY-SA 4.0), DB-IP (CC BY 4.0), Origin ASN (CDLA-Permissive 2.0), OpenProxyDB (CC0 1.0), X4B (MIT), NordVPN | 本地 IP 数据库 DLC（不附带，可选组件），未修改 |
 | [Obfuscar](https://www.nuget.org/packages/Obfuscar) | MIT | 备用混淆器，目前发布版使用 [ConfuserEx](https://github.com/mkaring/ConfuserEx) |
 | [ConfuserEx](https://github.com/mkaring/ConfuserEx) | MIT | 当前发布版使用的混淆器 |
@@ -182,13 +180,17 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 
 - [X] 多出口测试完整版（精简版功能+双栈+UDP+主流延迟）  **//26.4.10完工**
 
-  
+（主界面、多出口、手动查询IP部分需自行编辑欲使用的API配置文件，可在仓库内和Wiki查看）
+
 ## NOT TO DO list
 
 - 内网扫描（已有标准答案，个人无需再做）
   1. 很多个人开发的同类软件，默认只能扫ipv4/24，虽然/24最常用，但确实显得比较鸡肋，万一碰到大段或小段还是不能扫. 大多数人做也只是icmp ping，最多加个arp，更进一步就没有了. 也鸡肋.
   2. 该需求已有[Network Scanner](https://www.softperfect.com/products/networkscanner/)这种标杆软件，体积也只有10MB左右，可以扫/8以上的大段+ipv6，可以扫端口、arp、tcp/udp等. **这是有现成的满分答案，我没必要再做**.
 
+## SPECIAL THANKS
+
+<img width="1428" height="751" alt="a1ba475bd2d92a4b345f6fb3be31cd24" src="https://github.com/user-attachments/assets/770e9939-ae70-4c8f-be46-79b971657708" />
 
 ## NetInfoChecker (E.ver)  To Do List (C#重制完毕，易语言版本不再维护)
 
