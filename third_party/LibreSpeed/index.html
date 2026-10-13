@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<link rel="shortcut icon" href="data:image/x-icon;base64,AAABAAEAQEAAAAEAIAAoQgAAFgAAACgAAABAAAAAgAAAAAEAIAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAeIwAgHiMWIB8iUCAeIocgHiK7IB4i0yAeIt8gHiLhIB4i4yAeI+MgHiLjIB8i4yAeIuMgHiLjIB4j4yAeI+MgHiPjIB4i4yAeIuMgHiLjIB4i4yAeIuMgHiLjIB4i4yAeI+MgHiPjIB4i4yAeIuMgHyLjIB4i4yAeI+MgHyPjIB4i4yAeIuMgHiLjIB4j4yAeI+MgHiLjIB4i4yAeIuMgHiLjIB4i4SAeItsgHiLLIB4ioyAeIm4gHiIyIB4iCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIB8jAiAeIhogHiJwIB4jySAeIvEgHiL9IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeI/8gHiP/IB4j/yAeI/8gHiL/IB4i/yAeI/8gHiP/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeIv8gHiL/IB4i/yAeI/8gHiP/IB4j/yAeI/8gHiL/IB4i/yAeI/8gHiL/IB4i/yAeIv8gHiL5IB4i3yAeIqcgHiNAIB4jCCAfIwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIB8jBiAfI04gHiLNIB4i/SAeI/8gHiL/IB4i/yAfI/8gHiP/IB4j/yAeIv8gHiL/IB4j/yAeI/8gHiP/IB4i/yAeI/8gHiP/IB4j/yAeI/8gHiL/IB4i/yAeI/8gHyP/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiP/IB4i/yAeI/8gHiL/IB4i/yAeI/8gHiP/IB4j/yAeI/8gHiP/IB4j/yAeI/8gHiP/IB4i/yAfI/8gHyP/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j8yAeI5EgHiMgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIB4jCiAeIoEgHiPpIB4i/yAeIv8gHyL/IB4j/yAeIv8gHiL/IB4j/yAfI/8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeIv8gHiP/IB4j/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeI/8gHiP/IB8i/yAeIv8gHiL/IB4j/yAeI/8gHiL/IB4i/yAeIv8gHiP/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL7IB4izSAeIjIgHiICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIB4jCiAeI3ogHiL5IB4j/yAeI/8gHiL/IB4i/yAfI/8gHiP/IB4j/yAeIv8gHiL/IB4i/yAeI/8gHiL/IB4i/yAfI/8gHiP/IB4j/yAeI/8gHyP/IB4j/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiP/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiP/IB4i/yAeIv8gHiP/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4i/yAfI/8gHiLRIB4iNgAAAAAAAAAAAAAAAAAAAAAAAAAAIB4jBCAeInggHiP5IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB8i/yAeIv8gHiL/IB4i/yAeI/8gHiP/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeI/8gHiP/IB4j/yAeIv8gHiL/IB4j/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeIv8gHiL/IB8i/yAeI9UgHiMoIB8jAAAAAAAAAAAAIB8iACAeIkAgHiLlIB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHyP/IB4i/yAeIv8gHiL/IB4i/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAfIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAe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Iv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIp8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j/0xLTvm1s7P509LQ/9PS0P/T0dD/09HQ/9DOzf+XlZb3TkxP+SQjJ/0gHiL/IB4i/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8yMTT7amhq9768u/vS0c//09HQ/9PR0P/T0dD/zszL/YyKjPcmJSn9IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeIv8gHiL/IB4i/yAeIv8gHiP/IB4i/yAeIv8gHiKjIB4i/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeIv8gHiL/IB4i/yAeIv8gHiL/ISAk/0tKTPvBv7/709HQ/9PR0P/T0tD/09DP/7CurvtcWl33JCMn/SAfI/8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAfI/80Mjb7hIKE+crHx/3T0dD/09HQ/9PR0P/Qz83/j42O9y0sL/0gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4ioyAeIv8gHiP/IB4i/yAeIv8gHiL/IB4i/yAeI/8gHiP/IB4i/yAeIv8gHiL/IB4i/z8+QfuzsbH509HP/9PR0P/T0dD/0c/O/6Kgofk9Oz/7IR8j/yAeI/8gHiP/IB8j/yAeIv8gHiP/IB4i/yAeIv8gHiL/IB4i/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j/yYlKf1oZmj5wsDA/dPR0P/T0dD/09HQ/87My/1/fX/3IyIm/SAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiP/IB4i/yAeI/8gHiL/IB4i/yAeIqMgHiL/IB8j/yAeIv8gHiL/IB4i/yAeI/8gHiP/IB4i/yAeIv8gHiL/IB4j/zEvM/unpaX509LQ/9PS0P/U0tD/0M/O/4yKi/krKi37IB4j/yAeIv8gHiL/IB8j/yAfIv8gHiL/IB4j/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j/yAfIv8gHiL/IB4i/yAeI/8gHiP/IB8i/yAeIv8gHiL/IB4i/yAeI/8gHiP/IB8j/01MT/e5uLf709HQ/9TR0P/U0dD/y8nI/WppavkiICT/IB4i/yAfI/8gHiP/IB4i/yAeIv8gHiP/IB4j/yAeIv8gHiP/IB4i/yAeIv8gHiKjIB4i/yAeI/8gHiL/IB4i/yAeI/8gHiP/IB8j/yAeIv8gHiL/IB4i/yQjJ/2CgYL50M7M/dPR0P/T0dD/0c/O/42MjPkvLTH7IB4j/yAeI/8gHiL/IB8i/yAeIv8gHyL/IB4i/yAeIv8gHiL/IB4i/yAeI/8gHiL/IB4i/yAeI/8gHiP/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeI/8gHiP/IB4i/yAeI/8iICT/SklM98C+vfvT0dD/1NHQ/9PR0P/CwL/7QD9C+SAeI/8gHiP/IB4i/yAfIv8gHiL/IB4j/yAeIv8gHiL/IB4j/yAeIv8gHiL/IB4ioyAeIv8gHiP/IB4j/yAeIv8gHiL/IB4i/yAfIv8gHiL/IB4j/yAeI/9LSkz5ysnI/dPS0P/T0dD/09HQ/6akpfksKy/7IB4i/yAeI/8gHiP/IB4i/yAeIv8gHiL/IiEk/VZVV/VhX2L3LSsw+SMiJv1QTlH3X19f9TMxNfsgHiP/SEZJ+VhXWfcvLTL7IB4i/0JBRPdWVVj1MzI1+SAeIv8gHiP/IB4j/yAeIv8gHiL/IB4i/yAeI/9gXmD3xsTE/dTS0P/T0dD/09HQ/5eWlvkqKS39IB4i/yAeIv8gHiP/IB4i/yAeI/8gHiL/IB4i/yAeI/8gHiL/IB4i/yAeIqMgHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHyL/IB4i/yAeIv8tLDD7oqCh+dPR0P/T0dD/1NHQ/7a0tPtBQEP5IB4j/yAeIv8gHiL/IB4j/yAeIv8gHiL/IB8j/yUkKPu1s7PzzcvL/UZFSPMqKS39oqCh98jGxftVU1b7IB4i/5ybm//OzMv9UVBS/SAfIv+OjY71ycfG/V5dX/UgHiL/IB4i/yAeI/8gHiP/IB4i/yAeIv8gHiP/IyIm/XV0dffSz87/09HQ/9PR0P/Lysn9Y2Jk+SAeIv8gHiL/IB4j/yAeI/8gHiP/IB4j/yAeIv8gHiP/IB4i/yAeIv8gHiKjIB4i/yAeIv8gHiP/IB4i/yAeIv8gHiP/IB4j/yAeIv8gHiL/XFtd+crIyP3T0dD/09HQ/9LPzv9mZGb3ISAk/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeIv8jIib9j42O86Khofk7Oj71JyYq/YB/gPWenJ33R0VI+yAeIv95d3n7nZub+UJBRPsgHiL/bmxu9ZmXl/dMSk31IB4i/yAeIv8gHiP/IB4i/yAeIv8gHiL/IB4i/yAeIv8tKy/7rqys+dPR0P/T0dD/09HQ/6+trPklJCj9IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4ioyAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IiAk/6uqqvfT0dD/09HQ/9PR0P+koqP5JSQo/SAeIv8gHiP/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeI/8gHiL/IB4j/1VUVvnHxsX909HQ/9PR0P/Qzs3/W1pc9yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIqMgHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/0RDRvnNy8r909HQ/9PR0P/Jx8b9W1lc+SAfI/8hICT/ISAk/yAfIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeI/8gHiL/IB4i/yAeIv8gHyL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiP/IB4j/SAeIv8nJir9nZyc+dPR0P/T0dD/09HQ/5eVlfkoJyv9IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHyKjIB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB8j/yIhJf1+fH730tDP/9PR0P/T0dD/q6qp+ykoLPsgHiL/SUhL+W9ucPcxLzP7IB4i/yAeIv8gHiL/IB4i/yAfIv8gHiL/IB4i/yAfIv8gHiL/IB4i/yAeIv8gHiL/IB8i/yAfIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiT/Ih5A+SUeYfkgHin9IB4i/1hWWPfQz87909HQ/9PR0P/Av777Pz1A+yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB8ioyAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAfIv8vLjH9qKam+9PR0P/T0dD/09HQ/3BucPcgHiL/KCcr/ZmYmfnQzs3/r62t+Ts6PfkgHiL/IB8i/yAfIv8gHyL/IB8i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAfIv8gHiL/IB8i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/JR5j9ywesv0sHbL7Ix5L+yAfIv8yMDT9sa+v+dPR0P/T0dD/0tDP/2RjZfkgHyL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIqMgHiL/IB4j/yAfI/8gHiL/IB4i/yAeIv8gHiL/Pz5B+8XDwvnT0dD/09HQ/8nHxvtDQkX5IB4i/0NCRfvAvr7709HQ/6+trfkrKi37IB4j/yAeIv8gHiL/IB8i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB8i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHyL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yMeUfctHbz9LR2+/ycdePcgHiL/JCMm/YmHifnT0ND/09HQ/9PR0P+Rj5D1IB4i/yAfIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiKjIB4i/yAeI/8gHiP/IB4i/yAeIv8gHiL/IB4i/1lXWvfT0dD/09HQ/9PR0P+rqqn5Ly0x/SAeIv9vbm/30dDO/dPR0P9ubG73IB4i/yAeIv8gHiP/IB4j/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB8i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8hHjD9Kh2b+S0dvv8rHan7IB4o+yAeIv9fXV/5z83M/9PR0f/U0dD/s7Kx+yUk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Iv8gHiL/IB4j/yAeI/8gHiOjIB4i/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/ZGJk+c3Lyv3T0tD/09HQ/9HPzf9bWlz3IR8j/ygnK/2Vk5T509HQ/9LQz/+sq6v5Ly4y+yAeIv8gHiL/IB4i/yAeI/8gHiL/IB4i/yAeIv8oIyD9pHYK+dybAP1VQhj5IB8j/yAfI/8gHyP/IB4i/yAeIv8gHyP/IB4i/yAeI/8jM233KVPg/SpY8P8oUtr7Ii1U+SAfI/8pKCz9paOj+dPR0P/T0tH/09HQ/7Wzs/soJyr9IB4i/yAeI/8gHiP/IB4j/yAeI/8gHiP/IB4j/yAeI/8gHiL/IB8joyAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/zEwM/upp6j509HQ/9PR0P/T0dD/r62t+zs5PPsgHiL/PTw/+6+trfnS0M//t7W1+TMyNvkrKi79ISAk/yAeIv8gHyL/IB4i/yAeIv8gHyP/IyEi/ZRuDvfZnQL5SDob+yAfIv8gHiL/IB4i/yAeIv8gHiL/Hx4j/x8hKP0fIin9IzZ29ylV5f0pVuj9JDd8+SAfJf0iIST/aWhq99DOzf3T0dD/09HQ/87My/1sa2z5IB8i/yAeIv8gHiL/IB8i/yAeIv8gHiL/IB4i/yAeIv8gHiP/IB4i/yAfIqMgHiL/IB4i/yAfIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAfI/8gHiL/VFJU+c7My/3T0dD/09HQ/9LQz/+bmZr5KCcq/SAfI/8/PUD5l5aW9UdGSPlSUVP5rqys92tpa/kqKSz9IB8i/yAeIv8gHiL/IB4j/yAfIv98XhL5zZYF+zwyHf0gHyL/IB4i/yAeIv8gHiL/Hx8j/x8wQ/keZaP3HmWj9yAiK/sjN3v3Izh89yAgKP0gHiP/VFNV+cHAv/3T0dD/09HQ/9PR0P+gn5/5Liww/SAeI/8gHiL/IB8i/yAfIv8gHiL/IB4i/yAeIv8gHyL/IB8i/yAfIv8gHiKjIB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yYkKP2Ni4z50c7N/9PR0P/T0dD/z83M/4F/gPkqKS39IB4i/yopLf0tLC/7s7Gx+dLQz//My8n9paSk+U5NUPciISX/JCMm/SAe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AAAgHiIQIB8iuyAeIv8gHyL/IB8i/yAeIv8gHiP/IB4j/yAfI/8gHiP/IB4i/yAeIv8gHyL/IB8j/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8hICT9Kyou+TMyNf05Nzr9Ozo8+zY1Of0wLjL7JiUp+yAfI/8gHiL/IB4i/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHyP/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAfI/8gHiL/IB4i/yAeIv8gHiP5IB4iWCAfIgAAAAAAIB8jACAeI0AgHiPlIB4i/yAeIv8gHiP/IB4j/yAeI/8gHiP/IB4j/yAeIv8gHiL/IB4j/yAeI/8gHiP/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeI/8gHiP/IB8i/yAeIv8gHiP/IB4i/yAeIv8gHiL/IB4i/yAeI/8gHiL/IB4j/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeI/8gHiP9IB4jpSAeIw4AAAAAAAAAAAAAAAAgHiMEIB4jeCAeIvkgHiL/IB4j/yAeI/8gHiP/IB4j/yAeI/8gHiP/IB4j/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiP/IB4i/yAeI/8gHiL/IB4i/yAeI/8gHiL/IB4j/yAfIv8gHiP/IB4j/yAeIv8gHiP/IB4i/yAeIv8gHiP/IB4i/yAeI/8gHiL/IB4i/yAfI/8gHiL/IB4i/yAeI/8gHiP/IB4j/yAeI/8gHiP/IB4i/yAeI/8gHiL/IB4j1SAeIyggHiMAAAAAAAAAAAAAAAAAAAAAACAfIwogHiJ6IB4i+SAfI/8gHyL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAfI/8gHyP/IB8j/yAfIv8gHyL/IB4i/yAeIv8gHiL/IB8j/yAeIv8gHyP/IB4i/yAeIv8gHyL/IB8i/yAfI/8gHyL/IB4i/yAeIv8gHiL/IB8i/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4i/yAfIv8gHyP/IB4i/yAeIv8gHiL/IB8j/yAeI/8gHiP/IB8j/yAeIv8gHiL/IB4i0SAeIzYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIB8jCiAeIoEgHiLpIB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL7IB4izSAeIjIgHiMCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgHyMGIB4iTiAeIs0gHiL9IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeI/8gHiL/IB4i/yAeIv8gHiL/IB4j/yAeIv8gHiL/IB4j/yAeIv8gHiL/IB4i/yAeI/8gHiP/IB4j/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiLzIB4ikSAeIyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAeIwIgHiIaIB4icCAeIskgHiLxIB4i/SAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiP/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i/yAeI/8gHiL/IB4i/yAeIv8gHiP/IB4i/yAeIv8gHiL/IB4i/yAeIv8gHiL/IB4i+SAeIt8gHiKnIB4iQCAeIgggHyMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAfIwAgHiMWIB4iUCAeIocgHiK7IB8i0yAeI98gHiLhIB4i4yAeIuMgHiLjIB4j4yAeI+MgHiLjIB4j4yAeI+MgHiLjIB4i4yAeIuMgHiLjIB4i4yAeIuMgHiPjIB4i4yAeI+MgHiPjIB4j4yAeIuMgHiLjIB4i4yAeIuMgHiLjIB4j4yAeI+MgHiPjIB4i4yAeIuMgHiLjIB4j4yAeIuMgHiLjIB4j4SAeItsgHiLLIB4ioyAeIm4gHiIyIB4jCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/+AAAAAAB///gAAAAAAA//4AAAAAAAA/+AAAAAAAAB/4AAAAAAAAD/AAAAAAAAAH4AAAAAAAAAPAAAAAAAAAA8AAAAAAAAABgAAAAAAAAAGAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAIAAAAAAAAAAgAAAAAAAAAHAAAAAAAAAAcAAAAAAAAAD4AAAAAAAAAPwAAAAAAAAB/gAAAAAAAAP+AAAAAAAAB/+AAAAAAAAP/+AAAAAAAD//+AAAAAAB/8=" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no, user-scalable=no" />
+	<meta charset="UTF-8" />
+	<script type="text/javascript" src="speedtest.js"></script>
+	<script type="text/javascript">
+		function I(i) { return document.getElementById(i); }
+
+		// 测试服务器列表（空列表表示单机模式）
+		var SPEEDTEST_SERVERS = [];
+
+		// QQ 头像按顺序尝试；全部失败时隐藏，不影响页面其余内容。
+		var QQ_AVATAR_URLS = [
+			"https://q1.qlogo.cn/g?b=qq&nk=617616798&s=640",
+			"https://q2.qlogo.cn/headimg_dl?dst_uin=617616798&spec=640",
+			"https://q.qlogo.cn/g?b=qq&nk=617616798&s=140"
+		];
+		var qqAvatarUrlIndex = 0;
+		function loadNextQQAvatar() {
+			var avatar = I("qqAvatar");
+			if (!avatar) return;
+			avatar.classList.remove("loaded");
+			if (qqAvatarUrlIndex >= QQ_AVATAR_URLS.length) {
+				avatar.onerror = null;
+				avatar.style.display = "none";
+				return;
+			}
+			avatar.src = QQ_AVATAR_URLS[qqAvatarUrlIndex++];
+		}
+		function handleQQAvatarLoaded() {
+			var avatar = I("qqAvatar");
+			if (avatar) avatar.classList.add("loaded");
+		}
+		function initPage() {
+			loadNextQQAvatar();
+			initServers();
+		}
+
+		// 初始化 Speedtest 对象
+		var s = new Speedtest();
+		s.setParameter("url_dl", "garbage");
+		s.setParameter("url_ul", "empty");
+		s.setParameter("url_ping", "empty");
+		s.setParameter("url_getIp", "getIP");
+
+		// 关闭自动时长调整，确保下载/上传严格按照设定秒数执行
+		s.setParameter("time_auto", false);
+		// 一个上传流槽必须等待上一请求响应完成后才能复用，保证 1/3/16 档位严格对应在途请求数。
+		s.setParameter("xhr_ulStrictConcurrency", true);
+
+		// ---------- 并发流、测试时长与下载块大小状态 ----------
+		var currentDlConns = 6;
+		var currentUlConns = 3;
+		var currentMultistreamDelay = 300;
+		var currentDuration = 6;   // 单向秒数
+		var currentChunkSize = 2;  // 下载块大小，单位 MB
+
+		// 高亮管理
+		function setActive(btnGroup, activeId) {
+			var btns = document.querySelectorAll('.' + btnGroup);
+			btns.forEach(btn => {
+				if (btn.id === activeId) {
+					btn.classList.add('active');
+				} else {
+					btn.classList.remove('active');
+				}
+			});
+		}
+
+		// 将所有并发流的启动错峰控制在下载预热期（默认 1.5 秒）以内。
+		function calculateMultistreamDelay(dl, ul) {
+			var maxStreams = Math.max(dl, ul);
+			return maxStreams <= 1 ? 0 : Math.floor(1500 / (maxStreams - 1));
+		}
+
+		function syncConnectionParams() {
+			s.setParameter("xhr_dlMultistream", currentDlConns);
+			s.setParameter("xhr_ulMultistream", currentUlConns);
+			s.setParameter("xhr_multistreamDelay", currentMultistreamDelay);
+		}
+
+		function setControlsLocked(locked) {
+			var controls = document.querySelectorAll('.conns-btn, .duration-btn, .chunk-btn');
+			for (var i = 0; i < controls.length; i++) {
+				controls[i].classList.toggle('disabled', locked);
+				controls[i].setAttribute('aria-disabled', locked ? 'true' : 'false');
+				controls[i].tabIndex = locked ? -1 : 0;
+			}
+		}
+
+		// 应用并发流设置（顺序为下载/上传）
+		function applyConns(dl, ul, btnId) {
+			if (s.getState() === 3) {
+				console.warn("测速进行中，请先停止测试再更改并发流数");
+				return false;
+			}
+			dl = Math.min(64, Math.max(1, Math.floor(Number(dl) || 1)));
+			ul = Math.min(64, Math.max(1, Math.floor(Number(ul) || 1)));
+			currentDlConns = dl;
+			currentUlConns = ul;
+			currentMultistreamDelay = calculateMultistreamDelay(dl, ul);
+			syncConnectionParams();
+			setActive('conns-btn', btnId);
+			console.log(`并发流设置: 下载=${dl}, 上传=${ul}, 流启动间隔=${currentMultistreamDelay}ms`);
+			return true;
+		}
+
+		// 应用时长设置 (单向秒数)
+		function applyDuration(seconds, btnId) {
+			if (s.getState() === 3) {
+				console.warn("测速进行中，请先停止测试再更改测试时长");
+				return false;
+			}
+			seconds = Math.min(60, Math.max(1, seconds));
+			s.setParameter("time_dl_max", seconds);
+			s.setParameter("time_ul_max", seconds);
+			// 再次确保自动时长关闭
+			s.setParameter("time_auto", false);
+			currentDuration = seconds;
+			setActive('duration-btn', btnId);
+			console.log(`测试时长设置为 ${seconds} 秒 (下载/上传各自独立运行此秒数)`);
+			return true;
+		}
+
+		// 应用下载测试块大小（单位 MB）
+		function applyChunkSize(megabytes, btnId) {
+			if (s.getState() === 3) {
+				console.warn("测速进行中，请先停止测试再更改测试块大小");
+				return false;
+			}
+			if ([1, 2, 4].indexOf(megabytes) < 0) megabytes = 2;
+			currentChunkSize = megabytes;
+			s.setParameter("garbagePhp_chunkSize", currentChunkSize);
+			setActive('chunk-btn', btnId);
+			console.log(`下载测试块大小设置为 ${currentChunkSize} MB`);
+			return true;
+		}
+
+		// 开始测速前强制同步当前参数，并再次关闭 auto 模式
+		function enforceParamsBeforeStart() {
+			syncConnectionParams();
+			s.setParameter("time_dl_max", currentDuration);
+			s.setParameter("time_ul_max", currentDuration);
+			s.setParameter("garbagePhp_chunkSize", currentChunkSize);
+			s.setParameter("time_auto", false);
+			s.setParameter("xhr_ulStrictConcurrency", true);
+		}
+
+		// ---------- 仪表盘相关（原样保留）----------
+		var meterBk = /Trident.*rv:(\d+\.\d+)/i.test(navigator.userAgent) ? "#EAEAEA" : "#80808040";
+		var dlColor = "#8e8cd8";
+		var ulColor = "#616161";
+		var progColor = meterBk;
+
+		function drawMeter(c, amount, bk, fg, progress, prog) {
+			var ctx = c.getContext("2d");
+			var dp = window.devicePixelRatio || 1;
+			var cw = c.clientWidth * dp, ch = c.clientHeight * dp;
+			var sizScale = ch * 0.0055;
+			if (c.width == cw && c.height == ch) {
+				ctx.clearRect(0, 0, cw, ch);
+			} else {
+				c.width = cw;
+				c.height = ch;
+			}
+			ctx.beginPath();
+			ctx.strokeStyle = bk;
+			ctx.lineWidth = 12 * sizScale;
+			ctx.arc(c.width / 2, c.height - 58 * sizScale, c.height / 1.8 - ctx.lineWidth, -Math.PI * 1.1, Math.PI * 0.1);
+			ctx.stroke();
+			ctx.beginPath();
+			ctx.strokeStyle = fg;
+			ctx.lineWidth = 12 * sizScale;
+			ctx.arc(c.width / 2, c.height - 58 * sizScale, c.height / 1.8 - ctx.lineWidth, -Math.PI * 1.1, amount * Math.PI * 1.2 - Math.PI * 1.1);
+			ctx.stroke();
+			if (typeof progress !== "undefined") {
+				ctx.fillStyle = prog;
+				ctx.fillRect(c.width * 0.3, c.height - 16 * sizScale, c.width * 0.4 * progress, 4 * sizScale);
+			}
+		}
+		function mbpsToAmount(s) {
+			return 1 - (1 / (Math.pow(1.3, Math.sqrt(s))));
+		}
+		function format(d) {
+			d = Number(d);
+			if (d < 10) return d.toFixed(2);
+			if (d < 100) return d.toFixed(1);
+			return d.toFixed(0);
+		}
+		function formatTestTime(date) {
+			function pad2(value) {
+				return value < 10 ? "0" + value : String(value);
+			}
+			return date.getFullYear() + "-" +
+				pad2(date.getMonth() + 1) + "-" +
+				pad2(date.getDate()) + " " +
+				pad2(date.getHours()) + ":" +
+				pad2(date.getMinutes()) + ":" +
+				pad2(date.getSeconds());
+		}
+		function showTestTime() {
+			var timeElement = I("testTime");
+			timeElement.textContent = "测试结束时间： " + formatTestTime(new Date());
+			timeElement.style.display = "block";
+		}
+
+		var uiData = null;
+		function startStop() {
+			if (s.getState() == 3) {
+				s.abort();
+				I("startStopBtn").className = "";
+				I("startStopBtn").setAttribute("aria-label", "Start");
+				I("server").disabled = false;
+				initUI();
+			} else {
+				initUI();
+				enforceParamsBeforeStart();
+				setControlsLocked(true);
+				I("startStopBtn").className = "running";
+				I("startStopBtn").setAttribute("aria-label", "Abort");
+				I("shareArea").style.display = "none";
+				I("server").disabled = true;
+				s.onupdate = function (data) {
+					uiData = data;
+				};
+				s.onend = function (aborted) {
+					I("startStopBtn").className = "";
+					I("startStopBtn").setAttribute("aria-label", "Start");
+					I("server").disabled = false;
+					setControlsLocked(false);
+					updateUI(true);
+					if (!aborted) {
+						showTestTime();
+						try {
+							var testId = uiData.testId;
+							if (testId != null) {
+								var shareURL = window.location.href.substring(0, window.location.href.lastIndexOf("/")) + "/results/?id=" + testId;
+								I("resultsImg").src = shareURL;
+								I("resultsURL").value = shareURL;
+								I("testId").innerHTML = testId;
+								I("shareArea").style.display = "";
+							}
+						} catch (e) { }
+					}
+				};
+				s.start();
+			}
+		}
+		function updateUI(forced) {
+			if (!forced && s.getState() != 3) return;
+			if (uiData == null) return;
+			var status = uiData.testState;
+			I("ip").textContent = uiData.clientIp;
+			I("dlText").textContent = (status == 1 && uiData.dlStatus == 0) ? "..." : format(uiData.dlStatus);
+			drawMeter(I("dlMeter"), mbpsToAmount(Number(uiData.dlStatus * (status == 1 ? oscillate() : 1))), meterBk, dlColor, Number(uiData.dlProgress), progColor);
+			I("ulText").textContent = (status == 3 && uiData.ulStatus == 0) ? "..." : format(uiData.ulStatus);
+			drawMeter(I("ulMeter"), mbpsToAmount(Number(uiData.ulStatus * (status == 3 ? oscillate() : 1))), meterBk, ulColor, Number(uiData.ulProgress), progColor);
+			I("pingText").textContent = format(uiData.pingStatus);
+			I("jitText").textContent = format(uiData.jitterStatus);
+			if (typeof uiData.dlStreamsConfigured !== "undefined") {
+				I("streamInfo").textContent =
+					`本次测试 [下载]配置(${uiData.dlStreamsConfigured})/在途(${uiData.dlPeakRequestsInFlight}) ` +
+					`[上传]配置(${uiData.ulStreamsConfigured})/在途(${uiData.ulPeakRequestsInFlight}) ` +
+					`时长(${currentDuration})秒 下载块(${currentChunkSize})MB`;
+			}
+		}
+		function oscillate() {
+			return 1 + 0.02 * Math.sin(Date.now() / 100);
+		}
+		window.requestAnimationFrame = window.requestAnimationFrame || window.webkitRequestAnimationFrame || window.mozRequestAnimationFrame || window.msRequestAnimationFrame || (function (callback, element) { setTimeout(callback, 1000 / 60); });
+		function frame() {
+			requestAnimationFrame(frame);
+			updateUI();
+		}
+		frame();
+		function initUI() {
+			drawMeter(I("dlMeter"), 0, meterBk, dlColor, 0);
+			drawMeter(I("ulMeter"), 0, meterBk, ulColor, 0);
+			I("dlText").textContent = "";
+			I("ulText").textContent = "";
+			I("pingText").textContent = "";
+			I("jitText").textContent = "";
+			I("ip").textContent = "";
+			I("testTime").textContent = "";
+			I("testTime").style.display = "none";
+			I("streamInfo").textContent =
+				"本次测试 [下载]配置(-)/在途(-) [上传]配置(-)/在途(-) 时长(-)秒 下载块(-)MB";
+		}
+
+		// 服务器初始化
+		function initServers() {
+			if (SPEEDTEST_SERVERS.length == 0) {
+				I("loading").className = "hidden";
+				I("serverArea").style.display = "none";
+				I("testWrapper").className = "visible";
+				initUI();
+				initControls();
+			} else {
+				var noServersAvailable = function () {
+					I("message").innerHTML = "No servers available";
+				}
+				var runServerSelect = function () {
+					s.selectServer(function (server) {
+						if (server != null) {
+							I("loading").className = "hidden";
+							for (var i = 0; i < SPEEDTEST_SERVERS.length; i++) {
+								if (SPEEDTEST_SERVERS[i].pingT == -1) continue;
+								var option = document.createElement("option");
+								option.value = i;
+								option.textContent = SPEEDTEST_SERVERS[i].name;
+								if (SPEEDTEST_SERVERS[i] === server) option.selected = true;
+								I("server").appendChild(option);
+							}
+							I("testWrapper").className = "visible";
+							initUI();
+							initControls();
+						} else {
+							noServersAvailable();
+						}
+					});
+				}
+				if (typeof SPEEDTEST_SERVERS === "string") {
+					s.loadServerList(SPEEDTEST_SERVERS, function (servers) {
+						if (servers == null) noServersAvailable();
+						else {
+							SPEEDTEST_SERVERS = servers;
+							runServerSelect();
+						}
+					});
+				} else {
+					s.addTestPoints(SPEEDTEST_SERVERS);
+					runServerSelect();
+				}
+			}
+		}
+
+		// 初始化按钮事件与默认高亮，使用 title 属性提供悬停说明
+		function initControls() {
+			// 并发按钮
+			var btn11 = I("conns_11");
+			var btn63 = I("conns_63");
+			var btn1616 = I("conns_1616");
+			if (btn11) btn11.onclick = function(e) { e.preventDefault(); applyConns(1, 1, "conns_11"); };
+			if (btn63) btn63.onclick = function(e) { e.preventDefault(); applyConns(6, 3, "conns_63"); };
+			if (btn1616) btn1616.onclick = function(e) { e.preventDefault(); applyConns(16, 16, "conns_1616"); };
+			// 时长按钮
+			var dur2 = I("dur_2");
+			var dur6 = I("dur_6");
+			var dur15 = I("dur_15");
+			if (dur2) dur2.onclick = function(e) { e.preventDefault(); applyDuration(2, "dur_2"); };
+			if (dur6) dur6.onclick = function(e) { e.preventDefault(); applyDuration(6, "dur_6"); };
+			if (dur15) dur15.onclick = function(e) { e.preventDefault(); applyDuration(15, "dur_15"); };
+			// 下载块大小按钮
+			var chunk1 = I("chunk_1");
+			var chunk2 = I("chunk_2");
+			var chunk4 = I("chunk_4");
+			if (chunk1) chunk1.onclick = function(e) { e.preventDefault(); applyChunkSize(1, "chunk_1"); };
+			if (chunk2) chunk2.onclick = function(e) { e.preventDefault(); applyChunkSize(2, "chunk_2"); };
+			if (chunk4) chunk4.onclick = function(e) { e.preventDefault(); applyChunkSize(4, "chunk_4"); };
+			// 设置默认高亮 (6/3、6秒和2MB)
+			setActive('conns-btn', 'conns_63');
+			setActive('duration-btn', 'dur_6');
+			setActive('chunk-btn', 'chunk_2');
+			// 初始化参数存储
+			currentDlConns = 6; currentUlConns = 3; currentDuration = 6; currentChunkSize = 2;
+			currentMultistreamDelay = calculateMultistreamDelay(currentDlConns, currentUlConns);
+			syncConnectionParams();
+			s.setParameter("time_dl_max", 6);
+			s.setParameter("time_ul_max", 6);
+			s.setParameter("garbagePhp_chunkSize", 2);
+			s.setParameter("time_auto", false);
+			s.setParameter("xhr_ulStrictConcurrency", true);
+			setControlsLocked(false);
+		}
+	</script>
+	<style type="text/css">
+		html, body { border: none; padding: 0; margin: 0; background: #FFFFFF; color: #202020; }
+		body { position: relative; min-height: 100vh; overflow-x: hidden; text-align: center; font-family: "Roboto", sans-serif; }
+		body::before {
+			content: "";
+			position: fixed;
+			inset: -18%;
+			z-index: 0;
+			pointer-events: none;
+			background:
+				radial-gradient(circle at 18% 22%, rgba(142, 140, 216, 0.13), transparent 28%),
+				radial-gradient(circle at 82% 68%, rgba(111, 181, 214, 0.10), transparent 27%);
+			animation: ambientDrift 18s ease-in-out infinite alternate;
+			will-change: transform;
+		}
+		body > * { position: relative; z-index: 1; }
+		h1 { color: #404040; }
+		.title-row {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			gap: 0.55em;
+			margin: 0.67em 0;
+			animation: softRise 0.55s ease-out both;
+		}
+		.title-row h1 {
+			margin: 0;
+		}
+		#qqAvatar {
+			visibility: hidden;
+			width: 3.15em;
+			height: 3.15em;
+			flex: 0 0 3.15em;
+			border: 0.13em solid #8e8cd8;
+			border-radius: 50%;
+			box-sizing: border-box;
+			object-fit: cover;
+			box-shadow: 0 0.18em 0.55em rgba(0, 0, 0, 0.18);
+		}
+		#qqAvatar.loaded {
+			visibility: visible;
+			animation: avatarReveal 0.5s ease-out both;
+		}
+		/* 通用链接行 */
+		.links-row { margin: 0.8em 0 1.2em 0; display: flex; justify-content: center; flex-wrap: wrap; gap: 1.5em; }
+		.links-row a { color: #8e8cd8; text-decoration: none; font-size: 0.9em; padding: 0.2em 0.4em; transition: color 0.2s, text-decoration 0.2s; }
+		.links-row a:hover { color: #b0a8ff; text-decoration: underline; }
+		/* 设置栏：桌面三列、移动端三行，避免出现不平衡的 2+1 换行 */
+		.control-group {
+			width: min(72em, calc(100% - 2em));
+			box-sizing: border-box;
+			margin: 1em auto 0.8em;
+			padding: 0.55em;
+			background: rgba(245, 245, 249, 0.88);
+			border: 1px solid rgba(142, 140, 216, 0.18);
+			border-radius: 1.25em;
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 0.55em;
+			font-size: 0.9em;
+			box-shadow: 0 0.45em 1.4em rgba(55, 52, 100, 0.08);
+			animation: softRise 0.5s 0.08s ease-out both;
+		}
+		/* 每个设置组都是一张紧凑卡片，标签与三个档位始终同行 */
+		.control-group .sub-group {
+			display: grid;
+			grid-template-columns: auto repeat(3, minmax(2.4em, 1fr));
+			align-items: center;
+			gap: 0.35em;
+			min-width: 0;
+			padding: 0.5em 0.6em;
+			background: rgba(255, 255, 255, 0.72);
+			border: 1px solid rgba(142, 140, 216, 0.13);
+			border-radius: 0.9em;
+			box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+			white-space: nowrap;
+			transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+		}
+		.control-group span.label {
+			font-weight: 600;
+			color: #3a3a44;
+			text-align: left;
+		}
+		.control-group a {
+			color: #8e8cd8;
+			text-decoration: none;
+			font-weight: 500;
+			padding: 0.3em 0.45em;
+			border-radius: 0.7em;
+			background-color: #ffffff;
+			transition: transform 0.16s ease, background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+			cursor: pointer;
+			border: 1px solid #ddd0ff;
+			box-sizing: border-box;
+			text-align: center;
+		}
+		.control-group a.active {
+			background: linear-gradient(135deg, #9a97e4, #7f7dcc);
+			color: white;
+			border-color: #8e8cd8;
+			box-shadow: 0 0.18em 0.5em rgba(91, 87, 176, 0.24);
+		}
+		.control-group a.disabled {
+			pointer-events: none;
+			opacity: 0.55;
+			cursor: not-allowed;
+		}
+		.divider { display: none; }
+		@media (hover: hover) {
+			.control-group .sub-group:hover {
+				transform: translateY(-1px);
+				border-color: rgba(142, 140, 216, 0.3);
+				box-shadow: 0 0.35em 0.9em rgba(70, 66, 130, 0.08);
+			}
+			.control-group a:hover:not(.active) {
+				transform: translateY(-1px);
+				background-color: #e8e6ff;
+				box-shadow: 0 0.18em 0.45em rgba(91, 87, 176, 0.12);
+			}
+		}
+		#streamInfo {
+			margin: 0.15em auto 0;
+			max-width: 58em;
+			padding: 0 1em;
+			color: #777;
+			font-size: 0.75em;
+			line-height: 1.15;
+		}
+		#testTime {
+			display: none;
+			margin-top: 0.2em;
+			color: #8e8cd8;
+			font-size: 0.82em;
+			line-height: 1.2;
+		}
+		/* 平板与手机固定为三行，每行均匀占满，杜绝 2+1 换行 */
+		@media all and (max-width: 800px) {
+			.control-group {
+				width: min(32em, calc(100% - 1em));
+				grid-template-columns: minmax(0, 1fr);
+				gap: 0.4em;
+				padding: 0.45em;
+				font-size: 0.84em;
+				border-radius: 1em;
+			}
+			.control-group .sub-group {
+				grid-template-columns: minmax(8.8em, 1.45fr) repeat(3, minmax(2.4em, 0.55fr));
+				gap: 0.32em;
+				padding: 0.48em 0.55em;
+			}
+			.control-group a {
+				padding: 0.32em 0.3em;
+			}
+		}
+		@media all and (max-width: 370px) {
+			.control-group {
+				width: calc(100% - 0.6em);
+				font-size: 0.76em;
+			}
+			.control-group .sub-group {
+				grid-template-columns: minmax(8.2em, 1.35fr) repeat(3, minmax(2.3em, 0.55fr));
+				padding: 0.44em;
+			}
+		}
+		@media all and (prefers-color-scheme: dark) {
+			.control-group { background: rgba(44, 44, 52, 0.9); border-color: rgba(142, 140, 216, 0.28); }
+			.control-group .sub-group { background: rgba(55, 55, 66, 0.84); border-color: rgba(142, 140, 216, 0.2); box-shadow: none; }
+			.control-group span.label { color: #ccc; }
+			.control-group a { background-color: #3a3a44; border-color: #5e5b9e; color: #bdb8ff; }
+			.control-group a.active { background: linear-gradient(135deg, #9a97e4, #7774c1); color: #171720; border-color: #8e8cd8; }
+			.control-group a:hover:not(.active) { background-color: #4a4a5a; }
+		}
+		@keyframes softRise {
+			from { opacity: 0; transform: translateY(0.55em); }
+			to { opacity: 1; transform: translateY(0); }
+		}
+		@keyframes avatarReveal {
+			from { opacity: 0; transform: scale(0.88) rotate(-4deg); }
+			to { opacity: 1; transform: scale(1) rotate(0); }
+		}
+		@keyframes ambientDrift {
+			from { transform: translate3d(-1.2%, -0.8%, 0) scale(1); }
+			to { transform: translate3d(1.2%, 0.8%, 0) scale(1.035); }
+		}
+		@media (prefers-reduced-motion: reduce) {
+			*, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+			.control-group .sub-group, .control-group a { transition: none !important; }
+		}
+		/* 其他原有样式 */
+		#loading { background-color: #FFFFFF; color: #404040; text-align: center; }
+		span.loadCircle { display: inline-block; width: 2em; height: 2em; vertical-align: middle; background: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAMAAAD04JH5AAAAP1BMVEUAAAB2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZyFzwnAAAAFHRSTlMAEvRFvX406baecwbf0casimhSHyiwmqgAAADpSURBVHja7dbJbQMxAENRahnN5lkc//5rDRAkDeRgHszXgACJoKiIiIiIiIiIiIiIiIiIiIj4HHspsrpAVhdVVguzrA4OWc10WcEqpwKbnBo0OU1Q5NSpsoJFTgOecrrdEag85DRgktNqfoEdTjnd7hrEHMEJvmRUYJbTYk5Agy6nau6Abp5Cm7mDBtRdPi9gyKdU7w4p1fsLvyqs8hl4z9/w3n/Hmr9WoQ65lAU4d7lMYOz//QboRR5jBZibLMZdAR6O/Vfa1PlxNr3XdS3HzK/HVPRu/KnLs8iAOh993VpRRERERMT/fAN60wwWaVyWwAAAAABJRU5ErkJggg=='); background-size: 2em 2em; margin-right: 0.5em; animation: spin 0.6s linear infinite; }
+		@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(359deg); } }
+		#startStopBtn { display: inline-block; margin: 0 auto; color: #8e8cd8; background-color: rgba(0, 0, 0, 0); border: 0.15em solid #8e8cd8; padding: 0; font: inherit; border-radius: 0.3em; transition: all 0.3s; box-sizing: border-box; width: 8em; height: 3em; line-height: 2.7em; cursor: pointer; box-shadow: 0 0 0 rgba(0, 0, 0, 0.1), inset 0 0 0 rgba(0, 0, 0, 0.1); }
+		#startStopBtn:hover { box-shadow: 0 0 2em rgba(0, 0, 0, 0.1), inset 0 0 1em rgba(0, 0, 0, 0.1); }
+		#startStopBtn.running { background-color: #FF3030; border-color: #FF6060; color: #FFFFFF; }
+		#startStopBtn:before { content: "Start"; }
+		#startStopBtn.running:before { content: "Abort"; }
+		#serverArea { margin-top: 1em; }
+		#server { font-size: 1em; padding: 0.2em; }
+		#test { margin-top: 2em; margin-bottom: 12em; }
+		div.testArea { display: inline-block; width: 16em; height: 12.5em; position: relative; box-sizing: border-box; }
+		div.testArea2 { display: inline-block; width: 14em; height: 7em; position: relative; box-sizing: border-box; text-align: center; }
+		div.testArea div.testName { position: absolute; top: 0.1em; left: 0; width: 100%; font-size: 1.4em; z-index: 9; }
+		div.testArea2 div.testName { display: block; text-align: center; font-size: 1.4em; }
+		div.testArea div.meterText { position: absolute; bottom: 1.55em; left: 0; width: 100%; font-size: 2.5em; z-index: 9; }
+		div.testArea2 div.meterText { display: inline-block; font-size: 2.5em; }
+		div.meterText:empty:before { content: "0.00"; }
+		div.testArea div.unit { position: absolute; bottom: 2em; left: 0; width: 100%; z-index: 9; }
+		div.testArea2 div.unit { display: inline-block; }
+		div.testArea canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+		div.testGroup { display: block; margin: 0 auto; }
+		#shareArea { width: 95%; max-width: 40em; margin: 0 auto; margin-top: 2em; }
+		#shareArea>* { display: block; width: 100%; height: auto; margin: 0.25em 0; }
+		#privacyPolicy { position: fixed; top: 2em; bottom: 2em; left: 2em; right: 2em; overflow-y: auto; width: auto; height: auto; box-shadow: 0 0 1.2em 0.25em rgba(142, 140, 216, 0.58); border: 1px solid rgba(142, 140, 216, 0.72); z-index: 999999; text-align: left; background-color: #FFFFFF; padding: 1em; }
+		a.privacy { display: inline-block; text-align: center; font-size: 0.82em; color: #FFFFFF; background: #8e8cd8; border: 1px solid #8e8cd8; border-radius: 1.1em; padding: 0.4em 1.2em; text-decoration: none; transition: background-color 0.2s, box-shadow 0.2s; }
+		a.privacy:hover { color: #FFFFFF; background: #7773c8; box-shadow: 0 0.12em 0.45em rgba(142, 140, 216, 0.4); text-decoration: none; }
+		div.closePrivacyPolicy { position: sticky; top: 0; width: 100%; box-sizing: border-box; text-align: right; padding: 0.15em 0 0.55em; background-color: inherit; z-index: 2; }
+		@media all and (max-width:40em) { body { font-size: 0.8em; } }
+		div.visible { animation: fadeIn 0.4s; display: block; }
+		div.hidden { animation: fadeOut 0.4s; display: none; }
+		@keyframes fadeIn { 0% { opacity: 0; } 100% { opacity: 1; } }
+		@keyframes fadeOut { 0% { display: block; opacity: 1; } 100% { display: block; opacity: 0; } }
+		@media all and (prefers-color-scheme: dark) {
+			html, body, #loading { background: #202020; color: #F4F4F4; color-scheme: dark; }
+			h1 { color: #E0E0E0; }
+			a { color: #8e8cd8; }
+			#privacyPolicy { background: #000000; }
+			#resultsImg { filter: invert(1); }
+		}
+	</style>
+	<title>NICX_LibreSpeed ✧ 网络综合查询器X</title>
+</head>
+
+<body onload="initPage()">
+<div class="title-row">
+	<img id="qqAvatar" alt="QQ头像" referrerpolicy="no-referrer" decoding="async"
+		onload="handleQQAvatarLoaded()" onerror="loadNextQQAvatar()" />
+	<h1>NICX_LibreSpeed</h1>
+</div>
+<p style="text-align: center; font-size: 0.75em; color: #8e8cd8; margin-top: -10px;">网络综合查询器X ✧ NetInfoCheckerX by Yumeyo</p>
+<p style="text-align: center; font-size: 0.85em; color: #888; margin-top: -10px;">🔰一键启动LibreSpeed测速服务器, 支持绑定网卡测试🔰</p>
+
+	<div id="loading" class="visible">
+		<p id="message"><span class="loadCircle"></span>Selecting a server...</p>
+	</div>
+	<div id="testWrapper" class="hidden">
+		<button id="startStopBtn" onclick="startStop()" aria-label="Start"></button><br />
+
+		<!-- 并发数、时长与下载块大小控制栏，使用 title 属性提供悬停说明 -->
+		<div class="control-group">
+			<span class="sub-group">
+				<span class="label">🌐下/上并发</span>
+				<a href="#" id="conns_11" class="conns-btn" title="1/1：请求单线程测试 (仅做发起尝试, 具体线程数以实际为准)">1/1</a>
+				<a href="#" id="conns_63" class="conns-btn" title="6/3：LibreSpeed默认线程数 (仅做发起尝试, 具体线程数以实际为准)">6/3</a>
+				<a href="#" id="conns_1616" class="conns-btn" title="16/16：请求更多并发线程数 (仅做发起尝试, 具体线程数以实际为准)">16/16</a>
+			</span>
+			<span class="divider">|</span>
+			<span class="sub-group">
+				<span class="label">⏰测试时长 (秒)</span>
+				<a href="#" id="dur_2" class="duration-btn" title="2 中科大测速网风格">2</a>
+				<a href="#" id="dur_6" class="duration-btn" title="6 LibreSpeed默认测试时长">6</a>
+				<a href="#" id="dur_15" class="duration-btn" title="15 延长测试时间获得更准结果">15</a>
+			</span>
+			<span class="divider">|</span>
+			<span class="sub-group">
+				<span class="label">📦下载块 (MB)</span>
+				<a href="#" id="chunk_1" class="chunk-btn" title="1MB：LibreSpeed默认">1</a>
+				<a href="#" id="chunk_2" class="chunk-btn" title="2MB：查询器X默认">2</a>
+				<a href="#" id="chunk_4" class="chunk-btn" title="4MB：增加块大小，适配高速网络">4</a>
+			</span>
+		</div>
+		<div id="streamInfo" role="status" aria-live="polite"></div>
+
+		<div id="serverArea">
+			服务器: <select id="server" onchange="s.setSelectedServer(SPEEDTEST_SERVERS[this.value])"></select>
+		</div>
+		<div id="test">
+			<div class="testGroup">
+				<div class="testArea2">
+					<div class="testName">Ping/延迟</div>
+					<div id="pingText" class="meterText" style="color:#AA6060"></div>
+					<div class="unit">ms</div>
+				</div>
+				<div class="testArea2">
+					<div class="testName">Jitter/抖动</div>
+					<div id="jitText" class="meterText" style="color:#AA6060"></div>
+					<div class="unit">ms</div>
+				</div>
+			</div>
+			<div class="testGroup">
+				<div class="testArea">
+					<div class="testName">Download/下载</div>
+					<canvas id="dlMeter" class="meter"></canvas>
+					<div id="dlText" class="meterText"></div>
+					<div class="unit">Mbit/s</div>
+				</div>
+				<div class="testArea">
+					<div class="testName">Upload/上传</div>
+					<canvas id="ulMeter" class="meter"></canvas>
+					<div id="ulText" class="meterText"></div>
+					<div class="unit">Mbit/s</div>
+				</div>
+			</div>
+			<div id="ipArea">
+				<span id="ip"></span>
+				<div id="testTime"></div>
+			</div>
+
+			<div class="links-row">
+				<a href="#" onclick="I('privacyPolicy').style.display=''">隐私说明&介绍关于</a>
+				<a href="https://github.com/librespeed/speedtest" target="_blank">LibreSpeed源码</a>
+				<a href="https://github.com/Yumeyo23/NetInfoCheckerX" target="_blank">查询器X项目主页</a>
+			</div>
+
+			<div id="shareArea" style="display:none">
+				<h3>分享测试结果</h3>
+				<p>测试ID: <span id="testId"></span></p>
+				<input type="text" value="" id="resultsURL" readonly="readonly"
+					onclick="this.select();this.focus();this.select();document.execCommand('copy');alert('Link copied')" />
+				<img src="" id="resultsImg" />
+			</div>
+		</div><br>
+	</div>
+	<div id="privacyPolicy" style="display:none">
+		<div class="closePrivacyPolicy">
+			<a class="privacy" href="#" aria-label="关闭隐私说明"
+				onclick="I('privacyPolicy').style.display='none'; return false;">关闭 ✕</a>
+		</div>
+		<h2>隐私说明&介绍关于</h2>
+		<p>这里是 网络综合查询器X 的 LibreSpeed开服器 功能； 测速数据完全本地，不会上传测速结果；标题头像是从腾讯QQ的API加载，无任何隐私获取！</p>
+		<p><b>本测试服务器是基于LibreSpeed修改而成，简单修改如下：</b></p>
+		<p>📂 删除绝大部分可选内容(新版主题、分享结果、IP地理位置显示等)，减小文件体积</p>
+		<p>🍎 下载测试块大小支持1MB、2MB（默认）、4MB三档，以适应不同网速与设备性能</p>
+		<p>💡 UI界面适当修改, 适配整个查询器X的主题</p>
+		<p>✨ 允许调整上下行并发连接数（1/1、6/3、16/16）、测试时长（2/6/15秒）和下载块大小（1/2/4MB），模拟中科大/LibreSpeed/OpenSpeedtest风格
+		<p>注意： 修改连接数仅表示做出修改尝试，浏览器可能会覆盖实际生效的连接数。此处仅供参考，以实际测速结果为准
+		<p>其他地方未做修改</p>
+		<h4>源码: 点击"LibreSpeed源码"链接</h4>
+		<h2>欢迎使用 网络综合查询器X 这是一款以小而美为理念的全能工具箱</h2>
+		<p>核心功能为查询/记录/修改本机IP、多出口测试(简洁版/Dashboard)、NAT类型测试、TCP/UDP/ICMP全协议Ping+/Trace+、最大连接数测试、DNS劫持测试、DNS解析测速、UPnP控制台、IPERF内网测速、本机配置检测、延迟(到骨干网/CS2)测试、一键/Renew、IPv6有效期查询、手动查询IP/MAC地址、快速跳转控制面板、速查剪贴板、悬浮显示信息等。</p>
+		<p>GitHub地址：https://github.com/Yumeyo23/NetInfoCheckerX</p>
+		<br />
+	</div>
+</body>
+
+</html>
