@@ -1,16 +1,28 @@
-# NICX_LibreSpeed
+LibreSpeed — Source and License Information
 
-本目录保存网络综合查询器X（NetInfoCheckerX）使用的LibreSpeed组件对应源码。
+Upstream: https://github.com/librespeed/speedtest
 
-- Upstream: https://github.com/librespeed/speedtest
-- License: LGPL-3.0-or-later
-- Included files: 
-  - [speedtest_worker.js](https://github.com/user-attachments/files/33376696/speedtest_worker.js)
-  - [speedtest.js](https://github.com/user-attachments/files/33376694/speedtest.js)
-  - [index.html](https://github.com/user-attachments/files/33376693/index.html)
-- Modifications:
-  - 调整精简部分组件、整合深浅色主题以便于分发
-  - 增加数据块大小、测试时长等选项（置于前端）便于测试
-  - 修改UI符合软件主题
-  
-本目录中的 LibreSpeed 代码依照上游许可证使用。请同时参阅本目录中的 LICENSE 文件。
+Version / Release: 6.1.0
+
+Source code: https://github.com/librespeed/speedtest/archive/refs/tags/v6.1.0.zip
+
+License: LGPL-3.0-or-later
+
+Included files: 
+- [speedtest_worker.js](https://github.com/Yumeyo23/NetInfoCheckerX/blob/main/third_party/LibreSpeed/speedtest_worker.js)
+- [speedtest.js](https://github.com/Yumeyo23/NetInfoCheckerX/blob/main/third_party/LibreSpeed/speedtest.js)
+- [index.html](https://github.com/Yumeyo23/NetInfoCheckerX/blob/main/third_party/LibreSpeed/index.html)
+
+Modifications:
+
+EN
+
+- Adjust and streamline some components, integrate light and dark color themes to facilitate distribution
+- Increase options such as data block size and test duration (placed on the front end) for easier testing
+- Modify the UI to be in line with the software theme
+
+CN 
+
+- 调整精简部分组件、整合深浅色主题以便于分发
+- 增加数据块大小、测试时长等选项（置于前端）便于测试
+- 修改UI符合软件主题
