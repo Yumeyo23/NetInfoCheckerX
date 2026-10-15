@@ -546,8 +546,7 @@ namespace NetInfoCheckerX
         {
             _ = ApplyDNSTestThemeAsync();
             string NowTime = Others.GetCurrentTime();
-            lblVersion.Text = Global.exeName + " " + Global.Version + " | " + NowTime;
-            timer1.Start();
+            lblVersion.Text = Global.exeName + " " + Global.Version;
             CloudControl.UsedTimesCounter("DNS劫持");
             LoadSettings();
         }
@@ -555,10 +554,8 @@ namespace NetInfoCheckerX
         private void DNSTest_FormClosing(object sender, FormClosingEventArgs e)
         {
             SaveSettings();
-            timer1.Stop();
             _testCts?.Cancel();
             _testCts?.Dispose();
-            timer1.Dispose();
         }
 
         private async void btnStart1_Click(object sender, EventArgs e)
