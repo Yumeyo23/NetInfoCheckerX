@@ -444,6 +444,44 @@ namespace NetInfoCheckerX
             }
         }
 
+        /// <summary>
+        /// IPv6 额外验证方法。必须含冒号，避免 IPAddress.TryParse 把 "1"
+        /// 一类的纯数字串当成 0.0.0.1。大小写不敏感，不需要写 []。
+        /// </summary>
+        public static bool IsValidIPv6(string ip)
+        {
+            if (string.IsNullOrWhiteSpace(ip)) return false;
+
+            string candidate = ip.Trim();
+            if (candidate.IndexOf(':') < 0) return false;
+
+            try
+            {
+                return IPAddress.TryParse(candidate, out IPAddress address) &&
+                    address.AddressFamily == AddressFamily.InterNetworkV6;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 同时接受 IPv4 与 IPv6 的验证方法，返回规范化后的地址文本。
+        /// </summary>
+        public static bool TryNormalizeIP(string ip, out string normalized)
+        {
+            normalized = null;
+            if (string.IsNullOrWhiteSpace(ip)) return false;
+
+            string candidate = ip.Trim();
+            if (!IsValidIPv4(candidate) && !IsValidIPv6(candidate)) return false;
+
+            normalized = IPAddress.TryParse(candidate, out IPAddress address)
+                ? address.ToString() : candidate;
+            return true;
+        }
+
         #endregion
 
         #region Unicode 解码
