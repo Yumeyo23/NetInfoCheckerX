@@ -848,7 +848,6 @@ namespace NetInfoCheckerX
         private bool TryGetBatchFileRequest(out string filePath)
         {
             filePath = null;
-            if (!Global.isYumeyo) return false;
 
             string input = comboServer.Text == null ? string.Empty : comboServer.Text.Trim().Trim('"');
             if (!input.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)) return false;
@@ -1140,7 +1139,7 @@ namespace NetInfoCheckerX
 
         private string GetUniqueBatchOutputPath(string desktop)
         {
-            string baseName = "STUN批量测试_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string baseName = "NICX_NATTests_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
             string path = Path.Combine(desktop, baseName + ".txt");
             int suffix = 2;
             while (File.Exists(path))
