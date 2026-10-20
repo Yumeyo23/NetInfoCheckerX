@@ -5,7 +5,8 @@
 
 Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) By Yumeyo
 
-<img width="3000" height="1875" alt="功能预览260807" src="https://github.com/user-attachments/assets/9ce6d005-26c1-446c-9241-3934761d5626" />
+<img width="3000" height="1875" alt="功能预览261020" src="https://github.com/user-attachments/assets/4163d9cf-fd21-4cae-a0c1-5da533216162" />
+
 
 《网络综合查询器X》是由與夢Yumeyo原创开发、基于易语言版《[网络综合查询器](https://github.com/Yumeyo23/NetInfoChecker)》重制、以“小而美”为设计理念的全能向网络工具箱，适合网络爱好者常备日常使用。
 
@@ -38,7 +39,7 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 
 核心功能大图预览，多图警告~
 
-<img width="3000" height="1875" alt="核心功能260917_06##" src="https://github.com/user-attachments/assets/5964b073-7c35-463b-99eb-c72587d792b5" />
+<img width="3000" height="1875" alt="核心功能261020_06##" src="https://github.com/user-attachments/assets/1653ef5e-a636-462a-bd77-8e5d3249cd88" />
 
 <img width="3000" height="1875" alt="核心功能260917_07##" src="https://github.com/user-attachments/assets/ba870425-43d4-4b95-9d00-88ac1bd5a84d" />
 
