@@ -85,7 +85,7 @@ namespace NetInfoCheckerX
             this.FormClosing += iPerfGUI_FormClosing;
         }
 
-        private void btnClientStart_Click(object sender, EventArgs e)
+        private async void btnClientStart_Click(object sender, EventArgs e)
         {
             EnsureClientNICValid();
 
@@ -150,20 +150,18 @@ namespace NetInfoCheckerX
                 arguments.Append(" -b ").Append(normalizedLimit).Append("M");
 
             string iperfArguments = arguments.ToString();
-
             string direction = chkWay.Checked ? "下载" : "上传";
             string protocol = chkTCP.Checked ? "TCP" : "UDP";
             string threads = numThread.Value.ToString(CultureInfo.InvariantCulture);
             string limit = string.IsNullOrEmpty(normalizedLimit) ? "无" : normalizedLimit;
             string time = numTime.Value.ToString(CultureInfo.InvariantCulture);
-            string port = clientPort.ToString(CultureInfo.InvariantCulture);
             string nicDisplay = string.IsNullOrEmpty(bindNIC) ? "系统默认" : bindNIC;
 
-            string command = string.Join(" & ", new[]
+            string decoratedCommand = string.Join(" & ", new[]
             {
                 "chcp 65001 >nul 2>&1",
                 "echo ^>^>^>本次iperf运行参数：",
-                $"echo ● 服务器[{serverIp}]  端口[{port}]  使用网卡[{nicDisplay}]",
+                $"echo ● 服务器[{serverIp}]  端口[{clientPort}]  使用网卡[{nicDisplay}]",
                 $"echo 方向[{direction}]  协议[{protocol}]  线程[{threads}]  限速[{limit}]Mbps  时长[{time}]秒",
                 "echo ……………………………………………………………………………………",
                 $"\"{iperfPath}\" {iperfArguments} -f m",
@@ -172,13 +170,42 @@ namespace NetInfoCheckerX
                 "pause >nul"
             });
 
+            btnClientStart.Enabled = false;
             try
             {
-                StartCommandWindow(command, keepOpen: false);
+                Process decoratedWindow = null;
+                try
+                {
+                    decoratedWindow = StartCommandWindow(decoratedCommand, keepOpen: false);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"带说明文字的 iPerf 窗口未能启动，将尝试兼容命令: {ex.Message}");
+                }
+
+                bool closedImmediately = decoratedWindow == null;
+                if (decoratedWindow != null)
+                {
+                    using (decoratedWindow)
+                    {
+                        // 成功命令会运行测速并停在 pause；若 cmd 很快退出，视为拼接命令未能正常启动。
+                        closedImmediately = await Task.Run(() => decoratedWindow.WaitForExit(1500));
+                    }
+                }
+
+                if (closedImmediately)
+                {
+                    Debug.WriteLine("iPerf 命令窗口快速退出，改用单条兼容命令启动客户端");
+                    using (StartCommandWindow($"\"{iperfPath}\" {iperfArguments} -f m", keepOpen: true)) { }
+                }
             }
             catch (Exception ex)
             {
                 MessageBox.Show("启动 IPERF 失败：\n" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (!IsDisposed && !Disposing) btnClientStart.Enabled = true;
             }
         }
 
@@ -216,7 +243,7 @@ namespace NetInfoCheckerX
             string iperfArguments = arguments.ToString();
             try
             {
-                StartCommandWindow($"\"{iperfPath}\" {iperfArguments}", keepOpen: true);
+                using (StartCommandWindow($"\"{iperfPath}\" {iperfArguments}", keepOpen: true)) { }
             }
             catch (Exception ex)
             {
@@ -256,7 +283,7 @@ namespace NetInfoCheckerX
             return true;
         }
 
-        private static void StartCommandWindow(string command, bool keepOpen)
+        private static Process StartCommandWindow(string command, bool keepOpen)
         {
             string mode = keepOpen ? "/k" : "/c";
             var startInfo = new ProcessStartInfo
@@ -267,7 +294,7 @@ namespace NetInfoCheckerX
                 WorkingDirectory = Application.StartupPath
             };
 
-            using (Process.Start(startInfo)) { }
+            return Process.Start(startInfo);
         }
 
         private void chkWay_CheckedChanged(object sender, EventArgs e)
