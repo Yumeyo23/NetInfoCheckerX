@@ -56,6 +56,7 @@ namespace NetInfoCheckerX
         private bool _loadedSlaac;
         private bool _loadedSlaacDns;
         private bool _loadedIPv6StackEnabled;
+        private string _loadedNicId;
         private bool _loadingNicInfo;
         private bool _ipv4AddressDirty;
         private bool _ipv4DnsDirty;
@@ -308,20 +309,22 @@ namespace NetInfoCheckerX
 
         private void LoadNicInfo(NetworkInterface nic)
         {
+            bool preserveIPv6Options = string.Equals(_loadedNicId, nic.Id, StringComparison.OrdinalIgnoreCase);
             _loadingNicInfo = true;
             try
             {
-                LoadNicInfoCore(nic);
+                LoadNicInfoCore(nic, preserveIPv6Options);
             }
             finally
             {
+                _loadedNicId = nic.Id;
                 _loadingNicInfo = false;
                 UpdateIPv6OptionsEnabledState();
                 ResetDirtyState();
             }
         }
 
-        private void LoadNicInfoCore(NetworkInterface nic)
+        private void LoadNicInfoCore(NetworkInterface nic, bool preserveIPv6Options)
         {
             if (!NicHelper.TryGetIPProperties(nic, out IPInterfaceProperties props))
             {
@@ -330,7 +333,15 @@ namespace NetInfoCheckerX
                 SyncTxtMaskFromIpMask();
                 checkDNS.Checked = true;
                 ipDNS1.Text = ipDNS2.Text = "0.0.0.0";
-                ResetIPv6Controls();
+                if (!preserveIPv6Options)
+                {
+                    ResetIPv6Controls();
+                }
+                else
+                {
+                    _loadedIPv6StackEnabled = false;
+                    checkIPV6State.Checked = false;
+                }
                 txtMAC.Text = nic.GetPhysicalAddress().ToString();
                 return;
             }
@@ -380,7 +391,7 @@ namespace NetInfoCheckerX
                 ipDNS2.Text = liveDns.Count > 1 ? liveDns[1] : "0.0.0.0";
             }
 
-            LoadIPv6Info(nic, props);
+            LoadIPv6Info(nic, props, preserveIPv6Options);
 
             try
             {
@@ -504,11 +515,23 @@ namespace NetInfoCheckerX
             txtV6DNS1.Text = txtV6DNS2.Text = "::";
         }
 
-        private void LoadIPv6Info(NetworkInterface nic, IPInterfaceProperties props)
+        private void LoadIPv6Info(NetworkInterface nic, IPInterfaceProperties props, bool preserveIPv6Options)
         {
+            bool stackEnabled = nic.Supports(NetworkInterfaceComponent.IPv6);
+            if (!stackEnabled)
+            {
+                if (!preserveIPv6Options)
+                {
+                    ResetIPv6Controls();
+                }
+                _loadedIPv6StackEnabled = false;
+                checkIPV6State.Checked = false;
+                return;
+            }
+
             ResetIPv6Controls();
-            _loadedIPv6StackEnabled = nic.Supports(NetworkInterfaceComponent.IPv6);
-            checkIPV6State.Checked = _loadedIPv6StackEnabled;
+            _loadedIPv6StackEnabled = true;
+            checkIPV6State.Checked = true;
 
             int interfaceIndex;
             try
@@ -821,6 +844,29 @@ namespace NetInfoCheckerX
             txtV6DNS2.Enabled = ipv6Enabled && !checkIPv6DNS.Checked;
         }
 
+        private static async Task WaitForIPv6BindingStateAsync(string nicId, bool expectedEnabled)
+        {
+            for (int attempt = 0; attempt < 16; attempt++)
+            {
+                try
+                {
+                    NetworkInterface current = NetworkInterface.GetAllNetworkInterfaces()
+                        .FirstOrDefault(item => string.Equals(item.Id, nicId, StringComparison.OrdinalIgnoreCase));
+                    if (current != null && current.Supports(NetworkInterfaceComponent.IPv6) == expectedEnabled)
+                    {
+                        // Give router discovery and DHCPv6 a moment to restore their active state.
+                        await Task.Delay(expectedEnabled ? 750 : 150);
+                        return;
+                    }
+                }
+                catch
+                {
+                }
+
+                await Task.Delay(250);
+            }
+        }
+
         private sealed class AdminCommand
         {
             public string Title { get; set; }
@@ -1093,6 +1139,8 @@ namespace NetInfoCheckerX
             bool applyIPv6Options = checkChangeIPV6State.Checked
                 ? checkIPV6State.Checked
                 : _loadedIPv6StackEnabled;
+            bool ipv6BindingChanged = checkChangeIPV6State.Checked &&
+                checkIPV6State.Checked != _loadedIPv6StackEnabled;
             bool dhcpv6Changed = checkDHCPv6.Checked != _loadedDHCPv6;
             bool dhcpv6DnsChanged = checkDHCPv6DNS.Checked != _loadedDHCPv6Dns;
             bool slaacChanged = checkSLAAC.Checked != _loadedSlaac;
@@ -1102,7 +1150,7 @@ namespace NetInfoCheckerX
                 !string.Equals(txtV6DNS2.Text, _loadedIPv6Dns2, StringComparison.OrdinalIgnoreCase);
 
             // When IPv6 is being enabled, bind the protocol before applying its options.
-            if (checkChangeIPV6State.Checked && checkIPV6State.Checked)
+            if (ipv6BindingChanged && checkIPV6State.Checked)
             {
                 AddCommand(commands, "IPv6 协议栈", $"powershell -NoProfile -NonInteractive -Command \"Enable-NetAdapterBinding -Name '{escapedNicName}' -ComponentID ms_tcpip6 -Confirm:$false\"");
             }
@@ -1187,7 +1235,7 @@ namespace NetInfoCheckerX
 
             // When IPv6 is being disabled, apply the binding change last and skip all
             // subordinate IPv6 settings because they cannot have an effect.
-            if (checkChangeIPV6State.Checked && !checkIPV6State.Checked)
+            if (ipv6BindingChanged && !checkIPV6State.Checked)
             {
                 AddCommand(commands, "IPv6 协议栈", $"powershell -NoProfile -NonInteractive -Command \"Disable-NetAdapterBinding -Name '{escapedNicName}' -ComponentID ms_tcpip6 -Confirm:$false\"");
             }
@@ -1217,8 +1265,20 @@ namespace NetInfoCheckerX
 
             if (result.Success)
             {
+                if (restartAdapter)
+                {
+                    await Task.Delay(2500);
+                }
+                else if (ipv6BindingChanged)
+                {
+                    await WaitForIPv6BindingStateAsync(nic.Id, checkIPV6State.Checked);
+                }
+                else
+                {
+                    await Task.Delay(100);
+                }
+
                 MessageBox.Show("修改成功!", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                await Task.Delay(restartAdapter ? 2500 : 100);
                 var mainForm = Application.OpenForms["Form1"];
                 if (mainForm != null)
                 {
