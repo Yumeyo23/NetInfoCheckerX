@@ -341,46 +341,80 @@ namespace NetInfoCheckerX
             var masterCts = new CancellationTokenSource();
             return await Task.Run(async () =>
             {
-                using (var semaphore = new SemaphoreSlim(500))
+                var foundDevice = new TaskCompletionSource<NatDevice>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                try
                 {
-                    var scanTasks = new List<Task<NatDevice>>();
-                    for (int port = 1024; port <= 65535; port++)
-                    {
-                        if (masterCts.IsCancellationRequested) break;
-                        int targetPort = port;
-                        await semaphore.WaitAsync();
+                    const int firstPort = 1024;
+                    const int lastPort = 65535;
+                    const int workerCount = 500;
+                    int nextPort = firstPort - 1;
 
-                        var t = Task.Run(async () =>
+                    Func<Task<NatDevice>> scanWorker = async () =>
+                    {
+                        while (!masterCts.IsCancellationRequested)
                         {
+                            int targetPort = Interlocked.Increment(ref nextPort);
+                            if (targetPort > lastPort) return null;
+
                             try
                             {
                                 if (masterCts.IsCancellationRequested) return null;
                                 if (await QuickCheckPort(gatewayIp, targetPort, localAddress))
                                 {
-                                    var d = await TryGetDeviceOnPort(gatewayIp, targetPort, localAddress);
-                                    if (d != null) { masterCts.Cancel(); return d; }
+                                    var device = await TryGetDeviceOnPort(gatewayIp, targetPort, localAddress);
+                                    if (device != null)
+                                    {
+                                        foundDevice.TrySetResult(device);
+                                        masterCts.Cancel();
+                                        return device;
+                                    }
                                 }
                             }
                             catch { }
                             finally
                             {
-                                semaphore.Release();
-                                if (targetPort % 100 == 0)
-                                    this.BeginInvoke(new Action(() => { btnRefresh.Text = $"{targetPort}"; }));
+                                if (targetPort % 100 == 0 && !IsDisposed && IsHandleCreated)
+                                {
+                                    try
+                                    {
+                                        BeginInvoke(new Action(() =>
+                                        {
+                                            if (!IsDisposed && !Disposing)
+                                                btnRefresh.Text = targetPort.ToString();
+                                        }));
+                                    }
+                                    catch (InvalidOperationException) { }
+                                }
                             }
-                            return null;
-                        });
-                        scanTasks.Add(t);
-
-                        if (scanTasks.Count > 1000)
-                        {
-                            var found = scanTasks.FirstOrDefault(st => st.IsCompleted && st.Result != null);
-                            if (found != null) return found.Result;
-                            scanTasks.RemoveAll(st => st.IsCompleted);
                         }
+                        return null;
+                    };
+
+                    var scanTasks = new Task<NatDevice>[workerCount];
+                    for (int i = 0; i < scanTasks.Length; i++)
+                        scanTasks[i] = scanWorker();
+
+                    Task<NatDevice[]> allWorkers = Task.WhenAll(scanTasks);
+                    Task completed = await Task.WhenAny(foundDevice.Task, allWorkers);
+                    if (completed == foundDevice.Task)
+                    {
+                        if (allWorkers.IsCompleted)
+                            masterCts.Dispose();
+                        else
+                            _ = allWorkers.ContinueWith(_ => masterCts.Dispose(),
+                                TaskScheduler.Default);
+                        return await foundDevice.Task;
                     }
-                    var results = await Task.WhenAll(scanTasks);
-                    return results.FirstOrDefault(d => d != null);
+
+                    var results = await allWorkers;
+                    masterCts.Dispose();
+                    return results.FirstOrDefault(device => device != null);
+                }
+                catch
+                {
+                    masterCts.Dispose();
+                    throw;
                 }
             });
         }
@@ -417,17 +451,20 @@ namespace NetInfoCheckerX
                 string url = $"http://{gatewayIp}:{port}{path}";
                 try
                 {
-                    var cts = new CancellationTokenSource(800);
-                    var device = await Task.Run(() =>
+                    NatDevice device;
+                    using (var cts = new CancellationTokenSource(800))
                     {
-                        try
+                        device = await Task.Run(() =>
                         {
-                            var info = CallBuildUpnpNatDeviceInfo(localAddress, url);
-                            if (info == null) return null;
-                            return CreateUpnpDevice(info);
-                        }
-                        catch { return null; }
-                    }, cts.Token);
+                            try
+                            {
+                                var info = CallBuildUpnpNatDeviceInfo(localAddress, url);
+                                if (info == null) return null;
+                                return CreateUpnpDevice(info);
+                            }
+                            catch { return null; }
+                        }, cts.Token);
+                    }
 
                     if (device != null) return device;
                 }
