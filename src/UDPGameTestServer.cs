@@ -136,6 +136,9 @@ namespace NetInfoCheckerX
             ApplyServerTheme();
             PopulateBindAddresses();
             comboServer.DropDownStyle = ComboBoxStyle.DropDown;
+            lblStatus.Multiline = true;
+            lblStatus.WordWrap = true;
+            lblStatus.ScrollBars = ScrollBars.Vertical;
             label1.MouseDown += label1_MouseDown;
             CloudControl.UsedTimesCounter("PingUDPGameServer");
             lblStatus.Text = "服务未启动\r\n";
