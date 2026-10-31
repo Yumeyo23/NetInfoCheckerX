@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace NetInfoCheckerX
@@ -12,6 +14,53 @@ namespace NetInfoCheckerX
     /// </summary>
     public static class TextHelper
     {
+        /// <summary>
+        /// Removes URL wrappers and characters that are unsafe or irrelevant in a
+        /// network target, while retaining Unicode letters and digits for IDN hosts.
+        /// </summary>
+        public static string SanitizeTargetInput(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return string.Empty;
+
+            string value = input.Trim();
+            if (value.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+                value = value.Substring(7);
+            else if (value.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                value = value.Substring(8);
+
+            var result = new StringBuilder(value.Length);
+            for (int index = 0; index < value.Length;)
+            {
+                char current = value[index];
+                if (current == '\u3002' || current == '\uFF0E' || current == '\uFF61')
+                {
+                    result.Append('.');
+                    index++;
+                    continue;
+                }
+
+                UnicodeCategory category = CharUnicodeInfo.GetUnicodeCategory(value, index);
+                int charCount = char.IsSurrogatePair(value, index) ? 2 : 1;
+                bool isLetterOrNumber = category == UnicodeCategory.UppercaseLetter ||
+                    category == UnicodeCategory.LowercaseLetter ||
+                    category == UnicodeCategory.TitlecaseLetter ||
+                    category == UnicodeCategory.ModifierLetter ||
+                    category == UnicodeCategory.OtherLetter ||
+                    category == UnicodeCategory.DecimalDigitNumber;
+                bool isCombiningMark = category == UnicodeCategory.NonSpacingMark ||
+                    category == UnicodeCategory.SpacingCombiningMark ||
+                    category == UnicodeCategory.EnclosingMark;
+
+                if (isLetterOrNumber || isCombiningMark || current == '.' || current == ':' ||
+                    current == '-' || current == '_')
+                    result.Append(value, index, charCount);
+
+                index += charCount;
+            }
+
+            return result.ToString();
+        }
+
         #region JSON 路径解析
 
         /// <summary>
