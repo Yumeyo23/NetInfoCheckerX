@@ -71,7 +71,7 @@ namespace NetInfoCheckerX
             }
             catch { }
         }
-        private readonly string commonPorts = "21-23,53,80,110,123,143,443,445,465,587,1433,1900,3306,3389,4000,5000,5201,5900,6000,7890-7895,8000,8080,8888,8989,9000,9090,9833,9987,9999";
+        private readonly string commonPorts = "21-23,53,80,110,123,143,443,445,465,587,1433,1900,3306,3389,4000,5000,5201,5244,5900,6000,7890-7895,8000,8080,8888,8989,9000,9090,9833,9987,9999";
         private CancellationTokenSource _cts;
         private bool _isScanning = false;
 
@@ -260,8 +260,7 @@ namespace NetInfoCheckerX
         {
             if (!ClipboardHelper.TryGetText(out string clipText) || string.IsNullOrWhiteSpace(clipText)) return;
 
-            // 正则清洗：只保留字母、数字、点、冒号
-            string cleaned = Regex.Replace(clipText, @"[^a-zA-Z0-9\.\:\-]", "");
+            string cleaned = TextHelper.SanitizeTargetInput(clipText);
 
             if (!string.IsNullOrEmpty(cleaned))
             {
