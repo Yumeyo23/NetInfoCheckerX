@@ -150,7 +150,7 @@ namespace NetInfoCheckerX
             string preferredValue = ExtractBindValue(preferredText);
             comboServer.Items.Clear();
             comboServer.Items.Add(new BindItem { Text = "Any (全部网卡)", AllInterfaces = true });
-            comboServer.Items.Add(new BindItem { Text = "0.0.0.0 (IPv4 Any)", Address = IPAddress.Any });
+            comboServer.Items.Add(new BindItem { Text = "0.0.0.0 (Any)", Address = IPAddress.Any });
             comboServer.Items.Add(new BindItem { Text = ":: (IPv6 Any)", Address = IPAddress.IPv6Any });
             foreach (NicAddressInfo nic in NicHelper.GetUsableIPAddresses())
                 comboServer.Items.Add(new BindItem { Text = nic.DisplayText, Address = nic.Address });
