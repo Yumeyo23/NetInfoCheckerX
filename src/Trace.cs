@@ -71,6 +71,8 @@ namespace NetInfoCheckerX
         // 在线增强最多同时 3 个请求，并在整个进程内平滑限制为每秒最多启动 5 个。
         // 请求超时完全由各 Provider 使用的 HttpHelper 负责。
         private const int GeoMaxStartsPerSecond = 5;
+        private static readonly byte[] TracePingPayload = Encoding.ASCII.GetBytes("YumeyoNICX_Trace_Packet");
+        private static readonly byte[] TraceParisPayload = Encoding.ASCII.GetBytes("YumeyoTraceX-Paris");
         private SemaphoreSlim _geoEnrichSemaphore = new SemaphoreSlim(3, 3);
         private static readonly SemaphoreSlim GeoRateGate = new SemaphoreSlim(1, 1);
         private static long _nextGeoRequestTimestamp;
@@ -1221,11 +1223,9 @@ namespace NetInfoCheckerX
                 }
             }
 
-            string input = comboTargetIP.Text.Trim().ToLower();
-            if (input.StartsWith("http://")) input = input.Substring(7);
-            else if (input.StartsWith("https://")) input = input.Substring(8);
+            string input = comboTargetIP.Text.Trim().ToLowerInvariant();
             if (input.Contains("/")) input = input.Split('/')[0];
-            input = Regex.Replace(input, @"[^a-z0-9\.\:\-_]", "");
+            input = TextHelper.SanitizeTargetInput(input);
 
             if (string.IsNullOrEmpty(input))
             {
@@ -1462,11 +1462,10 @@ namespace NetInfoCheckerX
                         if (hopToken.IsCancellationRequested) break;
                         if (i > 0) await Task.Delay(40, hopToken);
                         PingOptions options = new PingOptions(ttl, true);
-                        byte[] buffer = Encoding.ASCII.GetBytes("YumeyoNICX_Trace_Packet");
                         Stopwatch sw = Stopwatch.StartNew();
                         try
                         {
-                            PingReply reply = await pingSender.SendPingAsync(targetIp, timeout, buffer, options);
+                            PingReply reply = await pingSender.SendPingAsync(targetIp, timeout, TracePingPayload, options);
                             sw.Stop();
                             if (reply.Status == IPStatus.Success || reply.Status == IPStatus.TtlExpired)
                             {
@@ -1545,7 +1544,7 @@ namespace NetInfoCheckerX
             int effectiveMaxHops = maxHops;
             int confirmedTargetHop = 0;
             bool targetEverReached = false;
-            byte[] buffer = Encoding.ASCII.GetBytes("YumeyoNICX_Trace_Packet");
+            byte[] buffer = TracePingPayload;
 
             while (!token.IsCancellationRequested && !IsDisposed)
             {
@@ -2356,8 +2355,7 @@ namespace NetInfoCheckerX
             Buffer.BlockCopy(BitConverter.GetBytes(_instanceIdentifier), 0, packet, 4, 2);
             Buffer.BlockCopy(BitConverter.GetBytes(seqNum), 0, packet, 6, 2);
 
-            byte[] payload = Encoding.ASCII.GetBytes("YumeyoTraceX-Paris");
-            Buffer.BlockCopy(payload, 0, packet, 8, Math.Min(payload.Length, 22));
+            Buffer.BlockCopy(TraceParisPayload, 0, packet, 8, Math.Min(TraceParisPayload.Length, 22));
 
             // 序列号用于匹配探针；末尾 2 字节补偿其变化，使所有 ICMPv4
             // 探针保持相同校验和，避免部分 ECMP 设备将其视为不同流。
@@ -2946,8 +2944,7 @@ namespace NetInfoCheckerX
             packet[5] = (byte)(_instanceIdentifier & 0xFF);
             packet[6] = (byte)(sequence >> 8);
             packet[7] = (byte)(sequence & 0xFF);
-            byte[] payload = Encoding.ASCII.GetBytes("YumeyoTraceX-Paris");
-            Buffer.BlockCopy(payload, 0, packet, 8, Math.Min(payload.Length, 22));
+            Buffer.BlockCopy(TraceParisPayload, 0, packet, 8, Math.Min(TraceParisPayload.Length, 22));
 
             byte[] pseudo = new byte[40 + packet.Length];
             Buffer.BlockCopy(source.GetAddressBytes(), 0, pseudo, 0, 16);
