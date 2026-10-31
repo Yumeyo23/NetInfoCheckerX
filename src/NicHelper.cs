@@ -214,16 +214,21 @@ namespace NetInfoCheckerX
                 if (filterNoUsableAddressAdapters) return usableAdapters;
 
                 var allAdapters = new List<NetworkInterface>(usableAdapters);
-                allAdapters.AddRange(upAdapters.Where(n => !usableAdapters.Any(u => u.Id == n.Id)));
+                var includedIds = new HashSet<string>(usableAdapters.Select(adapter => adapter.Id));
+                foreach (NetworkInterface adapter in upAdapters)
+                    if (includedIds.Add(adapter.Id)) allAdapters.Add(adapter);
                 return allAdapters;
             }
 
             var result = new List<NetworkInterface>();
             result.AddRange(gatewayAdapters);
-            result.AddRange(usableAdapters.Where(n => !gatewayAdapters.Any(g => g.Id == n.Id)));
+            var includedAdapterIds = new HashSet<string>(gatewayAdapters.Select(adapter => adapter.Id));
+            foreach (NetworkInterface adapter in usableAdapters)
+                if (includedAdapterIds.Add(adapter.Id)) result.Add(adapter);
             if (!filterNoUsableAddressAdapters)
             {
-                result.AddRange(upAdapters.Where(n => !result.Any(r => r.Id == n.Id)));
+                foreach (NetworkInterface adapter in upAdapters)
+                    if (includedAdapterIds.Add(adapter.Id)) result.Add(adapter);
             }
             return result;
         }
