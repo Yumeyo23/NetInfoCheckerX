@@ -9,7 +9,6 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -396,10 +395,10 @@ namespace NetInfoCheckerX
                 return;
             }
 
-            string input = comboServer.Text.Trim().ToLower();
+            string input = comboServer.Text.Trim().ToLowerInvariant();
 
-            if (input.StartsWith("http://")) input = input.Substring(7);
-            else if (input.StartsWith("https://")) input = input.Substring(8);
+            if (input.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) input = input.Substring(7);
+            else if (input.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) input = input.Substring(8);
 
             if (input.Contains("/"))
             {
@@ -414,7 +413,7 @@ namespace NetInfoCheckerX
                 input = input.Substring(0, slashIndex);
             }
 
-            input = Regex.Replace(input, @"[^a-z0-9\.\:\-_]", "");
+            input = TextHelper.SanitizeTargetInput(input);
             if (string.IsNullOrEmpty(input))
             {
                 SystemSounds.Beep.Play();
