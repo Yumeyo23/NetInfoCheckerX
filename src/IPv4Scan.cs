@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -15,6 +16,21 @@ namespace NetInfoCheckerX
 {
     public partial class IPv4Scan : Form
     {
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+
+        private void MyMouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            ReleaseCapture();
+            // WM_SYSCOMMAND / SC_MOVE + HTCAPTION：交给系统执行窗口拖动。
+            SendMessage(Handle, 0x0112, new IntPtr(0xF010 + 0x0002), IntPtr.Zero);
+        }
+
         private const string DefaultAdapter = "0.0.0.0 (Any)";
         private readonly ConcurrentDictionary<string, IPv4ScanDevice> _pending = new ConcurrentDictionary<string, IPv4ScanDevice>();
         private readonly Dictionary<string, DataGridViewRow> _deviceRows = new Dictionary<string, DataGridViewRow>();
@@ -52,7 +68,7 @@ namespace NetInfoCheckerX
             txtCIDR.Text = IPv4ScanSettings.Read("CIDR", "");
             radioCIDR.Checked = IPv4ScanSettings.Read("Mode", "Range") == "CIDR";
             chkCompare.Checked = IPv4ScanSettings.Read("Compare", "false") == "true";
-            RefreshAdapters(IPv4ScanSettings.Read("Adapter", DefaultAdapter));
+            RefreshAdapters(DefaultAdapter);
             CloudControl.UsedTimesCounter("IPv4简单扫描");
             FitIdentityColumns();
             ApplyResultSort();
@@ -613,8 +629,7 @@ namespace NetInfoCheckerX
                 IPv4ScanSettings.Write("EndIP", txtEnd.Text.Trim()) &
                 IPv4ScanSettings.Write("CIDR", txtCIDR.Text.Trim()) &
                 IPv4ScanSettings.Write("Mode", radioCIDR.Checked ? "CIDR" : "Range") &
-                IPv4ScanSettings.Write("Compare", chkCompare.Checked ? "true" : "false") &
-                IPv4ScanSettings.Write("Adapter", comboLocalEnd.Text);
+                IPv4ScanSettings.Write("Compare", chkCompare.Checked ? "true" : "false");
             if (!saved) SetStatus("输入配置保存失败，请检查程序目录的写入权限。");
         }
 
