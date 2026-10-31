@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Net;
@@ -37,7 +38,8 @@ namespace NetInfoCheckerX
         private long _bytesSent;
         private long _lastBytesReceived;
         private long _lastBytesSent;
-        private string _usageHint = "";
+        private string _testLinksText = "";
+        private ContextMenuStrip _statusContextMenu;
 
         private static byte[] CreateRandomBuffer(int size)
         {
@@ -76,7 +78,33 @@ namespace NetInfoCheckerX
         public LibreSpeed()
         {
             InitializeComponent();
+            InitializeStatusContextMenu();
             this.FormClosing += LibreSpeed_FormClosing;
+        }
+
+        private void InitializeStatusContextMenu()
+        {
+            _statusContextMenu = new ContextMenuStrip();
+            ToolStripMenuItem copySelected = new ToolStripMenuItem("复制选中内容");
+            copySelected.Click += (sender, e) =>
+            {
+                if (!string.IsNullOrEmpty(lblStatus.SelectedText))
+                    Clipboard.SetText(lblStatus.SelectedText);
+            };
+            ToolStripMenuItem copyAll = new ToolStripMenuItem("复制全部");
+            copyAll.Click += (sender, e) =>
+            {
+                if (!string.IsNullOrEmpty(lblStatus.Text))
+                    Clipboard.SetText(lblStatus.Text);
+            };
+            _statusContextMenu.Items.Add(copySelected);
+            _statusContextMenu.Items.Add(copyAll);
+            _statusContextMenu.Opening += (sender, e) =>
+            {
+                copySelected.Enabled = lblStatus.SelectionLength > 0;
+                copyAll.Enabled = !string.IsNullOrEmpty(lblStatus.Text);
+            };
+            lblStatus.ContextMenuStrip = _statusContextMenu;
         }
         private async Task ApplyLibreThemeAsync()
         {
@@ -150,7 +178,7 @@ namespace NetInfoCheckerX
             comboServer.DropDownStyle = ComboBoxStyle.DropDown;
             comboServer.Items.Clear();
             comboServer.Items.Add(new BindItem { Text = "Any (全部网卡)", Value = "+" });
-            comboServer.Items.Add(new BindItem { Text = "0.0.0.0 (IPv4 Any)", Value = "0.0.0.0" });
+            comboServer.Items.Add(new BindItem { Text = "0.0.0.0 (Any)", Value = "0.0.0.0" });
             comboServer.Items.Add(new BindItem { Text = ":: (IPv6 Any)", Value = "::" });
 
             try
@@ -280,15 +308,7 @@ namespace NetInfoCheckerX
 
                 if (lblStatus != null)
                 {
-                    if (selectedValue == "+")
-                    {
-                        _usageHint = $"请用浏览器访问 [本机任意IP]:{portInt} 进行测速{DlcSuffix}。";
-                    }
-                    else
-                    {
-                        string displayIp = selectedValue.Contains(":") ? $"[{selectedValue}]" : selectedValue;
-                        _usageHint = $"请用浏览器访问 {displayIp}:{portInt} 进行测速{DlcSuffix}。";
-                    }
+                    _testLinksText = BuildTestLinks(selectedValue, portInt);
                     UpdateStatus(0, 0);
                 }
             }
@@ -315,6 +335,7 @@ namespace NetInfoCheckerX
                 _server = null;
                 _isServerRunning = false;
                 _activeClients.Clear();
+                _testLinksText = "";
                 btnStart.Text = "开启";
                 lblStatus.Text = "服务已停止" + DlcSuffix;
                 comboServer.Enabled = true;
@@ -355,11 +376,49 @@ namespace NetInfoCheckerX
         private void UpdateStatus(long sendRate, long receiveRate)
         {
             lblStatus.Text = string.Format(
-                "在线客户端：{0}\r\n↑ {1}/s    ↓ {2}/s\r\n{3}",
+                "在线客户端：{0}    ↑ {1}/s    ↓ {2}/s\r\n{3}",
                 _activeClients.Count,
                 FormatRate(sendRate),
                 FormatRate(receiveRate),
-                _usageHint);
+                _testLinksText);
+        }
+
+        private string BuildTestLinks(string selectedAddress, int port)
+        {
+            var endpoints = new List<string>();
+            var uniqueEndpoints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (selectedAddress == "+" || selectedAddress == "Any")
+            {
+                try
+                {
+                    foreach (NicAddressInfo nicAddress in NicHelper.GetUsableIPAddresses())
+                        AddTestEndpoint(nicAddress.Address, port, endpoints, uniqueEndpoints);
+                }
+                catch { }
+            }
+            else
+            {
+                IPAddress address;
+                if (IPAddress.TryParse(selectedAddress, out address))
+                    AddTestEndpoint(address, port, endpoints, uniqueEndpoints);
+            }
+
+            string linkList = endpoints.Count > 0
+                ? string.Join(Environment.NewLine, endpoints)
+                : "未找到可用的网卡 IP 地址。";
+            return "已绑定到下列网卡，可在浏览器中发起测试：" + Environment.NewLine + linkList;
+        }
+
+        private static void AddTestEndpoint(IPAddress address, int port, List<string> endpoints, HashSet<string> uniqueEndpoints)
+        {
+            if (address == null) return;
+            string ip = address.ToString();
+            int scopeIndex = ip.IndexOf('%');
+            if (scopeIndex >= 0) ip = ip.Substring(0, scopeIndex);
+            string endpoint = address.AddressFamily == AddressFamily.InterNetworkV6
+                ? string.Format("[{0}]:{1}", ip, port)
+                : string.Format("{0}:{1}", ip, port);
+            if (uniqueEndpoints.Add(endpoint)) endpoints.Add(endpoint);
         }
 
         private static string FormatRate(long bytes)
