@@ -5,7 +5,6 @@ using System.IO;
 using System.Media;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -48,6 +47,7 @@ namespace NetInfoCheckerX
         private CancellationTokenSource _cts;
         private Task _currentQueryTask;
         private readonly object _queryLock = new object();
+        private volatile bool _isClosing;
 
         private void WriteGeoIndexToIni()
         {
@@ -220,7 +220,7 @@ namespace NetInfoCheckerX
         {
             string raw = txtIP.Text.Trim();
 
-            raw = Regex.Replace(raw, @"[^a-zA-Z0-9\.\:\-]", "");
+            raw = TextHelper.SanitizeTargetInput(raw);
 
             if (string.IsNullOrEmpty(raw))
             {
@@ -233,6 +233,7 @@ namespace NetInfoCheckerX
 
         private async void btnOK_Click(object sender, EventArgs e)
         {
+            if (_isClosing) return;
             if (!CloudControl.CheckClickRate((Control)sender, this.toolTip1))
             {
                 return;
@@ -263,10 +264,11 @@ namespace NetInfoCheckerX
             try
             {
                 var cts = new CancellationTokenSource();
+                CancellationToken queryToken = cts.Token;
 
                 var provider = Api2.GeoCN_Providers[index];
 
-                var queryTask = provider.GetGeoTaskIgnoringPrivacy(ip, cts.Token);
+                var queryTask = provider.GetGeoTaskIgnoringPrivacy(ip, queryToken);
 
                 lock (_queryLock)
                 {
@@ -276,7 +278,7 @@ namespace NetInfoCheckerX
 
                 var result = await queryTask;
 
-                if (cts.Token.IsCancellationRequested)
+                if (queryToken.IsCancellationRequested || _isClosing)
                 {
                     return;
                 }
@@ -291,63 +293,64 @@ namespace NetInfoCheckerX
             }
             catch (OperationCanceledException)
             {
-                this.Invoke(new Action(() =>
+                if (!_isClosing && !IsDisposed)
                 {
                     lblTip.Text = "查询已取消";
-                }));
+                }
             }
             catch (Exception ex)
             {
-                this.Invoke(new Action(() =>
+                if (!_isClosing && !IsDisposed)
                 {
                     lblTip.Text = "查询出错啦~";
                     txtResult2.Text = ex.Message;
-                }));
+                }
                 Console.WriteLine(ex.Message);
             }
             finally
             {
-                this.Invoke(new Action(() =>
-                {
-                    btnOK.Enabled = true;
-                }));
+                if (!_isClosing && !IsDisposed) btnOK.Enabled = true;
             }
         }
 
         private async Task CancelCurrentQueryAsync()
         {
+            CancellationTokenSource cts;
+            Task queryTask;
             lock (_queryLock)
             {
-                if (_cts != null)
-                {
-                    try
-                    {
-                        _cts.Cancel();
-                        _cts.Dispose();
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                    }
-                    _cts = null;
-                }
+                cts = _cts;
+                _cts = null;
+                queryTask = _currentQueryTask;
             }
 
-            if (_currentQueryTask != null && !_currentQueryTask.IsCompleted)
+            if (cts != null)
             {
                 try
                 {
-                    await Task.WhenAny(_currentQueryTask, Task.Delay(500));
+                    Task cancelTask = Task.Run(() =>
+                    {
+                        try { cts.Cancel(); }
+                        catch (Exception) { }
+                        finally { cts.Dispose(); }
+                    });
+                    await Task.WhenAny(cancelTask, Task.Delay(500)).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException)
+                catch (Exception ex)
                 {
+                    Debug.WriteLine("取消 IP 查询失败: " + ex.Message);
                 }
-                catch (Exception)
-                {
-                }
+            }
 
+            if (queryTask != null && !queryTask.IsCompleted)
+                await Task.WhenAny(queryTask, Task.Delay(500)).ConfigureAwait(false);
+
+            if (queryTask != null)
+            {
                 lock (_queryLock)
                 {
-                    _currentQueryTask = null;
+                    if (ReferenceEquals(_currentQueryTask, queryTask))
+                        _currentQueryTask = null;
                 }
             }
         }
@@ -417,7 +420,8 @@ namespace NetInfoCheckerX
 
         private void FindIP_FormClosing(object sender, FormClosingEventArgs e)
         {
-            CancelCurrentQueryAsync().Wait();
+            _isClosing = true;
+            _ = CancelCurrentQueryAsync();
         }
 
         private void lnkPing_Click(object sender, EventArgs e)
