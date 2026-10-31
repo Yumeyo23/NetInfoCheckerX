@@ -12,7 +12,6 @@ using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -1005,17 +1004,14 @@ namespace NetInfoCheckerX
                 return;
             }
 
-            string input = comboTarget.Text.Trim().ToLower();
-
-            if (input.StartsWith("http://")) input = input.Substring(7);
-            else if (input.StartsWith("https://")) input = input.Substring(8);
+            string input = comboTarget.Text.Trim().ToLowerInvariant();
 
             if (input.Contains("/"))
             {
                 input = input.Split('/')[0];
             }
 
-            input = Regex.Replace(input, @"[^a-z0-9\.\:\-_]", "");
+            input = TextHelper.SanitizeTargetInput(input);
 
             if (string.IsNullOrEmpty(input))
             {
