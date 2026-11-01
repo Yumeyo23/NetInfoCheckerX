@@ -17,6 +17,7 @@ namespace NetInfoCheckerX
         private const string WindowTitle = "DHCP/PPPoE服务器扫描 ✧ NetInfoCheckerX";
         private CancellationTokenSource scanCancellation;
         private bool formClosing;
+        private bool npcapAvailable;
         private ContextMenuStrip gridCopyMenu;
         private string IniPath => Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
 
@@ -28,6 +29,7 @@ namespace NetInfoCheckerX
             txtTimeout.KeyPress += txtTimeout_KeyPress;
             linkLabel1.LinkClicked += linkLabel1_LinkClicked;
             lblNIC.MouseUp += lblNIC_MouseUp;
+            comboNIC.SelectedIndexChanged += (sender, e) => UpdateProtocolAvailability();
             colOffering.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
             colSummary.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
         }
@@ -279,58 +281,42 @@ namespace NetInfoCheckerX
 
             try
             {
-                IReadOnlyList<CaptureAdapterInfo> adapters = ServerDiscoveryScanner.GetCaptureAdapters();
+                IReadOnlyList<CaptureAdapterInfo> adapters = ServerDiscoveryScanner.GetAdapters(out npcapAvailable);
+                bool hasPppoeAdapter = false;
                 foreach (CaptureAdapterInfo adapter in adapters)
                 {
                     comboNIC.Items.Add(adapter);
+                    if (adapter.SupportsPppoe) hasPppoeAdapter = true;
                 }
 
                 if (comboNIC.Items.Count > 0)
                 {
                     comboNIC.SelectedIndex = 0;
-                    lblStatus.Text = $"找到 {comboNIC.Items.Count} 张可扫描的网卡";
+                    lblStatus.Text = npcapAvailable && hasPppoeAdapter
+                        ? $"找到 {comboNIC.Items.Count} 张可用网卡"
+                        : "Npcap不可用：DHCP扫描可用，PPPoE扫描需要Npcap";
                 }
                 else
                 {
-                    lblStatus.Text = "没有找到Npcap可用的无线网卡";
-                }
-            }
-            catch (NpcapNotInstalledException)
-            {
-                lblStatus.Text = "Npcap未安装";
-                DialogResult choice = MessageBox.Show(this,
-                    "当前系统内未安装Npcap驱动，相关功能无法使用。跳转到下载页面吗？",
-                    "未安装Npcap",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning);
-
-                if (choice == DialogResult.Yes)
-                {
-                    try
-                    {
-                        Process.Start(new ProcessStartInfo
-                        {
-                            FileName = NpcapDownloadUrl,
-                            UseShellExecute = true
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show(this, "无法打开 Npcap 官网：" + ex.Message, "打开链接失败",
-                            MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
-                    }
-                }
-                else
-                {
-                    Close();
+                    lblStatus.Text = "没有找到可用的以太网或无线网卡";
                 }
             }
             catch (Exception ex)
             {
-                lblStatus.Text = "Npcap初始化失败";
-                MessageBox.Show(this, ex.Message, "无法使用Npcap",
+                lblStatus.Text = "网卡初始化失败";
+                MessageBox.Show(this, ex.Message, "无法读取网卡",
                     MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
             }
+            UpdateProtocolAvailability();
+        }
+
+        private void UpdateProtocolAvailability()
+        {
+            CaptureAdapterInfo adapter = comboNIC.SelectedItem as CaptureAdapterInfo;
+            bool canUsePppoe = adapter != null && adapter.SupportsPppoe;
+            radioPPPoE.Enabled = canUsePppoe && scanCancellation == null;
+            if (comboNIC.Items.Count > 0 && !canUsePppoe && radioPPPoE.Checked)
+                radioDHCP.Checked = true;
         }
 
         private async void btnScan_Click(object sender, EventArgs e)
@@ -353,6 +339,12 @@ namespace NetInfoCheckerX
             ServerScanProtocol protocol = radioDHCP.Checked
                 ? ServerScanProtocol.Dhcp
                 : ServerScanProtocol.Pppoe;
+            if (protocol == ServerScanProtocol.Pppoe && !adapter.SupportsPppoe)
+            {
+                MessageBox.Show(this, "PPPoE服务器扫描需要安装Npcap，并选择Npcap可用的网卡",
+                    "需要Npcap", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
 
             int timeoutMs;
             if (!int.TryParse(txtTimeout.Text, out timeoutMs) || timeoutMs < 100 || timeoutMs > 9999)
@@ -370,7 +362,9 @@ namespace NetInfoCheckerX
             scanCancellation = new CancellationTokenSource();
             SetScanningState(true);
             lblStatus.Text = protocol == ServerScanProtocol.Dhcp
-                ? "正在广播 DHCPDISCOVER 并等待 DHCPOFFER ……"
+                ? (adapter.SupportsPppoe
+                    ? "正在广播 DHCPDISCOVER 并等待 DHCPOFFER ……"
+                    : "正在通过系统网络接口广播 DHCPDISCOVER ……")
                 : "正在广播 PADI 并等待 PADO ……";
 
             int resultCount = 0;
@@ -451,7 +445,8 @@ namespace NetInfoCheckerX
         {
             comboNIC.Enabled = !scanning;
             radioDHCP.Enabled = !scanning;
-            radioPPPoE.Enabled = !scanning;
+            CaptureAdapterInfo adapter = comboNIC.SelectedItem as CaptureAdapterInfo;
+            radioPPPoE.Enabled = !scanning && adapter != null && adapter.SupportsPppoe;
             numTry.Enabled = !scanning;
             txtTimeout.Enabled = !scanning;
             btnScan.Text = scanning ? "停止扫描" : "开始扫描";
