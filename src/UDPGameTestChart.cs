@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using ScottPlot;
 
@@ -29,7 +28,7 @@ namespace NetInfoCheckerX
         private double _lastSetXMax;
         private float _dpiScale = 1F;
         private string _target = "";
-        private const double DisplayWindowSeconds = 10;
+        private const double DisplayWindowSeconds = 10; //自动滚动显示秒
         private const double AutoScrollMarginSeconds = 2;
         private static readonly (double ms, Color color)[] Thresholds =
         {
@@ -80,9 +79,6 @@ namespace NetInfoCheckerX
             _plot.ContextMenuStrip = menu;
         }
 
-        [DllImport("user32.dll")]
-        private static extern uint GetDpiForWindow(IntPtr window);
-
         public void SetInfo(string target, int load, int bufferTicks)
         {
             lock (_sync)
@@ -132,7 +128,7 @@ namespace NetInfoCheckerX
 
         private void UDPGameTestChart_Load(object sender, EventArgs e)
         {
-            _dpiScale = GetDpiForWindow(Handle) / 96F;
+            _dpiScale = DpiHelper.GetScale(this);
             if (_dpiScale > 1.05F) ConfigurePlotStyle(_dpiScale);
             MinimumSize = Size;
         }
