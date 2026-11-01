@@ -1,7 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using ScottPlot;
 
@@ -22,7 +21,7 @@ namespace NetInfoCheckerX
         private bool _chartDirty;
         private bool _allowClose;
         private double _lastSetXMin, _lastSetXMax;
-        private const double DisplayWindowSeconds = 10;//超过自动滚动显示
+        private const double DisplayWindowSeconds = 10;//自动滚动显示秒
         private const double AutoScrollMarginSec = 2;
         private const int RefreshMs = 100;
 
@@ -87,9 +86,6 @@ namespace NetInfoCheckerX
                 this.WindowState = FormWindowState.Minimized;
             };
         }
-
-        [DllImport("user32.dll")]
-        private static extern uint GetDpiForWindow(IntPtr hwnd);
 
         private void ConfigurePlotStyle(float scale = 1f)
         {
@@ -161,7 +157,7 @@ namespace NetInfoCheckerX
 
         private void PingChart_Load(object sender, EventArgs e)
         {
-            float scale = GetDpiForWindow(this.Handle) / 96f;
+            float scale = DpiHelper.GetScale(this);
             if (scale > 1.05f)
                 ConfigurePlotStyle(scale);
             this.MinimumSize = this.Size;
