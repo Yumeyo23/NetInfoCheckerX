@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Media;
@@ -30,10 +31,10 @@ namespace NetInfoCheckerX
             try
             {
                 WritePrivateProfileString(IniSection, "ServerPort", txtServerPort.Text, IniPath);
-                WritePrivateProfileString(IniSection, "MaxTry", txtMaxTry.Text, IniPath);
-                WritePrivateProfileString(IniSection, "MaxFail", txtMaxFail.Text, IniPath);
-                WritePrivateProfileString(IniSection, "Thread", txtThread.Text, IniPath);
-                WritePrivateProfileString(IniSection, "TimeReset", txtTimeReset.Text, IniPath);
+                WritePrivateProfileString(IniSection, "MaxTry", numMaxTry.Value.ToString(CultureInfo.InvariantCulture), IniPath);
+                WritePrivateProfileString(IniSection, "MaxFail", numMaxFail.Value.ToString(CultureInfo.InvariantCulture), IniPath);
+                WritePrivateProfileString(IniSection, "Thread", numThread.Value.ToString(CultureInfo.InvariantCulture), IniPath);
+                WritePrivateProfileString(IniSection, "TimeReset", numTimeReset.Value.ToString(CultureInfo.InvariantCulture), IniPath);
                 WritePrivateProfileString(IniSection, "HoldConnections", chkHold.Checked ? "1" : "0", IniPath);
                 if (!string.IsNullOrEmpty(comboServer.Text))
                     WritePrivateProfileString(IniSection, "Server", comboServer.Text, IniPath);
@@ -50,13 +51,13 @@ namespace NetInfoCheckerX
                 GetPrivateProfileString(IniSection, "ServerPort", "", sb, sb.Capacity, IniPath);
                 if (!string.IsNullOrEmpty(val = sb.ToString())) txtServerPort.Text = val;
                 GetPrivateProfileString(IniSection, "MaxTry", "", sb, sb.Capacity, IniPath);
-                if (!string.IsNullOrEmpty(val = sb.ToString())) txtMaxTry.Text = val;
+                if (!string.IsNullOrEmpty(val = sb.ToString())) SetNumericValue(numMaxTry, val);
                 GetPrivateProfileString(IniSection, "MaxFail", "", sb, sb.Capacity, IniPath);
-                if (!string.IsNullOrEmpty(val = sb.ToString())) txtMaxFail.Text = val;
+                if (!string.IsNullOrEmpty(val = sb.ToString())) SetNumericValue(numMaxFail, val);
                 GetPrivateProfileString(IniSection, "Thread", "", sb, sb.Capacity, IniPath);
-                if (!string.IsNullOrEmpty(val = sb.ToString())) txtThread.Text = val;
+                if (!string.IsNullOrEmpty(val = sb.ToString())) SetNumericValue(numThread, val);
                 GetPrivateProfileString(IniSection, "TimeReset", "", sb, sb.Capacity, IniPath);
-                if (!string.IsNullOrEmpty(val = sb.ToString())) txtTimeReset.Text = val;
+                if (!string.IsNullOrEmpty(val = sb.ToString())) SetNumericValue(numTimeReset, val);
                 GetPrivateProfileString(IniSection, "HoldConnections", "", sb, sb.Capacity, IniPath);
                 if (!string.IsNullOrEmpty(val = sb.ToString()))
                     chkHold.Checked = val == "1" || val.Equals("true", StringComparison.OrdinalIgnoreCase);
@@ -73,6 +74,17 @@ namespace NetInfoCheckerX
             }
             catch { }
         }
+
+        private static void SetNumericValue(NumericUpDown control, string rawValue)
+        {
+            if (!decimal.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out decimal value))
+                return;
+
+            if (value < control.Minimum) value = control.Minimum;
+            if (value > control.Maximum) value = control.Maximum;
+            control.Value = value;
+        }
+
         private CancellationTokenSource cts;
         private long successCount = 0;
         private long failCount = 0;
@@ -103,6 +115,8 @@ namespace NetInfoCheckerX
         public ConnectionTest()
         {
             InitializeComponent();
+            numThread.Value = Math.Min((int)numThread.Maximum,
+                Math.Max((int)numThread.Minimum, Environment.ProcessorCount * 2));
             holdTimeBoldFont = lblTime2.Font;
             holdTimeRegularFont = new Font(lblTime2.Font, FontStyle.Regular);
             holdButtonBoldFont = btnStart.Font;
@@ -110,16 +124,11 @@ namespace NetInfoCheckerX
             titleTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             titleTimer.Tick += titleTimer_Tick;
             txtServerPort.KeyPress += TextBoxDigitsOnly_KeyPress;
-            txtMaxTry.KeyPress += TextBoxDigitsOnly_KeyPress;
-            txtMaxFail.KeyPress += TextBoxDigitsOnly_KeyPress;
-            txtThread.KeyPress += TextBoxDigitsOnly_KeyPress;
-            txtTimeReset.KeyPress += TextBoxDigitsOnly_KeyPress;
-
             txtServerPort.Leave += TextBoxClampValue_Leave;
-            txtMaxTry.Leave += TextBoxClampValue_Leave;
-            txtMaxFail.Leave += TextBoxClampValue_Leave;
-            txtThread.Leave += TextBoxClampValue_Leave;
-            txtTimeReset.Leave += TextBoxClampValue_Leave;
+            numMaxTry.KeyDown += NumericSetting_KeyDown;
+            numMaxFail.KeyDown += NumericSetting_KeyDown;
+            numThread.KeyDown += NumericSetting_KeyDown;
+            numTimeReset.KeyDown += NumericSetting_KeyDown;
         }
 
         private void ApplyConnectionTheme()
@@ -146,8 +155,8 @@ namespace NetInfoCheckerX
             }
 
             Control[] editControls = {
-        comboServer, comboNIC, txtMaxTry, txtMaxFail, txtThread,
-        txtTimeReset, txtSuccess, txtFail, txtServerPort
+        comboServer, comboNIC, numMaxTry, numMaxFail, numThread,
+        numTimeReset, txtSuccess, txtFail, txtServerPort
     };
 
             foreach (var c in editControls)
@@ -160,6 +169,11 @@ namespace NetInfoCheckerX
                     if (c is TextBox txt)
                     {
                         txt.BorderStyle = isLight ? BorderStyle.Fixed3D : BorderStyle.FixedSingle;
+                    }
+
+                    if (c is NumericUpDown numeric)
+                    {
+                        numeric.BorderStyle = isLight ? BorderStyle.Fixed3D : BorderStyle.FixedSingle;
                     }
 
                     if (c is ComboBox cb)
@@ -203,18 +217,10 @@ namespace NetInfoCheckerX
 
         private void TextBoxClampValue_Leave(object sender, EventArgs e)
         {
-            if (!(sender is TextBox txt)) return;
+            if (!(sender is TextBox txt) || txt != txtServerPort) return;
             if (!int.TryParse(txt.Text, out int val)) return;
             if (val < 1) val = 1;
-
-            if (txt == txtServerPort || txt == txtMaxTry)
-                val = Math.Min(val, 65535);
-            else if (txt == txtMaxFail)
-                val = Math.Min(val, 99999);
-            else if (txt == txtThread)
-                val = Math.Min(val, 999);
-            else if (txt == txtTimeReset)
-                val = Math.Min(val, 999);
+            val = Math.Min(val, 65535);
 
             if (val.ToString() != txt.Text)
                 txt.Text = val.ToString();
@@ -373,10 +379,10 @@ namespace NetInfoCheckerX
             comboNIC.Enabled = state;
             comboServer.Enabled = state;
             txtServerPort.Enabled = state;
-            txtMaxTry.Enabled = state;
-            txtMaxFail.Enabled = state;
-            txtThread.Enabled = state;
-            txtTimeReset.Enabled = state;
+            numMaxTry.Enabled = state;
+            numMaxFail.Enabled = state;
+            numThread.Enabled = state;
+            numTimeReset.Enabled = state;
             chkHold.Enabled = state;
 
             btnStart.Font = holdButtonBoldFont;
@@ -703,26 +709,10 @@ namespace NetInfoCheckerX
                 MessageBox.Show("端口号需 1-65535 之间");
                 return false;
             }
-            if (!int.TryParse(txtThread.Text, out threads) || threads < 1 || threads > 999)
-            {
-                MessageBox.Show("线程数需 1-999 之间");
-                return false;
-            }
-            if (!int.TryParse(txtTimeReset.Text, out interval) || interval < 10 || interval > 999)
-            {
-                MessageBox.Show("间隔时间需 10-999ms 之间");
-                return false;
-            }
-            if (!int.TryParse(txtMaxFail.Text, out maxFail) || maxFail < 10 || maxFail > 99999)
-            {
-                MessageBox.Show("失败上限需 10-99999 之间");
-                return false;
-            }
-            if (!int.TryParse(txtMaxTry.Text, out maxTry) || maxTry < 100 || maxTry > 65535)
-            {
-                MessageBox.Show("尝试上限需 100-65535 之间");
-                return false;
-            }
+            threads = decimal.ToInt32(numThread.Value);
+            interval = decimal.ToInt32(numTimeReset.Value);
+            maxFail = decimal.ToInt32(numMaxFail.Value);
+            maxTry = decimal.ToInt32(numMaxTry.Value);
 
             return true;
         }
@@ -1194,39 +1184,14 @@ namespace NetInfoCheckerX
             }
         }
 
-        private void txtMaxTry_KeyDown(object sender, KeyEventArgs e)
+        private void NumericSetting_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter)
             {
                 e.Handled = true;
-                btnStart_Click(sender, e);
-            }
-        }
-
-        private void txtMaxFail_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.KeyCode == Keys.Enter)
-            {
-                e.Handled = true;
-                btnStart_Click(sender, e);
-            }
-        }
-
-        private void txtThread_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.KeyCode == Keys.Enter)
-            {
-                e.Handled = true;
-                btnStart_Click(sender, e);
-            }
-        }
-
-        private void txtTimeReset_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.KeyCode == Keys.Enter)
-            {
-                e.Handled = true;
-                btnStart_Click(sender, e);
+                e.SuppressKeyPress = true;
+                ValidateChildren();
+                btnStart.PerformClick();
             }
         }
 
