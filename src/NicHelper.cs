@@ -110,7 +110,10 @@ namespace NetInfoCheckerX
 
             if (address.AddressFamily == AddressFamily.InterNetworkV6)
             {
-                return !address.IsIPv6Multicast &&
+                // 仅列出当前可用于新连接的 IPv6 地址；Deprecated/Tentative 等状态
+                // 不应作为网卡绑定地址提供给各窗口。
+                return ipInfo.DuplicateAddressDetectionState == DuplicateAddressDetectionState.Preferred &&
+                       !address.IsIPv6Multicast &&
                        !address.IsIPv6LinkLocal &&
                        !address.IsIPv6SiteLocal &&
                        !address.Equals(IPAddress.IPv6Any) &&
