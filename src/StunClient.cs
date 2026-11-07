@@ -647,8 +647,10 @@ namespace NetInfoCheckerX
             }
             finally
             {
-                stream?.Close();
+                // 先立即关闭底层 TCP socket，再释放流；先关闭流会正常结束连接，
+                // 使后面的 Close(0) 无法避免本地端口进入 TCP 等待状态。
                 try { tcpClient?.Client?.Close(0); } catch { }
+                try { stream?.Dispose(); } catch { }
                 tcpClient?.Close();
                 timeoutCancellation.Dispose();
             }
@@ -821,8 +823,8 @@ namespace NetInfoCheckerX
             }
             finally
             {
-                sslStream?.Close();
                 try { tcpClient?.Client?.Close(0); } catch { }
+                try { sslStream?.Dispose(); } catch { }
                 tcpClient?.Close();
                 timeoutCancellation.Dispose();
             }
