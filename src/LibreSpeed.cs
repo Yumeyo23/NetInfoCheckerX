@@ -302,7 +302,7 @@ namespace NetInfoCheckerX
                 StartServer(selectedValue, portInt);
 
                 _isServerRunning = true;
-                btnStart.Text = "停服";
+                btnStart.Text = "关服";
                 comboServer.Enabled = false;
                 txtPort.Enabled = false;
 
