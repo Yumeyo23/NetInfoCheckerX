@@ -264,12 +264,22 @@ namespace NetInfoCheckerX
         {
             try
             {
+                IPAddress dnsAddress;
+                if (!IPAddress.TryParse(dnsServer.Trim(), out dnsAddress))
+                    throw new ArgumentException("请输入有效的 IPv4 或 IPv6 DNS 地址。");
+                if (dnsAddress.IsIPv4MappedToIPv6) dnsAddress = dnsAddress.MapToIPv4();
+                var dnsEndpoint = new IPEndPoint(dnsAddress, 53);
+                IPAddress anyAddress = dnsAddress.AddressFamily == AddressFamily.InterNetworkV6
+                    ? IPAddress.IPv6Any : IPAddress.Any;
+
                 var (ipv4, ipv6) = await Task.Run(() =>
                 {
                     var v4 = new List<string>();
                     var v6 = new List<string>();
+                    bool receivedResponse = false;
+                    SocketException queryError = null;
 
-                    using (var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+                    using (var socket = new Socket(dnsAddress.AddressFamily, SocketType.Dgram, ProtocolType.Udp))
                     {
                         socket.ReceiveTimeout = 3000;
                         socket.SendTimeout = 3000;
@@ -280,13 +290,14 @@ namespace NetInfoCheckerX
                             try
                             {
                                 socket.SendTo(BuildDnsQuery(domain, aaaa: false),
-                                    new IPEndPoint(IPAddress.Parse(dnsServer), 53));
+                                    dnsEndpoint);
                                 byte[] response = new byte[512];
-                                EndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
+                                EndPoint remoteEP = new IPEndPoint(anyAddress, 0);
                                 int len = socket.ReceiveFrom(response, ref remoteEP);
+                                receivedResponse = true;
                                 v4 = ParseDnsARecords(response, len);
                             }
-                            catch (SocketException) { }
+                            catch (SocketException ex) { queryError = ex; }
                             catch (ObjectDisposedException) { }
 
                             token.ThrowIfCancellationRequested();
@@ -295,17 +306,20 @@ namespace NetInfoCheckerX
                             try
                             {
                                 socket.SendTo(BuildDnsQuery(domain, aaaa: true),
-                                    new IPEndPoint(IPAddress.Parse(dnsServer), 53));
+                                    dnsEndpoint);
                                 byte[] response = new byte[512];
-                                EndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
+                                EndPoint remoteEP = new IPEndPoint(anyAddress, 0);
                                 int len = socket.ReceiveFrom(response, ref remoteEP);
+                                receivedResponse = true;
                                 v6 = ParseDnsAAAARecords(response, len);
                             }
-                            catch (SocketException) { }
+                            catch (SocketException ex) { queryError = ex; }
                             catch (ObjectDisposedException) { }
                         }
                     }
 
+                    token.ThrowIfCancellationRequested();
+                    if (!receivedResponse && queryError != null) throw queryError;
                     return (v4, v6);
                 }, token);
 
@@ -526,7 +540,7 @@ namespace NetInfoCheckerX
             foreach (var combo in comboBoxes)
             {
                 if (combo == null) continue;
-                combo.FlatStyle = FlatStyle.Flat;
+                combo.FlatStyle = isLight ? FlatStyle.Standard : FlatStyle.Flat;
                 combo.BackColor = controlBack;
                 combo.ForeColor = comboFore;
             }
