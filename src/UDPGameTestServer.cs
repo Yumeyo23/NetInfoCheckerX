@@ -26,12 +26,14 @@ namespace NetInfoCheckerX
             public uint Id;
             public uint Nonce;
             public EndPoint RemoteEndPoint;
+            public UdpGameServerTransport Transport;
+            public UdpGameServerTransport.ReplyRoute ReplyRoute;
             public int Load;
             public int BufferTicks;
             public long LastSeenMicroseconds;
             public long LatestClientSendMicroseconds;
             public long LatestServerReceiveMicroseconds;
-            public bool HasUpstreamData;
+            public volatile bool HasUpstreamData;
             public uint DownPacketSequence;
             public uint DownTickSequence;
             public Random Random;
@@ -41,12 +43,15 @@ namespace NetInfoCheckerX
         private readonly object _sessionsLock = new object();
         private readonly Dictionary<string, ClientSession> _sessions = new Dictionary<string, ClientSession>();
         private readonly Random _sessionRandom = new Random();
-        private Socket _socket;
+        private const int SioUdpConnReset = unchecked((int)0x9800000C);
+        private UdpGameServerTransport[] _transports = new UdpGameServerTransport[0];
         private CancellationTokenSource _cts;
         private Task _receiveTask;
         private Task _sendTask;
         private System.Windows.Forms.Timer _statusTimer;
         private bool _running;
+        private string _listenDescription;
+        private volatile string _lastNetworkError;
         private long _bytesReceived;
         private long _bytesSent;
         private long _lastBytesReceived;
@@ -234,11 +239,20 @@ namespace NetInfoCheckerX
                 selectedAddress = detected;
                 SelectBindAddress(detected);
             }
+            Socket[] sockets = null;
             try
             {
-                _socket = CreateBoundSocket(item.AllInterfaces ? null : selectedAddress, port);
-                _socket.ReceiveTimeout = 500;
+                sockets = CreateBoundSockets(item.AllInterfaces ? null : selectedAddress, port);
+                foreach (Socket socket in sockets)
+                {
+                    socket.ReceiveTimeout = 500;
+                    socket.SendTimeout = 500;
+                }
+                _listenDescription = string.Join("\r\n", sockets.Select(DescribeListeningSocket));
+                _transports = sockets.Select(socket => new UdpGameServerTransport(socket)).ToArray();
+                _lastNetworkError = null;
                 _cts = new CancellationTokenSource();
+                CancellationToken serverToken = _cts.Token;
                 lock (_sessionsLock) _sessions.Clear();
                 Interlocked.Exchange(ref _bytesReceived, 0);
                 Interlocked.Exchange(ref _bytesSent, 0);
@@ -248,14 +262,17 @@ namespace NetInfoCheckerX
                 btnStart.Text = "关服";
                 comboServer.Enabled = false;
                 txtPort.Enabled = false;
-                _receiveTask = Task.Run(() => ReceiveLoop(_cts.Token));
-                _sendTask = Task.Run(() => SendLoop(_cts.Token));
-                lblStatus.Text = "服务已启动\r\n等待客户端连接...";
+                _receiveTask = Task.WhenAll(_transports.Select(transport =>
+                    Task.Run(() => ReceiveLoop(transport, serverToken))));
+                _sendTask = Task.Run(() => SendLoop(serverToken));
+                lblStatus.Text = "服务已启动\r\n" + _listenDescription + "\r\n等待客户端连接...";
             }
             catch (Exception ex)
             {
-                try { if (_socket != null) _socket.Close(); } catch { }
-                _socket = null;
+                foreach (UdpGameServerTransport transport in _transports) transport.Dispose();
+                _transports = new UdpGameServerTransport[0];
+                if (sockets != null)
+                    foreach (Socket socket in sockets) socket.Dispose();
                 MessageBox.Show("服务启动失败：\r\n" + ex.Message, "启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -273,41 +290,85 @@ namespace NetInfoCheckerX
             comboServer.Text = address.ToString();
         }
 
-        private static Socket CreateBoundSocket(IPAddress address, int port)
+        private static Socket[] CreateBoundSockets(IPAddress address, int port)
         {
-            if (address != null)
-            {
-                Socket selected = new Socket(address.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
-                selected.Bind(new IPEndPoint(address, port));
-                return selected;
-            }
-
+            if (address != null) return new[] { BindUdpSocket(address, port) };
+            var sockets = new List<Socket>();
             try
             {
-                Socket dual = new Socket(AddressFamily.InterNetworkV6, SocketType.Dgram, ProtocolType.Udp);
-                dual.DualMode = true;
-                dual.Bind(new IPEndPoint(IPAddress.IPv6Any, port));
-                return dual;
+                // 分开两种协议，避免 net472 双栈 ReceiveMessageFrom 混淆 IP_PKTINFO。
+                foreach (IPAddress any in new[] { IPAddress.IPv6Any, IPAddress.Any })
+                {
+                    if (any.AddressFamily == AddressFamily.InterNetworkV6 ? !Socket.OSSupportsIPv6 : !Socket.OSSupportsIPv4)
+                        continue;
+                    try
+                    {
+                        Socket socket = BindUdpSocket(any, port);
+                        sockets.Add(socket);
+                        if (port == 0) port = ((IPEndPoint)socket.LocalEndPoint).Port;
+                    }
+                    catch (SocketException ex) when (IsProtocolUnavailable(ex)) { }
+                }
+                if (sockets.Count == 0) throw new SocketException((int)SocketError.AddressFamilyNotSupported);
+                return sockets.ToArray();
             }
-            catch (SocketException)
+            catch
             {
-                Socket ipv4 = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-                ipv4.Bind(new IPEndPoint(IPAddress.Any, port));
-                return ipv4;
+                foreach (Socket socket in sockets) socket.Dispose();
+                throw;
             }
         }
 
-        private void ReceiveLoop(CancellationToken token)
+        private static bool IsProtocolUnavailable(SocketException ex)
+        {
+            return ex.SocketErrorCode == SocketError.AddressFamilyNotSupported ||
+                   ex.SocketErrorCode == SocketError.ProtocolNotSupported ||
+                   ex.SocketErrorCode == SocketError.ProtocolOption ||
+                   ex.SocketErrorCode == SocketError.OperationNotSupported ||
+                   ex.SocketErrorCode == SocketError.AddressNotAvailable;
+        }
+
+        private static Socket BindUdpSocket(IPAddress address, int port)
+        {
+            Socket socket = new Socket(address.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
+            try
+            {
+                socket.ExclusiveAddressUse = true;
+                if (address.AddressFamily == AddressFamily.InterNetworkV6) socket.DualMode = false;
+                // 单个客户端异常退出产生的 ICMP 通知不能干扰其他客户端的接收。
+                socket.IOControl(SioUdpConnReset, new byte[4], null);
+                socket.Bind(new IPEndPoint(address, port));
+                return socket;
+            }
+            catch
+            {
+                socket.Dispose();
+                throw;
+            }
+        }
+
+        private static string DescribeListeningSocket(Socket socket)
+        {
+            var endpoint = (IPEndPoint)socket.LocalEndPoint;
+            string scope = endpoint.Address.Equals(IPAddress.IPv6Any)
+                ? "IPv6 全部网卡"
+                : endpoint.Address.Equals(IPAddress.Any) ? "IPv4 全部网卡" : "指定网卡";
+            return "监听：" + endpoint + "（" + scope + "）";
+        }
+
+        private void ReceiveLoop(UdpGameServerTransport transport, CancellationToken token)
         {
             byte[] buffer = new byte[2048];
             while (!token.IsCancellationRequested)
             {
                 try
                 {
-                    EndPoint remote = _socket.AddressFamily == AddressFamily.InterNetworkV6
+                    EndPoint remote = transport.AddressFamily == AddressFamily.InterNetworkV6
                         ? new IPEndPoint(IPAddress.IPv6Any, 0)
                         : new IPEndPoint(IPAddress.Any, 0);
-                    int length = _socket.ReceiveFrom(buffer, ref remote);
+                    IPPacketInformation local;
+                    int length = transport.Receive(buffer, ref remote, out local);
+                    if (token.IsCancellationRequested) break;
                     long receivedAt = UdpGameProtocol.NowMicroseconds();
                     Interlocked.Add(ref _bytesReceived, length);
 
@@ -315,17 +376,17 @@ namespace NetInfoCheckerX
                     if (!UdpGameProtocol.TryParse(buffer, length, out packet)) continue;
                     if (packet.Type == UdpGameMessageType.Hello)
                     {
-                        HandleHello(packet, remote);
+                        HandleHello(transport, packet, remote, local, token);
                         continue;
                     }
 
-                    ClientSession session = GetSession(remote, packet.SessionId);
+                    ClientSession session = GetSession(remote, local, packet.SessionId);
                     if (session == null) continue;
                     session.LastSeenMicroseconds = receivedAt;
 
                     if (packet.Type == UdpGameMessageType.Goodbye)
                     {
-                        RemoveSession(remote, packet.SessionId);
+                        RemoveSession(remote, local, packet.SessionId);
                     }
                     else if (packet.Type == UdpGameMessageType.UpstreamData)
                     {
@@ -338,19 +399,32 @@ namespace NetInfoCheckerX
                 catch (SocketException ex)
                 {
                     if (token.IsCancellationRequested || ex.SocketErrorCode == SocketError.Interrupted || ex.SocketErrorCode == SocketError.OperationAborted) break;
-                    if (ex.SocketErrorCode != SocketError.TimedOut) Thread.Sleep(20);
+                    if (ex.SocketErrorCode != SocketError.TimedOut)
+                    {
+                        _lastNetworkError = ex.Message;
+                        Thread.Sleep(20);
+                    }
                 }
                 catch (ObjectDisposedException) { break; }
-                catch { if (!token.IsCancellationRequested) Thread.Sleep(20); }
+                catch (Exception ex)
+                {
+                    if (!token.IsCancellationRequested)
+                    {
+                        _lastNetworkError = ex.Message;
+                        Thread.Sleep(20);
+                    }
+                }
             }
         }
 
-        private void HandleHello(UdpGamePacket packet, EndPoint remote)
+        private void HandleHello(UdpGameServerTransport transport, UdpGamePacket packet, EndPoint remote,
+            IPPacketInformation local, CancellationToken token)
         {
-            string key = EndPointKey(remote);
+            string key = SessionKey(remote, local);
             ClientSession session;
             lock (_sessionsLock)
             {
+                if (token.IsCancellationRequested) return;
                 if (!_sessions.TryGetValue(key, out session) || session.Nonce != packet.Nonce)
                 {
                     uint id = NextSessionId();
@@ -361,6 +435,8 @@ namespace NetInfoCheckerX
                         Id = id,
                         Nonce = packet.Nonce,
                         RemoteEndPoint = remote,
+                        Transport = transport,
+                        ReplyRoute = transport.CreateReplyRoute((IPEndPoint)remote, local),
                         Load = load,
                         BufferTicks = bufferTicks,
                         LastSeenMicroseconds = UdpGameProtocol.NowMicroseconds(),
@@ -384,7 +460,7 @@ namespace NetInfoCheckerX
                 Nonce = session.Nonce,
                 SendMicroseconds = UdpGameProtocol.NowMicroseconds()
             };
-            SendTo(UdpGameProtocol.CreatePacket(welcome, UdpGameProtocol.HeaderSize, null), session.RemoteEndPoint);
+            SendTo(UdpGameProtocol.CreatePacket(welcome, UdpGameProtocol.HeaderSize, null), session);
         }
 
         private void SendLoop(CancellationToken token)
@@ -397,9 +473,10 @@ namespace NetInfoCheckerX
                 ClientSession[] sessions = GetActiveSessions();
                 foreach (ClientSession session in sessions)
                 {
+                    if (token.IsCancellationRequested) break;
                     if (!session.HasUpstreamData) continue;
                     try { SendGameTick(session); }
-                    catch (SocketException) { }
+                    catch (SocketException ex) { _lastNetworkError = ex.Message; }
                     catch (ObjectDisposedException) { return; }
                 }
 
@@ -442,13 +519,13 @@ namespace NetInfoCheckerX
                     Load = (byte)session.Load,
                     BufferTicks = (byte)session.BufferTicks
                 };
-                SendTo(UdpGameProtocol.CreatePacket(packet, sizes[part], session.Random), session.RemoteEndPoint);
+                SendTo(UdpGameProtocol.CreatePacket(packet, sizes[part], session.Random), session);
             }
         }
 
-        private void SendTo(byte[] bytes, EndPoint remote)
+        private void SendTo(byte[] bytes, ClientSession session)
         {
-            int sent = _socket.SendTo(bytes, remote);
+            int sent = session.Transport.Send(bytes, session.ReplyRoute);
             Interlocked.Add(ref _bytesSent, sent);
         }
 
@@ -463,16 +540,16 @@ namespace NetInfoCheckerX
             }
         }
 
-        private ClientSession GetSession(EndPoint remote, uint id)
+        private ClientSession GetSession(EndPoint remote, IPPacketInformation local, uint id)
         {
             ClientSession session;
             lock (_sessionsLock)
-                return _sessions.TryGetValue(EndPointKey(remote), out session) && session.Id == id ? session : null;
+                return _sessions.TryGetValue(SessionKey(remote, local), out session) && session.Id == id ? session : null;
         }
 
-        private void RemoveSession(EndPoint remote, uint id)
+        private void RemoveSession(EndPoint remote, IPPacketInformation local, uint id)
         {
-            string key = EndPointKey(remote);
+            string key = SessionKey(remote, local);
             lock (_sessionsLock)
             {
                 ClientSession session;
@@ -486,6 +563,12 @@ namespace NetInfoCheckerX
             uint value;
             do { _sessionRandom.NextBytes(bytes); value = BitConverter.ToUInt32(bytes, 0); } while (value == 0);
             return value;
+        }
+
+        private static string SessionKey(EndPoint remote, IPPacketInformation local)
+        {
+            IPAddress address = local.Address.IsIPv4MappedToIPv6 ? local.Address.MapToIPv4() : local.Address;
+            return EndPointKey(remote) + "|" + address + "|" + local.Interface;
         }
 
         private static string EndPointKey(EndPoint endpoint)
@@ -505,9 +588,15 @@ namespace NetInfoCheckerX
             long sendRate = sent - _lastBytesSent;
             _lastBytesReceived = received;
             _lastBytesSent = sent;
-            int online;
-            lock (_sessionsLock) online = _sessions.Count;
-            lblStatus.Text = string.Format("在线客户端：{0}\r\n↑ {1}/s    ↓ {2}/s\r\n请用查询器X“延迟测试-UDP游戏模拟(客户端)”连接并开启测试。", online, FormatRate(sendRate), FormatRate(receiveRate));
+            int online, pending;
+            lock (_sessionsLock)
+            {
+                online = _sessions.Values.Count(session => session.HasUpstreamData);
+                pending = _sessions.Count - online;
+            }
+            lblStatus.Text = _listenDescription + "\r\n" + string.Format("在线客户端：{0}（握手中：{1}）\r\n↑ {2}/s    ↓ {3}/s\r\n请用查询器X“延迟测试-UDP游戏模拟(客户端)”连接并开启测试。", online, pending, FormatRate(sendRate), FormatRate(receiveRate));
+            string error = _lastNetworkError;
+            if (!string.IsNullOrEmpty(error)) lblStatus.AppendText("\r\n最近收发错误：" + error);
         }
 
         private static string FormatRate(long bytes)
@@ -521,8 +610,9 @@ namespace NetInfoCheckerX
             if (!_running) return;
             _running = false;
             try { if (_cts != null) _cts.Cancel(); } catch { }
-            try { if (_socket != null) _socket.Close(); } catch { }
-            _socket = null;
+            foreach (UdpGameServerTransport transport in _transports)
+                try { transport.Dispose(); } catch { }
+            _transports = new UdpGameServerTransport[0];
             TimeEndPeriod(1);
             lock (_sessionsLock) _sessions.Clear();
             btnStart.Text = "开服";
