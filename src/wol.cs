@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics; // 用于运行CMD和记事本
 using System.Drawing;
 using System.IO;          // 用于文件路径操作
+using System.Linq;
 using System.Media;       // 用于播放系统提示音
 using System.Net;         // 网络相关
 using System.Net.NetworkInformation; // 获取网卡信息
@@ -80,10 +81,16 @@ namespace NetInfoCheckerX
         private static extern int GetPrivateProfileString(string section, string key, string def, StringBuilder retVal, int size, string filePath);
 
         string iniPath = Path.Combine(Application.StartupPath, "Wol.ini");
+        private bool updatingMacInput;
+        private readonly ToolTip macHint;
 
         public wol()
         {
             InitializeComponent();
+            if (components == null) components = new System.ComponentModel.Container();
+            macHint = new ToolTip(components);
+            comboMac.TextChanged += ComboMac_TextChanged;
+            txtReadMac.TextChanged += RecordMac_TextChanged;
         }
 
         private void wol_Load(object sender, EventArgs e)
@@ -93,8 +100,6 @@ namespace NetInfoCheckerX
             LoadNetworkInterfaces();
 
             LoadSavedMacs();
-
-            comboMac.SelectedIndexChanged += ComboMac_SelectedIndexChanged;
         }
 
         private void LoadNetworkInterfaces()
@@ -145,61 +150,110 @@ namespace NetInfoCheckerX
 
         private void LoadSavedMacs()
         {
-            string currentText = comboMac.Text;
+            string currentText = CleanMac(comboMac.Text);
 
-            HashSet<string> macList = new HashSet<string>();
+            HashSet<string> macList = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string lastMac = string.Empty;
 
             if (File.Exists(iniPath))
             {
                 StringBuilder sbLast = new StringBuilder(255);
                 GetPrivateProfileString("History", "LastWake", "", sbLast, 255, iniPath);
-                string lastMac = sbLast.ToString().Trim();
-                if (!string.IsNullOrEmpty(lastMac))
+                lastMac = CleanMac(sbLast.ToString());
+                if (IsValidMac(lastMac))
                 {
                     macList.Add(lastMac);
                 }
 
                 string[] lines = File.ReadAllLines(iniPath);
+                bool inRecordSection = false;
                 foreach (string line in lines)
                 {
-                    if (line.Contains("=") && !line.StartsWith("[") && !line.StartsWith(";"))
+                    string trimmed = line.Trim();
+                    if (trimmed.StartsWith("["))
                     {
-                        string mac = line.Split('=')[0].Trim();
-                        if (mac.Length >= 12) macList.Add(mac.ToUpper());
+                        inRecordSection = trimmed.Equals("[Record]", StringComparison.OrdinalIgnoreCase);
+                        continue;
+                    }
+                    int separator = trimmed.IndexOf('=');
+                    if (inRecordSection && separator > 0 && !trimmed.StartsWith(";"))
+                    {
+                        string mac = CleanMac(trimmed.Substring(0, separator));
+                        if (IsValidMac(mac)) macList.Add(mac);
                     }
                 }
             }
 
-            comboMac.Items.Clear();
-            foreach (var mac in macList)
+            updatingMacInput = true;
+            try
             {
-                comboMac.Items.Add(mac);
+                comboMac.Items.Clear();
+                foreach (var mac in macList) comboMac.Items.Add(mac);
+                comboMac.Text = string.IsNullOrEmpty(currentText) && IsValidMac(lastMac) ? lastMac : currentText;
             }
-
-            comboMac.Text = currentText;
+            finally { updatingMacInput = false; }
+            ComboMac_TextChanged(comboMac, EventArgs.Empty);
         }
 
-        private void ComboMac_SelectedIndexChanged(object sender, EventArgs e)
+        private void ComboMac_TextChanged(object sender, EventArgs e)
         {
-            string selectedMac = comboMac.Text;
+            if (updatingMacInput) return;
+            updatingMacInput = true;
+            try
+            {
+                int caret = CleanMac(comboMac.Text.Substring(0, comboMac.SelectionStart)).Length;
+                string normalized = CleanMac(comboMac.Text);
+                if (comboMac.Text != normalized)
+                {
+                    comboMac.Text = normalized;
+                    comboMac.SelectionStart = Math.Min(caret, normalized.Length);
+                }
+                txtReadMac.Text = normalized;
+                UpdateMacDetails(normalized, true);
+            }
+            finally { updatingMacInput = false; }
+        }
 
-            txtReadMac.Text = selectedMac;
+        private void RecordMac_TextChanged(object sender, EventArgs e)
+        {
+            if (updatingMacInput) return;
+            updatingMacInput = true;
+            try
+            {
+                int caret = CleanMac(txtReadMac.Text.Substring(0, txtReadMac.SelectionStart)).Length;
+                string normalized = CleanMac(txtReadMac.Text);
+                if (txtReadMac.Text != normalized)
+                {
+                    txtReadMac.Text = normalized;
+                    txtReadMac.SelectionStart = Math.Min(caret, normalized.Length);
+                }
+                UpdateMacDetails(normalized, false);
+            }
+            finally { updatingMacInput = false; }
+        }
 
+        private void UpdateMacDetails(string selectedMac, bool updateTargetHint)
+        {
+            if (!IsValidMac(selectedMac))
+            {
+                txtNote.Clear();
+                const string invalidHint = "请输入 12 位十六进制 MAC 地址，支持冒号、横杠、点和空格分隔。";
+                if (updateTargetHint) macHint.SetToolTip(comboMac, invalidHint);
+                macHint.SetToolTip(txtReadMac, invalidHint);
+                return;
+            }
             StringBuilder sb = new StringBuilder(255);
             GetPrivateProfileString("Record", selectedMac, "", sb, 255, iniPath);
             string note = sb.ToString();
+            txtNote.Text = note;
 
             StringBuilder sbLast = new StringBuilder(255);
             GetPrivateProfileString("History", "LastWake", "", sbLast, 255, iniPath);
 
-            if (sbLast.ToString() == selectedMac)
-            {
-                txtNote.Text = "上次唤醒的就是这个" + note;
-            }
-            else
-            {
-                txtNote.Text = note;
-            }
+            string hint = CleanMac(sbLast.ToString()) == selectedMac
+                ? "上次唤醒的就是这个" : "MAC 地址有效";
+            if (updateTargetHint) macHint.SetToolTip(comboMac, hint);
+            macHint.SetToolTip(txtReadMac, hint);
         }
 
         private void btnWrite_Click(object sender, EventArgs e)
@@ -207,7 +261,7 @@ namespace NetInfoCheckerX
             string inputMac = txtReadMac.Text.Trim();
             string cleanMac = CleanMac(inputMac);
 
-            if (cleanMac.Length != 12)
+            if (!IsValidMac(cleanMac))
             {
                 MessageBox.Show("MAC地址格式好像不对哦. 检查一下？", "提示");
                 return;
@@ -230,6 +284,7 @@ namespace NetInfoCheckerX
             MessageBox.Show("记录成功喵", "成功");
 
             LoadSavedMacs();
+            comboMac.Text = cleanMac;
         }
 
         private void btnWake_Click(object sender, EventArgs e)
@@ -238,7 +293,7 @@ namespace NetInfoCheckerX
             string cleanMac = CleanMac(targetMacStr);
             string broadcastIp = comboRadio.Text.Trim();
 
-            if (cleanMac.Length != 12)
+            if (!IsValidMac(cleanMac))
             {
                 MessageBox.Show("MAC地址格式不对喵", "错误");
                 return;
@@ -306,11 +361,16 @@ namespace NetInfoCheckerX
             Process.Start("cmd.exe", "/k arp -a");
         }
 
-        private string CleanMac(string input)
+        private static bool IsValidMac(string mac)
+        {
+            return mac != null && mac.Length == 12 && mac.All(Uri.IsHexDigit);
+        }
+
+        private static string CleanMac(string input)
         {
             if (string.IsNullOrEmpty(input)) return "";
-            string result = input.Replace(":", "").Replace("-", "").Replace(" ", "");
-            return result.ToUpper();
+            return new string(input.Where(c => c != ':' && c != '-' && c != '.' && !char.IsWhiteSpace(c))
+                .Select(char.ToUpperInvariant).ToArray());
         }
     }
 }
