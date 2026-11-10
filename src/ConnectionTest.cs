@@ -111,6 +111,8 @@ namespace NetInfoCheckerX
         private DateTime stallStartTime = DateTime.MinValue;
         private DateTime lastStallWarning = DateTime.MinValue;
         private System.Windows.Forms.Timer titleTimer;
+        private int maxTryWheelDelta;
+        private int maxFailWheelDelta;
 
         public ConnectionTest()
         {
@@ -129,6 +131,8 @@ namespace NetInfoCheckerX
             numMaxFail.KeyDown += NumericSetting_KeyDown;
             numThread.KeyDown += NumericSetting_KeyDown;
             numTimeReset.KeyDown += NumericSetting_KeyDown;
+            numMaxTry.MouseWheel += ConnectionLimit_MouseWheel;
+            numMaxFail.MouseWheel += ConnectionLimit_MouseWheel;
         }
 
         private void ApplyConnectionTheme()
@@ -1182,6 +1186,33 @@ namespace NetInfoCheckerX
                 e.Handled = true;
                 btnStart_Click(sender, e);
             }
+        }
+
+        private void ConnectionLimit_MouseWheel(object sender, MouseEventArgs e)
+        {
+            if (!(sender is NumericUpDown numeric) || !numeric.Enabled ||
+                !(e is HandledMouseEventArgs wheel)) return;
+
+            wheel.Handled = true;
+            int steps;
+            decimal increment;
+            if (numeric == numMaxTry)
+            {
+                maxTryWheelDelta += e.Delta;
+                steps = maxTryWheelDelta / SystemInformation.MouseWheelScrollDelta;
+                maxTryWheelDelta %= SystemInformation.MouseWheelScrollDelta;
+                increment = 200;
+            }
+            else
+            {
+                maxFailWheelDelta += e.Delta;
+                steps = maxFailWheelDelta / SystemInformation.MouseWheelScrollDelta;
+                maxFailWheelDelta %= SystemInformation.MouseWheelScrollDelta;
+                increment = 50;
+            }
+
+            numeric.Value = Math.Max(numeric.Minimum,
+                Math.Min(numeric.Maximum, numeric.Value + steps * increment));
         }
 
         private void NumericSetting_KeyDown(object sender, KeyEventArgs e)
