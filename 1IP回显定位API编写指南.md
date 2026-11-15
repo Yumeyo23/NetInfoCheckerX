@@ -6,7 +6,7 @@
 
 如你需使用其他自行收集/自购的 API 来回显你的 IP 地址 / IP 地理位置，阅读本文后可自行编写。也可将本文交给 AI 阅读，让 AI 帮你编写。
 
-截至11.2610.4.0版本，IP 回显/定位 支持以下 API 配置文件：
+截至11.2611.3.0版本，IP 回显/定位 支持以下 API 配置文件：
 
 - `NICX_Api1.nicxapi`：公网 IPv4/IPv6 回显接口（API1）。
 - `NICX_Api2.nicxapi`：指定 IP 的地理位置等信息查询接口（API2）。
@@ -475,6 +475,12 @@ AS4837 ChinaUnicom Hubei province network
 | `ensureCookieName` | 空 | 若该 Cookie 不存在，自动生成 UUID 值 |
 | `attempts` | `1` | Cookie 会话模式下的最大尝试次数，最小为 1 |
 | `successJsonPath` | 空 | Cookie 模式下指定成功字段；其值为 `true` 时结束重试 |
+| `transport` | `HTTP` | 请求使用的传输标识；通用标识不区分大小写，专用标识按对应约定填写；详见 7.3 |
+| `message` | 不发送 | 通用 WebSocket 连接成功后发送的一条文本消息，可使用表达式；显式空字符串会发送空消息 |
+| `subProtocol` | 空 | 通用 WebSocket 的子协议名称，例如服务要求的协商标识；不需要时省略 |
+| `queryIP` | 无 | 专用传输所需的查询 IP；通用 WebSocket 未设置 `message` 时也可将此值作为发送文本 |
+
+*仅代表尝试，不保证所有接口生效，可能会与查询器X设置中的”使用系统代理“选项冲突。具体请查看查询器X设置中对于”使用系统代理“选项的介绍。
 
 ### 7.1 POST 和 Header 示例
 
@@ -510,6 +516,38 @@ return value;
 
 适用于部分 API 将需要的信息放置在响应头而非正文的情况使用。
 
+### 7.3 传输标识扩展(transport)
+
+多数接口通过普通 GET/POST 即可调用，省略 `transport` 时按前文规则处理。但有些接口可能需要传入特定的 `transport` 参数时才能使用。此时，可用 `transport` 指定对应的传输标识，结合接口所需要的标识、鉴权方式和通信流程等信息，发起相应的查询。
+
+通用请求可使用以下传输方式：
+
+| 标识 | 用法 |
+| --- | --- |
+| `HTTP`、`HTTPS` | 使用原有 HTTP 请求功能，可访问其它服务的 HTTP/HTTPS API，保留 GET/POST、Header、Cookie 等属性。实际使用 HTTP 还是 HTTPS 由 `url` 决定。 |
+| `WebSocket`、`WS`、`WSS` | 使用通用 WebSocket 文本请求。实际是否加密由 `url` 的 `ws://` 或 `wss://` 决定。 |
+
+上述通用标识不区分大小写；服务专用标识仍按其约定填写，不会自动识别任意 API 的鉴权、挑战应答或消息格式。某服务文档里的 `transport` 若只是 URL 参数或 JSON 字段，应照常写在 URL 或请求正文中，不要直接当作这里的传输标识。
+
+例如，某服务通过 WebSocket 接收目标 IP 并返回 JSON，可以写为：
+
+```
+request response {
+    url = "wss://example.com/geo";
+    transport = WebSocket;
+    message = ip;
+    timeoutMs = 10000;
+    header "Authorization" = "Bearer 在本机填写凭据";
+}
+returnGeo GetJson(response, "country.name"), GetJson(response, "as.name");
+```
+
+`message` 可以用 `Concat` 构造服务要求的 JSON 文本，但引号、反斜杠等内容需自行正确转义。需要协商子协议时添加 `subProtocol = "服务要求的名称";`。不填写 `message` 和 `queryIP` 时只接收消息。程序返回收到的第一条完整文本消息，不会自动跳过欢迎信息、执行多轮对话或推断业务响应；这类特殊流程仍需对应适配。
+
+通用 WebSocket 每次请求使用独立连接，返回后释放；支持分片文本响应，最大 1MB，不支持二进制响应。请求头用于连接握手，但 .NET Framework 限制的请求头（例如 `User-Agent`）可能无法设置。连接、发送、接收共用 `timeoutMs` 时限；未设置正数时使用全局网络超时（当前为 10 秒）。网络错误写入 `error.message`，用户主动取消则停止请求。
+
+通用 WebSocket 与服务专用传输均遵循软件全局代理设置，普通 HTTP/Cookie/强制地址族属性不适用于 WebSocket。修改配置文件后需重新启动程序。
+
 ## 八、可用函数
 
 查询器X所有的配置文件（包括但不限于API1/2）均可使用且只能使用下列函数。
@@ -542,12 +580,16 @@ GetJson(json, "country.name")
 GetJson(json, "subdivisions[0].names.zh-CN")
 ```
 
+路径按 JSON 的实际层级读取，每一级只查找当前对象的直接子键，不会自动搜索更深层或其它分支。例如，响应同时包含 `as.country` 和根对象的 `country.name` 时，`GetJson(json, "country.name")` 读取后者，不受前者影响。
+
 `GetKeysJson` 与点号路径一样按层级逐步读取，只是把原来由点号分隔的每一级路径改为独立参数：
 
 ```
 GetJson(json, "data.location.city")
 GetKeysJson(json, "data", "location", "city")
 ```
+
+同样，读取 `country.name` 可写为 `GetKeysJson(json, "country", "name")`。不要把整个点号路径作为该函数的单个键参数，除非 JSON 中的键名本身就包含点号。
 
 两者在上述示例中作用相同。`GetKeysJson` 的每个键都按完整文本处理，因此更适合键名本身包含点号的 JSON：
 
