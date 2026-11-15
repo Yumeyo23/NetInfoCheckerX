@@ -606,7 +606,7 @@ namespace NetInfoCheckerX
                 "url", "method", "postData", "useCurlUA", "useRandomUA", "encoding",
                 "forceIPv4", "forceIPv6", "responseHeader"
                 , "timeoutMs", "cookieWarmup", "cookieHost", "ensureCookieName",
-                "attempts", "successJsonPath"
+                "attempts", "successJsonPath", "transport", "queryIP", "message", "subProtocol"
             };
 
         private static void ValidateCatalog(CatalogDefinition catalog)
@@ -639,6 +639,21 @@ namespace NetInfoCheckerX
                     }
                     foreach (Expression value in request.Headers.Values) ValidateExpression(value);
                     ValidateExpression(request.Condition);
+                    Expression transportExpression;
+                    if (request.Properties.TryGetValue("transport", out transportExpression))
+                    {
+                        var literalTransport = transportExpression as LiteralExpression;
+                        var namedTransport = transportExpression as VariableExpression;
+                        string transportName = literalTransport != null ? ToText(literalTransport.Value)
+                            : namedTransport == null ? null : namedTransport.Name;
+                        if (ScriptRequestTransport.IsServiceTransport(transportName))
+                        {
+                            if (!request.Properties.ContainsKey("queryIP"))
+                                throw new FormatException(endpoint.Name + " 的 NextTrace request 缺少 queryIP");
+                        }
+                        else if (literalTransport != null && !ScriptRequestTransport.IsSupported(transportName))
+                            throw new FormatException("不支持的 request transport: " + transportName);
+                    }
                     continue;
                 }
 
@@ -873,11 +888,36 @@ namespace NetInfoCheckerX
             CancellationToken effectiveToken = token;
             try
             {
-                if (timeoutMs > 0)
+                string transport = ScriptRequestTransport.Normalize(
+                    GetStringProperty(request, "transport", variables, false) ?? "HTTP");
+                if (timeoutMs > 0 && transport == "HTTP")
                 {
                     timeout = new CancellationTokenSource(timeoutMs);
                     linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token);
                     effectiveToken = linked.Token;
+                }
+
+                if (transport != "HTTP")
+                {
+                    if (transport == "WebSocket")
+                    {
+                        string message = GetStringProperty(request, "message", variables, false)
+                            ?? GetStringProperty(request, "queryIP", variables, false);
+                        string subProtocol = GetStringProperty(request, "subProtocol", variables, false);
+                        return await ScriptRequestTransport.SendWebSocketAsync(url, message, subProtocol,
+                            headers, timeoutMs, token);
+                    }
+                    if (!ScriptRequestTransport.IsServiceTransport(transport))
+                        throw new FormatException("不支持的 request transport: " + transport);
+                    string queryIP = GetStringProperty(request, "queryIP", variables, true);
+                    try
+                    {
+                        return await NextTraceApiClient.QueryWithPowTimeoutAsync(transport, url, queryIP, headers, token, timeoutMs);
+                    }
+                    catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                    {
+                        return NextTraceApiClient.Error("查询超时，请检查网络或代理后重试");
+                    }
                 }
 
                 if (!string.IsNullOrWhiteSpace(cookieWarmup))
