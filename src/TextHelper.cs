@@ -70,155 +70,230 @@ namespace NetInfoCheckerX
         /// </summary>
         public static string ExtractJsonValue(string json, string path)
         {
-            if (string.IsNullOrEmpty(json)) return "";
-
-            string currentJson = json;
-            // 兼容处理路径格式
-            string normalizedPath = path.Replace("['", ".").Replace("']", "").Replace("[\"", ".").Replace("\"]", "");
-            if (normalizedPath.StartsWith(".")) normalizedPath = normalizedPath.Substring(1);
-
-            string[] steps = normalizedPath.Split('.');
-
-            foreach (var step in steps)
+            if (string.IsNullOrWhiteSpace(json) || string.IsNullOrEmpty(path)) return "";
+            try
             {
-                string key = step;
-                int arrayIndex = -1;
-
-                // 提取数组下标，比如 path[0]
-                if (step.Contains("[") && step.Contains("]"))
+                JsonNode current = new JsonReader(json).Read();
+                int position = 0;
+                bool firstStep = true;
+                while (position < path.Length)
                 {
-                    var arrayMatch = Regex.Match(step, @"(?<name>.*?)\[(?<index>\d+)\]");
-                    if (arrayMatch.Success)
+                    if (path[position] == '.')
                     {
-                        key = arrayMatch.Groups["name"].Value;
-                        arrayIndex = int.Parse(arrayMatch.Groups["index"].Value);
+                        position++;
+                        if (position == path.Length) return "";
                     }
-                }
+                    else if (!firstStep && path[position] != '[') return "";
+                    firstStep = false;
 
-                string searchKey = $"\"{key}\"";
-                int keyIndex = currentJson.IndexOf(searchKey, StringComparison.Ordinal);
-                if (keyIndex == -1) return "";
-
-                int colonIndex = currentJson.IndexOf(':', keyIndex + searchKey.Length);
-                if (colonIndex == -1) return "";
-
-                int valueStartIndex = -1;
-                for (int i = colonIndex + 1; i < currentJson.Length; i++)
-                {
-                    if (!char.IsWhiteSpace(currentJson[i])) { valueStartIndex = i; break; }
-                }
-                if (valueStartIndex == -1) return "";
-
-                char firstChar = currentJson[valueStartIndex];
-                string extractedValue = "";
-
-                // 基础提取逻辑
-                if (firstChar == '"')
-                { // 字符串
-                    int endQuoteIndex = currentJson.IndexOf('"', valueStartIndex + 1);
-                    while (endQuoteIndex != -1 && currentJson[endQuoteIndex - 1] == '\\')
-                        endQuoteIndex = currentJson.IndexOf('"', endQuoteIndex + 1);
-                    if (endQuoteIndex != -1)
-                        extractedValue = currentJson.Substring(valueStartIndex + 1, endQuoteIndex - valueStartIndex - 1);
-                }
-                else if (firstChar == '{' || firstChar == '[')
-                { // 对象或数组
-                    int balance = 0;
-                    char open = firstChar;
-                    char close = (firstChar == '{') ? '}' : ']';
-                    for (int i = valueStartIndex; i < currentJson.Length; i++)
+                    if (path[position] == '[')
                     {
-                        if (currentJson[i] == open) balance++;
-                        else if (currentJson[i] == close) balance--;
-                        if (balance == 0)
+                        position++;
+                        if (position >= path.Length) return "";
+                        char quote = path[position];
+                        if (quote == '\'' || quote == '"')
                         {
-                            extractedValue = currentJson.Substring(valueStartIndex, i - valueStartIndex + 1);
-                            break;
-                        }
-                    }
-                }
-                else
-                { // 数字/布尔/null
-                    int endIdx = currentJson.IndexOfAny(new char[] { ',', '}', ']' }, valueStartIndex);
-                    if (endIdx == -1) endIdx = currentJson.Length;
-                    extractedValue = currentJson.Substring(valueStartIndex, endIdx - valueStartIndex).Trim();
-                    if (extractedValue.Equals("null", StringComparison.OrdinalIgnoreCase))
-                        extractedValue = "";
-                }
-
-                // --- 处理数组 ---
-                if (firstChar == '[')
-                {
-                    string content = extractedValue.Substring(1, extractedValue.Length - 2).Trim();
-                    if (string.IsNullOrEmpty(content)) { currentJson = ""; continue; }
-
-                    List<string> items = new List<string>();
-                    int currentPos = 0;
-                    int foundCount = 0;
-                    bool matched = false;
-
-                    while (currentPos < content.Length)
-                    {
-                        while (currentPos < content.Length && (char.IsWhiteSpace(content[currentPos]) || content[currentPos] == ','))
-                            currentPos++;
-                        if (currentPos >= content.Length) break;
-
-                        int start = currentPos;
-                        int itemEnd = -1;
-                        // 判断这一项是对象、数组还是普通字符串
-                        if (content[currentPos] == '{' || content[currentPos] == '[')
-                        {
-                            int b = 0;
-                            char op = content[currentPos];
-                            char cl = (op == '{' ? '}' : ']');
-                            for (int j = currentPos; j < content.Length; j++)
+                            position++;
+                            var key = new StringBuilder();
+                            bool closed = false;
+                            while (position < path.Length)
                             {
-                                if (content[j] == op) b++;
-                                else if (content[j] == cl) b--;
-                                if (b == 0) { itemEnd = j; break; }
+                                char c = path[position++];
+                                if (c == quote) { closed = true; break; }
+                                if (c == '\\' && position < path.Length)
+                                    c = path[position++];
+                                key.Append(c);
                             }
-                        }
-                        else if (content[currentPos] == '"')
-                        {
-                            int eq = content.IndexOf('"', currentPos + 1);
-                            while (eq != -1 && content[eq - 1] == '\\')
-                                eq = content.IndexOf('"', eq + 1);
-                            itemEnd = eq;
+                            if (!closed || position >= path.Length || path[position++] != ']') return "";
+                            current = GetJsonChild(current, key.ToString());
                         }
                         else
                         {
-                            itemEnd = content.IndexOfAny(new char[] { ',', ']' }, currentPos);
-                            if (itemEnd == -1) itemEnd = content.Length - 1;
-                            else itemEnd--;
+                            int start = position;
+                            while (position < path.Length && char.IsDigit(path[position])) position++;
+                            int index;
+                            if (position == start || position >= path.Length || path[position++] != ']' ||
+                                !int.TryParse(path.Substring(start, position - start - 1), out index) ||
+                                current.Items == null || index >= current.Items.Count) return "";
+                            current = current.Items[index];
                         }
-
-                        string targetItem = content.Substring(start, itemEnd - start + 1).Trim().Trim('"');
-
-                        if (arrayIndex == -1)
-                        { // 没有指定下标，把所有项加进列表
-                            items.Add(targetItem);
-                        }
-                        else if (foundCount == arrayIndex)
-                        { // 指定了下标，只取那一个
-                            currentJson = targetItem;
-                            matched = true;
-                            break;
-                        }
-                        foundCount++;
-                        currentPos = itemEnd + 1;
                     }
-
-                    if (arrayIndex == -1)
-                        currentJson = string.Join("/", items); // 合并所有结果
-                    else if (!matched)
-                        return "";
+                    else
+                    {
+                        int start = position;
+                        while (position < path.Length && path[position] != '.' && path[position] != '[') position++;
+                        current = GetJsonChild(current, path.Substring(start, position - start));
+                    }
+                    if (current == null) return "";
                 }
-                else
-                {
-                    currentJson = extractedValue;
-                }
+                return JsonText(json, current, true);
             }
-            return currentJson;
+            catch (FormatException) { return ""; }
+            catch (ArgumentException) { return ""; }
+        }
+
+        private static JsonNode GetJsonChild(JsonNode node, string key)
+        {
+            JsonNode child;
+            return node != null && node.Properties != null && node.Properties.TryGetValue(key, out child)
+                ? child : null;
+        }
+
+        private static string JsonText(string source, JsonNode node, bool joinArray)
+        {
+            if (node.Kind == '"') return source.Substring(node.Start + 1, node.Length - 2);
+            if (node.Kind == 'n') return "";
+            if (joinArray && node.Items != null)
+            {
+                var items = new List<string>();
+                foreach (JsonNode item in node.Items)
+                {
+                    // Preserve the historic slash-joined array format, including raw nested containers/null.
+                    items.Add(item.Kind == '"' ? source.Substring(item.Start + 1, item.Length - 2)
+                        : source.Substring(item.Start, item.Length));
+                }
+                return string.Join("/", items);
+            }
+            return source.Substring(node.Start, node.Length);
+        }
+
+        private sealed class JsonNode
+        {
+            internal int Start;
+            internal int Length;
+            internal char Kind;
+            internal Dictionary<string, JsonNode> Properties;
+            internal List<JsonNode> Items;
+        }
+
+        // Parse structure once; retain spans into the original text so formatting and numeric/string
+        // representations do not change as a side effect of fixing path lookup.
+        private sealed class JsonReader
+        {
+            private static readonly Regex Number = new Regex(
+                @"\G-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?",
+                RegexOptions.CultureInvariant);
+            private readonly string source;
+            private readonly System.Web.Script.Serialization.JavaScriptSerializer strings =
+                new System.Web.Script.Serialization.JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+            private int position;
+
+            internal JsonReader(string source) { this.source = source; }
+
+            internal JsonNode Read()
+            {
+                if (source.Length > 0 && source[0] == '\ufeff') position++;
+                JsonNode node = ReadValue(0);
+                WhiteSpace();
+                if (position != source.Length) throw new FormatException("JSON 后存在多余内容");
+                return node;
+            }
+
+            private void WhiteSpace()
+            {
+                while (position < source.Length && char.IsWhiteSpace(source[position])) position++;
+            }
+
+            private void Expect(char c)
+            {
+                WhiteSpace();
+                if (position >= source.Length || source[position++] != c) throw new FormatException("JSON 格式错误");
+            }
+
+            private JsonNode ReadValue(int depth)
+            {
+                if (depth > 128) throw new FormatException("JSON 嵌套过深");
+                WhiteSpace();
+                if (position >= source.Length) throw new FormatException("JSON 未结束");
+                var node = new JsonNode { Start = position, Kind = source[position] };
+                switch (node.Kind)
+                {
+                    case '{':
+                        position++;
+                        node.Properties = new Dictionary<string, JsonNode>(StringComparer.Ordinal);
+                        WhiteSpace();
+                        if (position < source.Length && source[position] != '}')
+                        {
+                            while (true)
+                            {
+                                WhiteSpace();
+                                int start = position;
+                                ReadString();
+                                string key = strings.Deserialize<string>(source.Substring(start, position - start));
+                                Expect(':');
+                                JsonNode child = ReadValue(depth + 1);
+                                // Keep first-match behavior for duplicate keys in the same object.
+                                if (!node.Properties.ContainsKey(key)) node.Properties.Add(key, child);
+                                WhiteSpace();
+                                if (position >= source.Length || source[position] != ',') break;
+                                position++;
+                            }
+                        }
+                        Expect('}');
+                        break;
+                    case '[':
+                        position++;
+                        node.Items = new List<JsonNode>();
+                        WhiteSpace();
+                        if (position < source.Length && source[position] != ']')
+                        {
+                            while (true)
+                            {
+                                node.Items.Add(ReadValue(depth + 1));
+                                WhiteSpace();
+                                if (position >= source.Length || source[position] != ',') break;
+                                position++;
+                            }
+                        }
+                        Expect(']');
+                        break;
+                    case '"':
+                        ReadString();
+                        break;
+                    case 't': Literal("true"); break;
+                    case 'f': Literal("false"); break;
+                    case 'n': Literal("null"); break;
+                    default:
+                        Match match = Number.Match(source, position);
+                        if (!match.Success) throw new FormatException("JSON 值无效");
+                        position += match.Length;
+                        break;
+                }
+                node.Length = position - node.Start;
+                return node;
+            }
+
+            private void Literal(string literal)
+            {
+                if (position + literal.Length > source.Length ||
+                    string.CompareOrdinal(source, position, literal, 0, literal.Length) != 0)
+                    throw new FormatException("JSON 值无效");
+                position += literal.Length;
+            }
+
+            private void ReadString()
+            {
+                Expect('"');
+                while (position < source.Length)
+                {
+                    char c = source[position++];
+                    if (c == '"') return;
+                    if (c < ' ') throw new FormatException("JSON 字符串包含控制字符");
+                    if (c != '\\') continue;
+                    if (position >= source.Length) break;
+                    char escape = source[position++];
+                    if (escape == 'u')
+                    {
+                        for (int i = 0; i < 4; i++)
+                        {
+                            if (position >= source.Length || !Uri.IsHexDigit(source[position++]))
+                                throw new FormatException("JSON Unicode 转义无效");
+                        }
+                    }
+                    else if ("\"\\/bfnrt".IndexOf(escape) < 0) throw new FormatException("JSON 转义无效");
+                }
+                throw new FormatException("JSON 字符串未结束");
+            }
         }
 
         #endregion
@@ -549,62 +624,20 @@ namespace NetInfoCheckerX
         /// </summary>
         public static string ExtractJsonValueByKeys(string json, params string[] keys)
         {
-            if (string.IsNullOrEmpty(json) || keys == null || keys.Length == 0) return "";
-            string currentJson = json;
-            for (int i = 0; i < keys.Length; i++)
+            if (string.IsNullOrWhiteSpace(json) || keys == null || keys.Length == 0) return "";
+            try
             {
-                string searchKey = $"\"{keys[i]}\"";
-                int keyIndex = currentJson.IndexOf(searchKey, StringComparison.Ordinal);
-                if (keyIndex == -1) return "";
-                int colonIndex = currentJson.IndexOf(':', keyIndex + searchKey.Length);
-                if (colonIndex == -1) return "";
-                int valueStartIndex = -1;
-                for (int j = colonIndex + 1; j < currentJson.Length; j++)
+                JsonNode current = new JsonReader(json).Read();
+                foreach (string key in keys)
                 {
-                    if (!char.IsWhiteSpace(currentJson[j])) { valueStartIndex = j; break; }
+                    if (key == null) return "";
+                    current = GetJsonChild(current, key);
+                    if (current == null) return "";
                 }
-                if (valueStartIndex == -1) return "";
-                char firstChar = currentJson[valueStartIndex];
-                if (firstChar == '"')
-                {
-                    int endQuoteIndex = currentJson.IndexOf('"', valueStartIndex + 1);
-                    if (endQuoteIndex == -1) return "";
-                    string strVal = currentJson.Substring(valueStartIndex + 1, endQuoteIndex - valueStartIndex - 1);
-                    if (i == keys.Length - 1) return strVal;
-                    currentJson = strVal;
-                }
-                else if (firstChar == '{' || firstChar == '[')
-                {
-                    int depth = 1;
-                    int endPos = valueStartIndex + 1;
-                    bool inString = false;
-                    while (endPos < currentJson.Length && depth > 0)
-                    {
-                        char c = currentJson[endPos];
-                        if (c == '"' && (endPos == valueStartIndex + 1 || currentJson[endPos - 1] != '\\')) inString = !inString;
-                        if (!inString)
-                        {
-                            if (c == '{' || c == '[') depth++;
-                            else if (c == '}' || c == ']') depth--;
-                        }
-                        endPos++;
-                    }
-                    if (depth != 0) return "";
-                    string objVal = currentJson.Substring(valueStartIndex, endPos - valueStartIndex);
-                    if (i == keys.Length - 1) return objVal;
-                    currentJson = objVal;
-                }
-                else
-                {
-                    int endPos = valueStartIndex;
-                    while (endPos < currentJson.Length && (char.IsDigit(currentJson[endPos]) || currentJson[endPos] == '.' || currentJson[endPos] == '-'))
-                        endPos++;
-                    string numVal = currentJson.Substring(valueStartIndex, endPos - valueStartIndex);
-                    if (i == keys.Length - 1) return numVal;
-                    currentJson = numVal;
-                }
+                return JsonText(json, current, false);
             }
-            return currentJson;
+            catch (FormatException) { return ""; }
+            catch (ArgumentException) { return ""; }
         }
 
         #endregion
