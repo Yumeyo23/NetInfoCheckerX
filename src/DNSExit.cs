@@ -25,6 +25,7 @@ namespace NetInfoCheckerX
         private const string SystemDefaultText = "系统默认 (兼容模式)";
         private const string IniSection = "DNSExit";
         private const string BaseTitle = "DNS出口/泄漏测试 ✧ NetInfoCheckerX";
+        private const int DefaultProbesPerBatch = 4;
         private const string DnsClientPolicyPath = @"SOFTWARE\Policies\Microsoft\Windows NT\DNSClient";
         private const string DisableSmartNameResolutionValue = "DisableSmartNameResolution";
 
@@ -65,7 +66,7 @@ namespace NetInfoCheckerX
             comboNIC.DropDownStyle = ComboBoxStyle.DropDown;
             dataGridView1.AllowUserToAddRows = false;
             ConfigureResultGrid();
-            _titleTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _titleTimer = new System.Windows.Forms.Timer(components) { Interval = 1000 };
             _titleTimer.Tick += (sender, e) => UpdateRunningTitle();
             FormClosing += DNSExit_FormClosing;
             btnStart.Click += btnStart_Click;
@@ -511,41 +512,44 @@ namespace NetInfoCheckerX
         {
             var tasks = new List<Task>
             {
-                RunProbeLoopAsync("网易", 8, ProbeNetEaseAsync, token),
-                RunProbeLoopAsync("阿里云", 4, ProbeAlibabaAsync, token),
-                RunProbeLoopAsync("IP-API", 4, ProbeIpApiAsync, token),
-                RunProbeLoopAsync("Fastly", 4, ProbeFastlyAsync, token),
-                RunProbeLoopAsync("IPLeak", 8, ProbeIpLeakAsync, token)
+                RunProbeLoopAsync("网易", ProbeNetEaseAsync, token, probesPerBatch: 8),
+                RunProbeLoopAsync("阿里云", ProbeAlibabaAsync, token),
+                RunProbeLoopAsync("IP-API", ProbeIpApiAsync, token),
+                RunProbeLoopAsync("Fastly", ProbeFastlyAsync, token),
+                RunProbeLoopAsync("IPLeak", ProbeIpLeakAsync, token, probesPerBatch: 8),
+                RunBashWsLoopAsync(token)
             };
 
             if (!_forceIPv6)
             {
-                tasks.Add(RunProbeLoopAsync("Surfshark", 4,
+                tasks.Add(RunProbeLoopAsync("Surfshark",
                     ct => ProbeSurfsharkAsync(4, ct), token));
-                tasks.Add(RunProbeLoopAsync("BrowserLeaks", 2,
-                    ct => ProbeBrowserLeaksAsync(4, "net", ct), token));
-                tasks.Add(RunProbeLoopAsync("BrowserLeaks", 4,
+                tasks.Add(RunProbeLoopAsync("BrowserLeaks",
+                    ct => ProbeBrowserLeaksAsync(4, "net", ct), token, probesPerBatch: 2));
+                tasks.Add(RunProbeLoopAsync("BrowserLeaks",
                     ct => ProbeBrowserLeaksAsync(4, "org", ct), token));
             }
             if (!_forceIPv4)
             {
-                tasks.Add(RunProbeLoopAsync("Surfshark", 4,
+                tasks.Add(RunProbeLoopAsync("Surfshark",
                     ct => ProbeSurfsharkAsync(6, ct), token));
-                tasks.Add(RunProbeLoopAsync("BrowserLeaks", 2,
-                    ct => ProbeBrowserLeaksAsync(6, "net", ct), token));
-                tasks.Add(RunProbeLoopAsync("BrowserLeaks", 4,
+                tasks.Add(RunProbeLoopAsync("BrowserLeaks",
+                    ct => ProbeBrowserLeaksAsync(6, "net", ct), token, probesPerBatch: 2));
+                tasks.Add(RunProbeLoopAsync("BrowserLeaks",
                     ct => ProbeBrowserLeaksAsync(6, "org", ct), token));
             }
             return tasks;
         }
 
-        private async Task RunProbeLoopAsync(string source, int count,
+        // 每个源只有一个串行循环；probesPerBatch 是每批次数，不是并发数或随机前缀长度。
+        // 保留各源原有请求节奏，常用批次数统一使用默认值。
+        private async Task RunProbeLoopAsync(string source,
             Func<CancellationToken, Task<IEnumerable<string>>> probe,
-            CancellationToken totalToken)
+            CancellationToken totalToken, int probesPerBatch = DefaultProbesPerBatch)
         {
             while (!totalToken.IsCancellationRequested)
             {
-                for (int i = 0; i < count && !totalToken.IsCancellationRequested; i++)
+                for (int i = 0; i < probesPerBatch && !totalToken.IsCancellationRequested; i++)
                 {
                     using (var requestCts = CancellationTokenSource.CreateLinkedTokenSource(totalToken))
                     {
@@ -564,7 +568,7 @@ namespace NetInfoCheckerX
                         }
                     }
 
-                    if (i + 1 < count && !totalToken.IsCancellationRequested)
+                    if (i + 1 < probesPerBatch && !totalToken.IsCancellationRequested)
                     {
                         try { await Task.Delay(100, totalToken).ConfigureAwait(false); }
                         catch (OperationCanceledException) { break; }
@@ -578,6 +582,76 @@ namespace NetInfoCheckerX
                     catch (OperationCanceledException) { break; }
                 }
             }
+        }
+
+        private async Task RunBashWsLoopAsync(CancellationToken totalToken)
+        {
+            // bash.ws 需要先申请会话，再访问随机子域名，最后读取会话结果。
+            // 每次访问单独遵循访问超时，整个流程受总测试时长/停止按钮控制。
+            while (!totalToken.IsCancellationRequested)
+            {
+                try
+                {
+                    string id = (await FetchWithRequestTimeoutAsync(
+                        "https://bash.ws/id", totalToken).ConfigureAwait(false))?.Trim();
+                    if (string.IsNullOrEmpty(id) ||
+                        !Regex.IsMatch(id, @"\A[a-zA-Z0-9-]{1,63}\z"))
+                        throw new FormatException("bash.ws 返回了无效的测试 ID。");
+
+                    for (int i = 0; i < DefaultProbesPerBatch; i++)
+                    {
+                        totalToken.ThrowIfCancellationRequested();
+                        try
+                        {
+                            // 只需触发 DNS。即使子域名的 HTTPS 请求失败，仍读取权威端记录。
+                            // 不放宽证书验证；所有请求复用当前网卡绑定和全局代理逻辑。
+                            await FetchWithRequestTimeoutAsync("https://" + RandomToken(16) +
+                                "." + id + ".bash.ws/css/z.css", totalToken).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (!totalToken.IsCancellationRequested) { }
+                        await Task.Delay(100, totalToken).ConfigureAwait(false);
+                    }
+
+                    await Task.Delay(500, totalToken).ConfigureAwait(false);
+                    string text = await FetchWithRequestTimeoutAsync(
+                        "https://bash.ws/dnsleak/test/" + id + "?json=2",
+                        totalToken).ConfigureAwait(false);
+                    foreach (string address in ParseBashWsAddresses(text))
+                        PostResult(address, "bash.ws");
+                }
+                catch (OperationCanceledException) when (totalToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("[DNSExit] bash.ws: " + ex.Message);
+                }
+
+                try { await Task.Delay(500, totalToken).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+            }
+        }
+
+        private async Task<string> FetchWithRequestTimeoutAsync(string url,
+            CancellationToken totalToken)
+        {
+            using (var requestCts = CancellationTokenSource.CreateLinkedTokenSource(totalToken))
+            {
+                requestCts.CancelAfter(_requestTimeoutMs);
+                return await FetchAsync(url, requestCts.Token).ConfigureAwait(false);
+            }
+        }
+
+        private static IEnumerable<string> ParseBashWsAddresses(string text)
+        {
+            var records = Deserialize(text) as object[];
+            if (records == null) return Enumerable.Empty<string>();
+            // ip 是访问者的 HTTP 出口，conclusion 是网站结论；只有 dns 才是 DNS 出口。
+            return NormalizeAddresses(records
+                .Where(record => string.Equals(GetString(record, "type"), "dns",
+                    StringComparison.OrdinalIgnoreCase))
+                .Select(record => GetString(record, "ip")));
         }
 
         private async Task<string> FetchAsync(string url, CancellationToken token)
