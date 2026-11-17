@@ -66,6 +66,7 @@ namespace NetInfoCheckerX
 
         public UDPGameTestServer()
         {
+            components = new System.ComponentModel.Container();
             InitializeComponent();
             btnStart.Click += btnStart_Click;
             FormClosing += UDPGameTestServer_FormClosing;
@@ -148,7 +149,7 @@ namespace NetInfoCheckerX
             CloudControl.UsedTimesCounter("PingUDPGameServer");
             lblStatus.Text = "服务未启动\r\n";
             _runtimeWarmupTask = Task.Run(() => UdpGameRuntimeWarmup.Run(typeof(UDPGameTestServer)));
-            _statusTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _statusTimer = new System.Windows.Forms.Timer(components) { Interval = 1000 };
             _statusTimer.Tick += StatusTimer_Tick;
             _statusTimer.Start();
         }
