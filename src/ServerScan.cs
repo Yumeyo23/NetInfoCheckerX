@@ -59,7 +59,7 @@ namespace NetInfoCheckerX
 
         private void SetupGridCopyMenu()
         {
-            gridCopyMenu = new ContextMenuStrip();
+            gridCopyMenu = new ContextMenuStrip(components);
             ToolStripMenuItem copyItem = new ToolStripMenuItem("复制");
             copyItem.Click += (sender, e) => CopyCurrentCell();
             gridCopyMenu.Items.Add(copyItem);
