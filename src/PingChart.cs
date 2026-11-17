@@ -37,11 +37,12 @@ namespace NetInfoCheckerX
 
         public PingChart()
         {
+            components = new System.ComponentModel.Container();
             InitializeComponent();
 
             formsPlot1.MouseDoubleClick += (s, e) => { _autoScroll = true; };
 
-            var contextMenu = new ContextMenuStrip();
+            var contextMenu = new ContextMenuStrip(components);
             contextMenu.Items.Add("复制图像", null, (s2, e2) =>
             {
                 using (var bmp = formsPlot1.Plot.Render())
@@ -71,7 +72,7 @@ namespace NetInfoCheckerX
             DrawThresholdLines();
             formsPlot1.Refresh();
 
-            _refreshTimer = new System.Windows.Forms.Timer { Interval = RefreshMs };
+            _refreshTimer = new System.Windows.Forms.Timer(components) { Interval = RefreshMs };
             _refreshTimer.Tick += (s, e) => RefreshChart();
             _refreshTimer.Start();
 
