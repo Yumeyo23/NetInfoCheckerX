@@ -157,7 +157,7 @@ namespace NetInfoCheckerX
             LoadSettings();
             _runtimeWarmupTask = Task.Run(() => UdpGameRuntimeWarmup.Run(typeof(UDPGameTest)));
 
-            _uiTimer = new System.Windows.Forms.Timer { Interval = 250 };
+            _uiTimer = new System.Windows.Forms.Timer(components) { Interval = 250 };
             _uiTimer.Tick += UiTimer_Tick;
             ResetLabels();
 
@@ -1441,6 +1441,3 @@ namespace NetInfoCheckerX
         }
     }
 }
-
-
-
