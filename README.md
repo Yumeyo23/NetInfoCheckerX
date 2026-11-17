@@ -7,7 +7,6 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 
 <img width="3000" height="1875" alt="功能预览261020" src="https://github.com/user-attachments/assets/4163d9cf-fd21-4cae-a0c1-5da533216162" />
 
-
 《网络综合查询器X》是由與夢Yumeyo原创开发、基于易语言版《[网络综合查询器](https://github.com/Yumeyo23/NetInfoChecker)》重制、以“小而美”为设计理念的全能向网络工具箱，适合网络爱好者常备日常使用。
 
 > [!CAUTION]
@@ -19,7 +18,7 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 
 > [!IMPORTANT]
 >
-> 本项目是非盈利性的个人项目，所有内容均为非商业用途，如有用户打赏均为自愿捐赠，非项目收费。为~~防API轻易滥用及~~保护软件更新动力，本项目采用**部分开源**：**公开绝大多数测试的核心方法供交流学习，UI 等高原创部分暂时保持不开源**。
+> 本项目是非盈利的个人项目，所有内容均为非商业用途，如有用户打赏为自愿捐赠，非项目收费。为~~防API轻易滥用及~~保护软件更新动力，本项目采用**部分开源**：**公开绝大多数测试的核心方法供交流学习，UI 等高原创部分暂时保持不开源**。
 >
 > **作者不会从本项目主动获取任何利益和用户隐私等不当信息**，作者衷心地向所有API、服务器等提供商表示感谢，程序中已列出用到的所有API。
 
@@ -30,39 +29,28 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 > 发布程序使用[ConfuserEx](https://github.com/mkaring/ConfuserEx)做基本保护。如对本程序安全问题存在任何疑惑，可自行决定是否使用本项目。
 
 ## 下载
+
 - **因个人习惯，GitHub页面更新不是很及时，可+Q群：1013442261，抢先下载最新完整包和DLC，有BUG/建议也可以直接来反馈**
 - GitHub请在[release](https://github.com/Yumeyo23/NetInfoCheckerX/releases)下载最新版.
 - **软件完全免费、绿色，但用到了一些外部依赖（后面一一列出），release时均为WINRAR自解压文件**
 - **既可双击临时运行，也可解压后固定目录运行**。长期使用建议解压后运行，可解锁更多记忆功能
   
-## 介绍/Wiki
+## 功能介绍/Wiki
 
-核心功能大图预览，多图警告~
+后面有大图
 
-<img width="3000" height="1875" alt="核心功能261020_06##" src="https://github.com/user-attachments/assets/1653ef5e-a636-462a-bd77-8e5d3249cd88" />
-
-<img width="3000" height="1875" alt="核心功能260917_07##" src="https://github.com/user-attachments/assets/ba870425-43d4-4b95-9d00-88ac1bd5a84d" />
-
-<img width="3000" height="1875" alt="核心功能260917_08##" src="https://github.com/user-attachments/assets/0a57fcff-aed6-495b-82b2-e561def18dc3" />
-
-<img width="3000" height="1875" alt="核心功能260917_09##" src="https://github.com/user-attachments/assets/71f6ef1e-1ece-4721-8540-09c71f33769a" />
-
-<img width="3000" height="1875" alt="核心功能260917_10##" src="https://github.com/user-attachments/assets/92f32f82-c93f-453e-92e6-f9fb15156048" />
-
-<img width="3000" height="1875" alt="核心功能260917_11##" src="https://github.com/user-attachments/assets/e8e5094f-bf71-461d-bd79-4972414d608e" />
-
-全部功能为：
 - 查询/记录本机外网IP、地理位置（支持自行编辑需使用的API）
-- 修改本机网卡(IPv4/DHCPv6/SLAAC/DNS（v4v6）/MAC地址（需驱动支持）/跃点数)
+- 修改本机网卡(IPv4/DHCPv6/SLAAC/DNS（v4v6）/MAC地址（需驱动支持）/跃点数/系统代理)
 - 多出口测试(简洁版/全能版/教育网/SpeedTest.Net)
-- NAT类型测试
+- NAT类型测试，带详细设置和测试日志供Debug
+- NATMAP映射工具GUI
 - TCP/UDP/ICMP全协议Ping+/Trace+
 - 最大连接数测试
 - DNS劫持测试
 - DNS解析测速
 - DNS出口（泄漏）测试
 - UPnP控制台
-- IPERF内网测速
+- IPERF内网测速GUI
 - 一键搭建LibreSpeed服务器
 - 网速测试(上传/下载)
 - 本机配置检测
@@ -103,7 +91,7 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 
 | 名字 | 协议 | 备注 |
 |---|---|---|
-| [图吧工具箱硬件检测引擎](https://www.tbtool.cn/sdk/index.html) | 免费使用 | 本机配置检测。直接使用图吧官方提供的 C++ 版，未修改；原 WMI 版本已停用，改为自有实现 |
+| [图吧工具箱硬件检测引擎](https://www.tbtool.cn/sdk/index.html) | / | 本机配置检测。直接使用图吧官方提供的 C++ 版，未修改；原 WMI 版本已停用，改为自有实现 |
 | [iperf3-win-builds](https://github.com/ar51an/iperf3-win-builds/releases) | Apache-2.0 | iPerf3 测速工具，未修改。实际构建可能包含其他第三方组件，相关许可另行适用 |
 | [LibreSpeed](https://github.com/librespeed/speedtest) | LGPL-3.0-or-later | LibreSpeed 测速服务。精简部分组件、修改 UI 及数据块大小以符合软件需求 |
 | [OpenSpeedTest](https://github.com/openspeedtest/Speed-Test) | MIT | LibreSpeed 开服器 DLC（不附带，可选组件），未修改 |
@@ -111,14 +99,32 @@ Next Generation of [NetInfoChecker](https://github.com/Yumeyo23/NetInfoChecker) 
 | [EmbedIO](https://www.nuget.org/packages/EmbedIO) | MIT | LibreSpeed 服务端，NuGet 包直接使用，未修改 |
 | [ScottPlot.WinForms](https://www.nuget.org/packages/ScottPlot.WinForms) | MIT | Ping 统计图绘制，NuGet 包直接使用，未修改。 |
 | [IP2Region.Net](https://www.nuget.org/packages/IP2Region.Net/) | Apache-2.0 | 程序内置 IP 地理位置数据库读取功能，用于主窗口、手动查询 IP 和 Trace+；NuGet 包直接使用，未修改   |
-| [MaxMind.DB](https://www.nuget.org/packages/MaxMind.DB) | Apache-2.0 | IP 地理位置数据库读取功能，用于主窗口、手动查询 IP 和 Trace+；NuGet 包直接使用，未修改。实际数据库使用 [GeoCN](https://github.com/ljxi/GeoCN)，其再分发授权待确认。 |
+| [MaxMind.DB](https://www.nuget.org/packages/MaxMind.DB) | Apache-2.0 | IP 地理位置数据库读取功能，用于主窗口、手动查询 IP 和 Trace+；NuGet 包直接使用，未修改。|
 | [DnsClient](https://www.nuget.org/packages/DnsClient/) | Apache-2.0 | DNS 劫持测试，NuGet 包直接使用，未修改 |
-| [WinDivert](https://github.com/basil00/WinDivert) | LGPL-3.0 或 GPL-2.0 （本项目选择并整改符合 LGPL-3.0） | Trace+ 高精度测试，未修改 |
-| [Merged-IP-Data](https://github.com/NetworkCats/Merged-IP-Data) | MIT (项目), GeoLite2/IPinfo (CC BY-SA 4.0), DB-IP (CC BY 4.0), Origin ASN (CDLA-Permissive 2.0), OpenProxyDB (CC0 1.0), X4B (MIT), NordVPN | 本地 IP 数据库 DLC（不附带，可选组件），未修改 |
+| [WinDivert](https://github.com/basil00/WinDivert) | LGPL-3.0 or GPL-2.0 （本项目选择并整改符合 LGPL-3.0） | Trace+ 高精度测试，未修改 |
 | [Obfuscar](https://www.nuget.org/packages/Obfuscar) | MIT | 备用混淆器，目前发布版使用 [ConfuserEx](https://github.com/mkaring/ConfuserEx) |
 | [ConfuserEx](https://github.com/mkaring/ConfuserEx) | MIT | 当前发布版使用的混淆器 |
 | [SpeedTest.Net 节点](https://github.com/SukkaW/speedtest-net-servers) | MIT | 多出口测试 SpeedTest.Net 节点列表|
-| [IEEE 官方 MAC 地址表](http://standards-oui.ieee.org/oui/oui.csv)、[Wireshark MAC 地址表](https://www.wireshark.org/download/automated/data/manuf.gz) | 官方数据 | 用于手动查询 MAC 地址，数据文件未修改 |
+| [IEEE 官方 MAC 地址表](http://standards-oui.ieee.org/oui/oui.csv)、[Wireshark MAC 地址表](https://www.wireshark.org/download/automated/data/manuf.gz) | / | 用于手动查询 MAC 地址，数据文件未修改 |
+| [NATMap](https://github.com/heiher/natmap) | MIT | NATMap映射工具GUI |
+| [MaxMindCN](https://github.com/ljxi/GeoCN)  | / | IP 地理位置数据库 （内置）|
+| [IP2Region](https://github.com/lionsoul2014/ip2region)  | Apache-2.0 OR MIT | IP 地理位置数据库 （内置）|
+| [Merged-IP-Data](https://github.com/NetworkCats/Merged-IP-Data) | MIT (项目), GeoLite2/IPinfo (CC BY-SA 4.0), DB-IP (CC BY 4.0), Origin ASN (CDLA-Permissive 2.0), OpenProxyDB (CC0 1.0), X4B (MIT), NordVPN | IP 地理位置数据库（仅支持读取，不附带，自行下载） |
+| [MaxMindCity](https://github.com/P3TERX/GeoLite.mmdb)  | [类 CC-BY 4.0](https://www.maxmind.com/en/geolite/eula) | IP 地理位置数据库（仅支持读取，不附带，自行下载）|
+
+## 核心功能大图预览
+
+<img width="3000" height="1875" alt="核心功能261020_06##" src="https://github.com/user-attachments/assets/1653ef5e-a636-462a-bd77-8e5d3249cd88" />
+
+<img width="3000" height="1875" alt="核心功能260917_07##" src="https://github.com/user-attachments/assets/ba870425-43d4-4b95-9d00-88ac1bd5a84d" />
+
+<img width="3000" height="1875" alt="核心功能260917_08##" src="https://github.com/user-attachments/assets/0a57fcff-aed6-495b-82b2-e561def18dc3" />
+
+<img width="3000" height="1875" alt="核心功能260917_09##" src="https://github.com/user-attachments/assets/71f6ef1e-1ece-4721-8540-09c71f33769a" />
+
+<img width="3000" height="1875" alt="核心功能260917_10##" src="https://github.com/user-attachments/assets/92f32f82-c93f-453e-92e6-f9fb15156048" />
+
+<img width="3000" height="1875" alt="核心功能260917_11##" src="https://github.com/user-attachments/assets/e8e5094f-bf71-461d-bd79-4972414d608e" />
 
 
 ## To do list （重制阶段用，重制完毕后的新功能不计入此列表）
