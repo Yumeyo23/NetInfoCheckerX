@@ -6,6 +6,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Management;
+using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -24,9 +25,48 @@ namespace NetInfoCheckerX
         [DllImport("user32.dll")]
         public static extern bool SendMessage(IntPtr hwnd, int wMsg, int wParam, int lParam);
 
+        [DllImport("wininet.dll", EntryPoint = "InternetSetOptionW", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool InternetSetOption(IntPtr hInternet, int option, IntPtr buffer, int bufferLength);
+
         private const int WM_SYSCOMMAND = 0x0112;
         private const int SC_MOVE = 0xF010;
         private const int HTCAPTION = 0x0002;
+        private const string InternetSettingsRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+        private const int InternetOptionPerConnectionOption = 75;
+        private const int InternetOptionRefresh = 37;
+        private const int InternetOptionSettingsChanged = 39;
+        private const uint InternetPerConnectionFlags = 1;
+        private const uint InternetPerConnectionProxyServer = 2;
+        private const uint InternetPerConnectionProxyBypass = 3;
+        private const uint ProxyTypeDirect = 1;
+        private const uint ProxyTypeProxy = 2;
+        private const uint ProxyTypeAutoProxyUrl = 4;
+        private const uint ProxyTypeAutoDetect = 8;
+
+        [StructLayout(LayoutKind.Explicit)]
+        private struct InternetPerConnectionOptionValue
+        {
+            [FieldOffset(0)] public uint DwordValue;
+            [FieldOffset(0)] public IntPtr StringValue;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct InternetPerConnectionOption
+        {
+            public uint Option;
+            public InternetPerConnectionOptionValue Value;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct InternetPerConnectionOptionList
+        {
+            public uint Size;
+            public IntPtr Connection;
+            public uint OptionCount;
+            public uint OptionError;
+            public IntPtr Options;
+        }
 
         private static int WritePrivateProfileString(string section, string key, string value, string filePath)
             => IniFileHelper.WritePrivateProfileString(section, key, value, filePath);
@@ -57,9 +97,22 @@ namespace NetInfoCheckerX
         private bool _loadedSlaacDns;
         private bool _loadedIPv6StackEnabled;
         private string _loadedNicId;
+        private SystemProxySettings _loadedSystemProxy;
         private bool _loadingNicInfo;
         private bool _ipv4AddressDirty;
         private bool _ipv4DnsDirty;
+
+        private sealed class SystemProxySettings
+        {
+            public bool Enabled { get; set; }
+            public string RawServer { get; set; }
+            public string Address { get; set; }
+            public string Port { get; set; }
+            public bool BypassLocal { get; set; }
+            public string Exceptions { get; set; }
+            public bool AutoDetect { get; set; }
+            public bool AutoConfigEnabled { get; set; }
+        }
 
         public SettingNIC()
         {
@@ -87,10 +140,11 @@ namespace NetInfoCheckerX
 
             this.BackColor = isLight ? Global.themeLight : Global.themeBlack;
 
-            Control[] yumeyoLabels = { lblIPV4, lblMask, lblGateway, lblDNS1, lblDNS2, lblIPv6, lblV6DNS1, lblV6DNS2 };
+            Control[] yumeyoLabels = { lblIPV4, lblMask, lblGateway, lblDNS1, lblDNS2, lblIPv6, lblV6DNS1, lblV6DNS2, lblSystemProxyAddress, lblSystemProxyExceptions };
             foreach (var c in yumeyoLabels) { if (c != null) c.ForeColor = yumeyoColor; }
 
-            Control[] editControls = { ipIPV4, ipMask, ipGateway, ipDNS1, ipDNS2, txtV6DNS1, txtV6DNS2, txtHops, comboNIC, txtMAC, txtMask };
+            Control[] editControls = { ipIPV4, ipMask, ipGateway, ipDNS1, ipDNS2, txtV6DNS1, txtV6DNS2,
+                txtHops, comboNIC, txtMAC, txtMask, txtSystemProxyAddress, txtSystemProxyPort, txtSystemProxyExceptions };
             foreach (var c in editControls)
             {
                 if (c != null)
@@ -100,7 +154,7 @@ namespace NetInfoCheckerX
 
                     if (c is ComboBox cb)
                     {
-                        cb.FlatStyle = FlatStyle.Flat;
+                        cb.FlatStyle = isLight ? FlatStyle.Standard : FlatStyle.Flat;
                     }
 
                     c.Invalidate();
@@ -125,13 +179,14 @@ namespace NetInfoCheckerX
                         btn.BackColor = btnDarkBack;
                         btn.FlatStyle = FlatStyle.Flat;
                         btn.FlatAppearance.BorderColor = Color.DimGray;
-                        btn.FlatAppearance.MouseOverBackColor = Global.Yumeyo;
+                        btn.FlatAppearance.MouseOverBackColor = Global.Yumeyo2;
                     }
                 }
             }
 
             Control[] checkBoxes = { checkDHCP, checkDNS, checkHops, checkChangeIPV6State, checkIPV6State,
-                checkMAC, checkDHCPv6, checkDHCPv6DNS, checkSLAAC, checkSLAACDNS, checkIPv6DNS };
+                checkMAC, checkDHCPv6, checkDHCPv6DNS, checkSLAAC, checkSLAACDNS, checkIPv6DNS,
+                checkSystemProxyEnabled, checkSystemProxyBypassLocal };
             foreach (var cb in checkBoxes)
             {
                 if (cb != null)
@@ -156,6 +211,7 @@ namespace NetInfoCheckerX
         {
             this.MouseDown += MyMouseDown;
             pictureBox2.MouseDown += MyMouseDown;
+            this.MinimumSize = this.Size;
             lblVersion.Text = Global.exeName + " " + Global.Version;
             CloudControl.UsedTimesCounter("手动设置网卡");
 
@@ -163,7 +219,8 @@ namespace NetInfoCheckerX
             foreach (TextBox textBox in new[]
             {
                 ipIPV4, ipMask, ipGateway, ipDNS1, ipDNS2,
-                txtV6DNS1, txtV6DNS2, txtMAC, txtMask, txtHops
+                txtV6DNS1, txtV6DNS2, txtMAC, txtMask, txtHops,
+                txtSystemProxyAddress, txtSystemProxyPort, txtSystemProxyExceptions
             })
             {
                 textBox.CharacterCasing = CharacterCasing.Lower;
@@ -174,6 +231,7 @@ namespace NetInfoCheckerX
             {
                 IpAddressTextBoxHelper.Attach(textBox);
             }
+            LoadSystemProxySettings();
             RefreshNICList();
 
             ipIPV4.TextChanged += (s, args) => MarkDirty(ref _ipv4AddressDirty);
@@ -214,6 +272,270 @@ namespace NetInfoCheckerX
             textBox.Text = lowercase;
             textBox.SelectionStart = Math.Min(selectionStart, textBox.TextLength);
             textBox.SelectionLength = Math.Min(selectionLength, textBox.TextLength - textBox.SelectionStart);
+        }
+
+        private void LoadSystemProxySettings()
+        {
+            _loadedSystemProxy = ReadSystemProxySettings();
+            checkSystemProxyEnabled.Checked = _loadedSystemProxy.Enabled;
+            txtSystemProxyAddress.Text = _loadedSystemProxy.Address;
+            txtSystemProxyPort.Text = _loadedSystemProxy.Port;
+            checkSystemProxyBypassLocal.Checked = _loadedSystemProxy.BypassLocal;
+            txtSystemProxyExceptions.Text = _loadedSystemProxy.Exceptions;
+            UpdateSystemProxyControlsEnabledState();
+        }
+
+        private static SystemProxySettings ReadSystemProxySettings()
+        {
+            object enabledValue = null;
+            string rawServer = string.Empty;
+            string rawOverride = string.Empty;
+            object autoDetectValue = null;
+            string autoConfigUrl = string.Empty;
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(InternetSettingsRegistryPath, false))
+            {
+                if (key != null)
+                {
+                    enabledValue = key.GetValue("ProxyEnable", 0);
+                    rawServer = Convert.ToString(key.GetValue("ProxyServer", string.Empty));
+                    rawOverride = Convert.ToString(key.GetValue("ProxyOverride", string.Empty));
+                    autoDetectValue = key.GetValue("AutoDetect", 0);
+                    autoConfigUrl = Convert.ToString(key.GetValue("AutoConfigURL", string.Empty));
+                }
+            }
+
+            ParseProxyServer(rawServer, out string address, out string port);
+            string[] bypassEntries = SplitProxyExceptions(rawOverride);
+            bool bypassLocal = bypassEntries.Any(value => value.Equals("<local>", StringComparison.OrdinalIgnoreCase));
+            string exceptions = string.Join(Environment.NewLine, bypassEntries
+                .Where(value => !value.Equals("<local>", StringComparison.OrdinalIgnoreCase)));
+
+            return new SystemProxySettings
+            {
+                Enabled = Convert.ToInt32(enabledValue ?? 0) != 0,
+                RawServer = rawServer,
+                Address = address,
+                Port = port,
+                BypassLocal = bypassLocal,
+                Exceptions = exceptions,
+                AutoDetect = Convert.ToInt32(autoDetectValue ?? 0) != 0,
+                AutoConfigEnabled = !string.IsNullOrWhiteSpace(autoConfigUrl)
+            };
+        }
+
+        private static void ParseProxyServer(string rawServer, out string address, out string port)
+        {
+            address = string.Empty;
+            port = string.Empty;
+            if (string.IsNullOrWhiteSpace(rawServer)) return;
+
+            string[] entries = rawServer.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(value => value.Trim()).ToArray();
+            string selected = entries.FirstOrDefault(value => value.StartsWith("http=", StringComparison.OrdinalIgnoreCase)) ??
+                              entries.FirstOrDefault(value => value.StartsWith("https=", StringComparison.OrdinalIgnoreCase)) ??
+                              entries.FirstOrDefault(value => value.IndexOf('=') < 0) ?? entries.FirstOrDefault();
+            string candidate = selected ?? rawServer.Trim();
+            int equalsIndex = candidate.IndexOf('=');
+            if (equalsIndex >= 0) candidate = candidate.Substring(equalsIndex + 1).Trim();
+
+            int schemeIndex = candidate.IndexOf("://", StringComparison.Ordinal);
+            if (schemeIndex >= 0)
+            {
+                candidate = candidate.Substring(schemeIndex + 3);
+                int pathIndex = candidate.IndexOf('/');
+                if (pathIndex >= 0) candidate = candidate.Substring(0, pathIndex);
+            }
+
+            if (candidate.StartsWith("[", StringComparison.Ordinal))
+            {
+                int closeBracket = candidate.IndexOf(']');
+                if (closeBracket > 0)
+                {
+                    address = candidate.Substring(1, closeBracket - 1);
+                    if (closeBracket + 1 < candidate.Length && candidate[closeBracket + 1] == ':')
+                        port = candidate.Substring(closeBracket + 2);
+                    return;
+                }
+            }
+
+            int colonCount = candidate.Count(character => character == ':');
+            if (colonCount == 1)
+            {
+                int colonIndex = candidate.LastIndexOf(':');
+                address = candidate.Substring(0, colonIndex).Trim();
+                port = candidate.Substring(colonIndex + 1).Trim();
+            }
+            else
+            {
+                address = candidate.Trim().Trim('[', ']');
+            }
+        }
+
+        private static string[] SplitProxyExceptions(string value)
+        {
+            return (value ?? string.Empty)
+                .Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(item => item.Trim())
+                .Where(item => item.Length > 0)
+                .ToArray();
+        }
+
+        private bool IsSystemProxyChanged()
+        {
+            if (_loadedSystemProxy == null) return false;
+            return checkSystemProxyEnabled.Checked != _loadedSystemProxy.Enabled ||
+                   !string.Equals(txtSystemProxyAddress.Text.Trim(), _loadedSystemProxy.Address, StringComparison.OrdinalIgnoreCase) ||
+                   !string.Equals(txtSystemProxyPort.Text.Trim(), _loadedSystemProxy.Port, StringComparison.Ordinal) ||
+                   checkSystemProxyBypassLocal.Checked != _loadedSystemProxy.BypassLocal ||
+                   !string.Equals(string.Join(";", SplitProxyExceptions(txtSystemProxyExceptions.Text)),
+                       string.Join(";", SplitProxyExceptions(_loadedSystemProxy.Exceptions)), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool ValidateSystemProxySettings()
+        {
+            if (!IsSystemProxyChanged()) return true;
+
+            string address = txtSystemProxyAddress.Text.Trim();
+            string portText = txtSystemProxyPort.Text.Trim();
+            bool serverChanged = _loadedSystemProxy == null ||
+                !string.Equals(address, _loadedSystemProxy.Address, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(portText, _loadedSystemProxy.Port, StringComparison.Ordinal);
+            bool enablingProxy = checkSystemProxyEnabled.Checked && !_loadedSystemProxy.Enabled;
+            if (!serverChanged && !enablingProxy) return true;
+            if (string.IsNullOrEmpty(address) && string.IsNullOrEmpty(portText) && !checkSystemProxyEnabled.Checked)
+                return true;
+
+            string normalizedAddress = address.Trim('[', ']');
+            bool validHost = IPAddress.TryParse(normalizedAddress, out _) ||
+                             Uri.CheckHostName(normalizedAddress) != UriHostNameType.Unknown;
+            if (!validHost || !int.TryParse(portText, out int port) || port < 1 || port > 65535)
+            {
+                MessageBox.Show("请填写有效的代理地址和端口（端口范围为 1 到 65535）。", "代理设置无效",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            return true;
+        }
+
+        private static string BuildProxyServer(string address, string port)
+        {
+            address = (address ?? string.Empty).Trim().Trim('[', ']');
+            port = (port ?? string.Empty).Trim();
+            if (address.Length == 0) return string.Empty;
+            if (IPAddress.TryParse(address, out IPAddress parsed) && parsed.AddressFamily == AddressFamily.InterNetworkV6)
+                address = "[" + address + "]";
+            return address + (port.Length == 0 ? string.Empty : ":" + port);
+        }
+
+        private void ApplySystemProxySettings()
+        {
+            if (_loadedSystemProxy == null) return;
+            bool serverChanged = !string.Equals(txtSystemProxyAddress.Text.Trim(), _loadedSystemProxy.Address, StringComparison.OrdinalIgnoreCase) ||
+                                 !string.Equals(txtSystemProxyPort.Text.Trim(), _loadedSystemProxy.Port, StringComparison.Ordinal);
+            bool overrideChanged = checkSystemProxyBypassLocal.Checked != _loadedSystemProxy.BypassLocal ||
+                !string.Equals(string.Join(";", SplitProxyExceptions(txtSystemProxyExceptions.Text)),
+                    string.Join(";", SplitProxyExceptions(_loadedSystemProxy.Exceptions)), StringComparison.OrdinalIgnoreCase);
+
+            if (!serverChanged && !overrideChanged && checkSystemProxyEnabled.Checked == _loadedSystemProxy.Enabled)
+                return;
+
+            uint flags = ProxyTypeDirect;
+            if (checkSystemProxyEnabled.Checked) flags |= ProxyTypeProxy;
+            if (_loadedSystemProxy.AutoConfigEnabled) flags |= ProxyTypeAutoProxyUrl;
+            if (_loadedSystemProxy.AutoDetect) flags |= ProxyTypeAutoDetect;
+
+            IntPtr serverPointer = IntPtr.Zero;
+            IntPtr bypassPointer = IntPtr.Zero;
+            IntPtr optionsPointer = IntPtr.Zero;
+            IntPtr listPointer = IntPtr.Zero;
+            try
+            {
+                var options = new List<InternetPerConnectionOption>
+                {
+                    new InternetPerConnectionOption
+                    {
+                        Option = InternetPerConnectionFlags,
+                        Value = new InternetPerConnectionOptionValue { DwordValue = flags }
+                    }
+                };
+
+                if (serverChanged)
+                {
+                    string server = BuildProxyServer(txtSystemProxyAddress.Text, txtSystemProxyPort.Text);
+                    serverPointer = Marshal.StringToHGlobalUni(server);
+                    options.Add(new InternetPerConnectionOption
+                    {
+                        Option = InternetPerConnectionProxyServer,
+                        Value = new InternetPerConnectionOptionValue { StringValue = serverPointer }
+                    });
+                }
+
+                if (overrideChanged)
+                {
+                    var entries = SplitProxyExceptions(txtSystemProxyExceptions.Text)
+                        .Where(value => !value.Equals("<local>", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    if (checkSystemProxyBypassLocal.Checked) entries.Add("<local>");
+                    bypassPointer = Marshal.StringToHGlobalUni(string.Join(";", entries));
+                    options.Add(new InternetPerConnectionOption
+                    {
+                        Option = InternetPerConnectionProxyBypass,
+                        Value = new InternetPerConnectionOptionValue { StringValue = bypassPointer }
+                    });
+                }
+
+                int optionSize = Marshal.SizeOf(typeof(InternetPerConnectionOption));
+                optionsPointer = Marshal.AllocHGlobal(optionSize * options.Count);
+                for (int index = 0; index < options.Count; index++)
+                {
+                    Marshal.StructureToPtr(options[index], IntPtr.Add(optionsPointer, index * optionSize), false);
+                }
+
+                var optionList = new InternetPerConnectionOptionList
+                {
+                    Size = (uint)Marshal.SizeOf(typeof(InternetPerConnectionOptionList)),
+                    Connection = IntPtr.Zero, // NULL selects the LAN connection used by Windows Settings.
+                    OptionCount = (uint)options.Count,
+                    OptionError = 0,
+                    Options = optionsPointer
+                };
+                listPointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(InternetPerConnectionOptionList)));
+                Marshal.StructureToPtr(optionList, listPointer, false);
+
+                if (!InternetSetOption(IntPtr.Zero, InternetOptionPerConnectionOption, listPointer,
+                    Marshal.SizeOf(typeof(InternetPerConnectionOptionList))))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Windows 未能应用手动代理设置。");
+                }
+            }
+            finally
+            {
+                if (listPointer != IntPtr.Zero) Marshal.FreeHGlobal(listPointer);
+                if (optionsPointer != IntPtr.Zero) Marshal.FreeHGlobal(optionsPointer);
+                if (serverPointer != IntPtr.Zero) Marshal.FreeHGlobal(serverPointer);
+                if (bypassPointer != IntPtr.Zero) Marshal.FreeHGlobal(bypassPointer);
+            }
+
+            if (!InternetSetOption(IntPtr.Zero, InternetOptionSettingsChanged, IntPtr.Zero, 0))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "代理已写入，但 Windows 未能广播代理设置变更。");
+            InternetSetOption(IntPtr.Zero, InternetOptionRefresh, IntPtr.Zero, 0);
+
+            _loadedSystemProxy = ReadSystemProxySettings();
+        }
+
+        private void checkSystemProxyEnabled_CheckedChanged(object sender, EventArgs e)
+        {
+            UpdateSystemProxyControlsEnabledState();
+        }
+
+        private void UpdateSystemProxyControlsEnabledState()
+        {
+            bool enabled = checkSystemProxyEnabled.Checked;
+            txtSystemProxyAddress.Enabled = enabled;
+            txtSystemProxyPort.Enabled = enabled;
+            checkSystemProxyBypassLocal.Enabled = enabled;
+            txtSystemProxyExceptions.Enabled = enabled;
         }
 
         private void RefreshNICList(bool preserveSelection = true)
@@ -1087,6 +1409,9 @@ namespace NetInfoCheckerX
             }
 
             if (!ValidateNetworkSettings()) return;
+            if (!ValidateSystemProxySettings()) return;
+
+            bool systemProxyChanged = IsSystemProxyChanged();
 
             string nicName = nic.Name;
             string nicDisplayName = string.IsNullOrWhiteSpace(nic.Description) ? nicName : nic.Description;
@@ -1265,6 +1590,22 @@ namespace NetInfoCheckerX
 
             if (result.Success)
             {
+                if (systemProxyChanged)
+                {
+                    try
+                    {
+                        ApplySystemProxySettings();
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show("网络配置已处理，但系统代理设置应用或刷新未完全成功。\r\n\r\n系统返回：\r\n" + ex.Message,
+                            "代理设置失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        btnOK.Enabled = true;
+                        btnOK.Text = "应用修改";
+                        return;
+                    }
+                }
+
                 if (restartAdapter)
                 {
                     await Task.Delay(2500);
@@ -1396,7 +1737,7 @@ namespace NetInfoCheckerX
                 btnSave.ForeColor = Color.Gold;
                 if (_btnSaveTimer == null)
                 {
-                    _btnSaveTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+                    _btnSaveTimer = new System.Windows.Forms.Timer(components) { Interval = 2000 };
                     _btnSaveTimer.Tick += BtnSaveTimer_Tick;
                 }
                 _btnSaveTimer.Stop();
@@ -1447,7 +1788,7 @@ namespace NetInfoCheckerX
                 btnRead.ForeColor = Color.Gold;
                 if (_btnReadTimer == null)
                 {
-                    _btnReadTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+                    _btnReadTimer = new System.Windows.Forms.Timer(components) { Interval = 2000 };
                     _btnReadTimer.Tick += BtnReadTimer_Tick;
                 }
                 _btnReadTimer.Stop();
@@ -1502,6 +1843,11 @@ namespace NetInfoCheckerX
                 WritePrivateProfileString(IniSection, "MACChecked", checkMAC.Checked ? "1" : "0", IniPath);
                 WritePrivateProfileString(IniSection, "MAC", txtMAC.Text, IniPath);
                 WritePrivateProfileString(IniSection, "CIDRMask", txtMask.Text, IniPath);
+                WritePrivateProfileString(IniSection, "SystemProxyEnabled", checkSystemProxyEnabled.Checked ? "1" : "0", IniPath);
+                WritePrivateProfileString(IniSection, "SystemProxyAddress", txtSystemProxyAddress.Text, IniPath);
+                WritePrivateProfileString(IniSection, "SystemProxyPort", txtSystemProxyPort.Text, IniPath);
+                WritePrivateProfileString(IniSection, "SystemProxyBypassLocal", checkSystemProxyBypassLocal.Checked ? "1" : "0", IniPath);
+                WritePrivateProfileString(IniSection, "SystemProxyExceptions", string.Join(";", SplitProxyExceptions(txtSystemProxyExceptions.Text)), IniPath);
             }
             catch { }
         }
@@ -1511,7 +1857,7 @@ namespace NetInfoCheckerX
             try
             {
                 _suppressMaskSync = true;
-                var sb = new StringBuilder(256);
+                var sb = new StringBuilder(4096);
                 string val;
 
                 GetPrivateProfileString(IniSection, "DHCP", "", sb, sb.Capacity, IniPath);
@@ -1597,6 +1943,27 @@ namespace NetInfoCheckerX
                 GetPrivateProfileString(IniSection, "CIDRMask", "", sb, sb.Capacity, IniPath);
                 if (!string.IsNullOrEmpty(val = sb.ToString())) txtMask.Text = val;
                 sb.Clear();
+
+                GetPrivateProfileString(IniSection, "SystemProxyEnabled", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) checkSystemProxyEnabled.Checked = val == "1";
+                sb.Clear();
+
+                GetPrivateProfileString(IniSection, "SystemProxyAddress", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtSystemProxyAddress.Text = val;
+                sb.Clear();
+
+                GetPrivateProfileString(IniSection, "SystemProxyPort", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtSystemProxyPort.Text = val;
+                sb.Clear();
+
+                GetPrivateProfileString(IniSection, "SystemProxyBypassLocal", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) checkSystemProxyBypassLocal.Checked = val == "1";
+                sb.Clear();
+
+                GetPrivateProfileString(IniSection, "SystemProxyExceptions", "", sb, sb.Capacity, IniPath);
+                if (!string.IsNullOrEmpty(val = sb.ToString())) txtSystemProxyExceptions.Text = string.Join(";", SplitProxyExceptions(val));
+                sb.Clear();
+                UpdateSystemProxyControlsEnabledState();
             }
             catch { }
             finally
