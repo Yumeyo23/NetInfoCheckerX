@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,8 +18,21 @@ namespace NetInfoCheckerX
 {
     public partial class UPnP : Form
     {
-        private int _refreshCountdown = 300;
+        private int _refreshCountdown = 120;
         private NatDevice _device;
+        private CancellationTokenSource _discoveryCancellation;
+        private int _discoveryGeneration;
+        private bool _updatingIpLists;
+        private bool _updatingServerSelection;
+        private bool _isDiscovering;
+        private bool _controlsBusy;
+
+        private sealed class UpnpServerEntry
+        {
+            internal IPAddress Address;
+            internal NatDevice Device;
+            public override string ToString() => Address.ToString();
+        }
         private readonly string[] requiredFiles;
         private bool _suppressNameUpdate = true;
         private SemaphoreSlim _scanSemaphore = new SemaphoreSlim(100);
@@ -41,6 +55,23 @@ namespace NetInfoCheckerX
 
         private string _iniPath = Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
 
+        [DllImport("user32.dll")]
+        public static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll")]
+        public static extern bool SendMessage(IntPtr hwnd, int wMsg, int wParam, int lParam);
+
+        private const int WM_SYSCOMMAND = 0x0112;
+        private const int SC_MOVE = 0xF010;
+        private const int HTCAPTION = 0x0002;
+        private void MyMouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                ReleaseCapture();
+                SendMessage(this.Handle, WM_SYSCOMMAND, SC_MOVE + HTCAPTION, 0);
+            }
+        }
         private string ReadConfig(string section, string key)
         {
             var temp = new System.Text.StringBuilder(255);
@@ -75,21 +106,28 @@ namespace NetInfoCheckerX
             foreach (Control control in new Control[]
             {
                 lblPublicPort, lblClientIP, lblName, lblTime, lblClientPort,
-                label1, label2, radioTCP, radioUDP
+                label1, lblUPnPServer, chkTCP, chkUDP
             })
             {
                 control.BackColor = Color.Transparent;
                 control.ForeColor = foreground;
             }
 
-            foreach (TextBox textBox in new[] { txtClientPort, txtPublicPort, txtName })
+            foreach (NumericUpDown numeric in new[] { numClientPort, numPublicPort })
+            {
+                numeric.BackColor = controlBackground;
+                numeric.ForeColor = foreground;
+                numeric.BorderStyle = isLight ? BorderStyle.Fixed3D : BorderStyle.FixedSingle;
+            }
+
+            foreach (TextBox textBox in new[] { txtName })
             {
                 textBox.BackColor = controlBackground;
                 textBox.ForeColor = foreground;
                 textBox.BorderStyle = isLight ? BorderStyle.Fixed3D : BorderStyle.FixedSingle;
             }
 
-            foreach (ComboBox comboBox in new[] { comboCilentIP, comboTime, comboNIC })
+            foreach (ComboBox comboBox in new[] { comboCilentIP, comboTime, comboNIC, comboUPnPServer })
             {
                 comboBox.BackColor = controlBackground;
                 comboBox.ForeColor = foreground;
@@ -158,7 +196,7 @@ namespace NetInfoCheckerX
 
         private void SetupGridCopyMenu()
         {
-            gridCopyMenu = new ContextMenuStrip();
+            gridCopyMenu = new ContextMenuStrip(components);
             ToolStripMenuItem copyItem = new ToolStripMenuItem("复制");
             copyItem.Click += (sender, e) => CopyCurrentCell();
             gridCopyMenu.Items.Add(copyItem);
@@ -185,68 +223,112 @@ namespace NetInfoCheckerX
 
         #region 核心逻辑：获取与筛选设备
 
-        private async Task<NatDevice> GetNatDevice()
+        private Task<NatDevice> GetNatDevice()
         {
-            if (_device != null) return _device;
-
-            string selectedIpStr = "";
-            this.Invoke(new Action(() => { selectedIpStr = comboNIC.Text; }));
-            if (string.IsNullOrEmpty(selectedIpStr)) return null;
-            IPAddress selectedIp = IPAddress.Parse(selectedIpStr);
-            IPAddress gatewayIp = GetGatewayIp(selectedIp, selectedIpStr);
-
-            // 第一阶段：广播搜索与常用端口直连并行赛跑
-            var quickStageCts = new CancellationTokenSource();
-
-            var broadcastTask = Task.Run(async () =>
-            {
-                try
-                {
-                    var found = await DiscoverDeviceOnInterface(selectedIp, 1500, quickStageCts.Token);
-                    if (found != null) quickStageCts.Cancel();
-                    return found;
-                }
-                catch { return null; }
-            });
-
-            var commonPortsTask = Task.Run(async () =>
-            {
-                int[] commonPorts = { 1900, 2189, 2869, 5000, 5800, 5431, 80, 8080 };
-                foreach (int port in commonPorts)
-                {
-                    if (quickStageCts.Token.IsCancellationRequested) break;
-                    if (await QuickCheckPort(gatewayIp, port, selectedIp))
-                    {
-                        try
-                        {
-                            var device = await TryGetDeviceOnPort(gatewayIp, port, selectedIp);
-                            if (device != null) { quickStageCts.Cancel(); return device; }
-                        }
-                        catch { }
-                    }
-                }
-                return null;
-            });
-
-            var winner = await Task.WhenAny(broadcastTask, commonPortsTask);
-            _device = await winner;
-            if (_device == null) _device = (winner == broadcastTask) ? await commonPortsTask : await broadcastTask;
-
-            // 第二阶段：全量端口扫描兜底（需用户授权）
-            if (_device == null)
-            {
-                bool shouldFullScan = CheckFullScanConfig();
-                if (shouldFullScan)
-                {
-                    _device = await RunFullScanLogic(gatewayIp, selectedIp);
-                }
-            }
-
-            this.Invoke(new Action(() => { btnRefresh.Text = "刷新列表"; }));
-            return _device;
+            // 所有读写操作只使用用户已选定的设备，绝不在创建/删除时隐式选择。
+            return Task.FromResult(_device);
         }
 
-        private async Task<NatDevice> DiscoverDeviceOnInterface(
+        private async Task DiscoverServersAsync(string preferredServer = null)
+        {
+            _discoveryCancellation?.Cancel();
+            int generation = ++_discoveryGeneration;
+            var cancellation = new CancellationTokenSource();
+            _discoveryCancellation = cancellation;
+            CancellationToken token = cancellation.Token;
+            _device = null;
+            timer1.Stop();
+            _isDiscovering = true;
+            _updatingServerSelection = true;
+            comboUPnPServer.Items.Clear();
+            comboUPnPServer.Items.Add("正在扫描…");
+            comboUPnPServer.SelectedIndex = 0;
+            _updatingServerSelection = false;
+            ShowServerPrompt("正在扫描所选网卡的 UPnP 服务器…");
+            UpdateServerControls();
+            try
+            {
+                IPAddress selectedIp;
+                if (!IPAddress.TryParse(comboNIC.Text, out selectedIp))
+                {
+                    ApplyDiscoveredServers(new List<UpnpServerEntry>(), null);
+                    return;
+                }
+                IPAddress gateway = GetGatewayIp(selectedIp, selectedIp.ToString());
+                var servers = await DiscoverDevicesOnInterface(selectedIp, 1500, token);
+                token.ThrowIfCancellationRequested();
+
+                // SSDP 收完整个发现窗口后再判断；网关未广播时保留原有直连兜底。
+                if (gateway != null && !servers.Any(x => x.Address.Equals(gateway)))
+                {
+                    foreach (int port in new[] { 1900, 2189, 2869, 5000, 5800, 5431, 80, 8080 })
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (!await QuickCheckPort(gateway, port, selectedIp)) continue;
+                        var device = await TryGetDeviceOnPort(gateway, port, selectedIp);
+                        token.ThrowIfCancellationRequested();
+                        if (device == null) continue;
+                        servers.Add(new UpnpServerEntry { Address = gateway, Device = device });
+                        break;
+                    }
+                }
+                if (servers.Count == 0 && gateway != null && CheckFullScanConfig())
+                {
+                    var device = await RunFullScanLogic(gateway, selectedIp, token);
+                    token.ThrowIfCancellationRequested();
+                    if (device != null) servers.Add(new UpnpServerEntry { Address = gateway, Device = device });
+                }
+                if (generation != _discoveryGeneration || IsDisposed || Disposing) return;
+                ApplyDiscoveredServers(servers, preferredServer);
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                if (generation == _discoveryGeneration && !IsDisposed && !Disposing)
+                {
+                    ApplyDiscoveredServers(new List<UpnpServerEntry>(), null);
+                    ShowServerPrompt("发现 UPnP 服务器失败：" + ex.Message);
+                }
+            }
+            finally
+            {
+                if (ReferenceEquals(_discoveryCancellation, cancellation)) _discoveryCancellation = null;
+                cancellation.Dispose();
+                if (generation == _discoveryGeneration && !IsDisposed && !Disposing)
+                {
+                    _isDiscovering = false;
+                    UpdateServerControls();
+                }
+            }
+            if (generation != _discoveryGeneration || IsDisposed || Disposing) return;
+            if (comboUPnPServer.SelectedItem is UpnpServerEntry)
+                await UseSelectedServerAsync();
+            else if (comboUPnPServer.Items.Count > 1 && comboUPnPServer.Enabled)
+                comboUPnPServer.DroppedDown = true;
+        }
+
+        private void ApplyDiscoveredServers(List<UpnpServerEntry> servers, string preferredServer)
+        {
+            var unique = servers.GroupBy(x => x.Address.ToString()).Select(x => x.First())
+                .OrderBy(x => x.Address.ToString(), StringComparer.Ordinal).ToList();
+            _updatingServerSelection = true;
+            comboUPnPServer.Items.Clear();
+            _device = null;
+            if (unique.Count == 0) comboUPnPServer.Items.Add("未发现服务器");
+            else
+            {
+                if (unique.Count > 1) comboUPnPServer.Items.Add("请选择 UPnP 服务器");
+                foreach (var server in unique) comboUPnPServer.Items.Add(server);
+            }
+            comboUPnPServer.SelectedIndex = 0;
+            var preferred = unique.FirstOrDefault(x => x.Address.ToString() == preferredServer);
+            if (preferred != null) comboUPnPServer.SelectedItem = preferred;
+            _updatingServerSelection = false;
+            ShowServerPrompt(unique.Count == 0 ? "未发现 UPnP 服务器，请检查路由器服务或刷新网卡重试。" :
+                "发现多个 UPnP 服务器，请先选择服务器，再操作映射。");
+        }
+
+        private async Task<List<UpnpServerEntry>> DiscoverDevicesOnInterface(
             IPAddress localAddress, int timeoutMs, CancellationToken token)
         {
             var multicastEndPoint = new IPEndPoint(IPAddress.Parse("239.255.255.250"), 1900);
@@ -257,6 +339,7 @@ namespace NetInfoCheckerX
                 "upnp:rootdevice"
             };
             var seenLocations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var locations = new List<Tuple<Uri, IPAddress>>();
 
             using (var client = new UdpClient(AddressFamily.InterNetwork))
             {
@@ -291,7 +374,7 @@ namespace NetInfoCheckerX
                     if (completedTask != receiveTask)
                     {
                         token.ThrowIfCancellationRequested();
-                        return null;
+                        break;
                     }
 
                     UdpReceiveResult response = await receiveTask;
@@ -303,24 +386,27 @@ namespace NetInfoCheckerX
                     if (!Uri.TryCreate(location, UriKind.Absolute, out locationUri)) continue;
                     if (locationUri.Scheme != Uri.UriSchemeHttp && locationUri.Scheme != Uri.UriSchemeHttps) continue;
 
-                    NatDevice device = await Task.Run(() =>
-                    {
-                        try
-                        {
-                            object info = CallBuildUpnpNatDeviceInfo(localAddress, locationUri.ToString());
-                            return info == null ? null : CreateUpnpDevice(info);
-                        }
-                        catch
-                        {
-                            return null;
-                        }
-                    });
-
-                    if (device != null) return device;
+                    locations.Add(Tuple.Create(locationUri, response.RemoteEndPoint.Address));
                 }
             }
 
-            return null;
+            // 解析设备描述不占用 SSDP 接收窗口，避免慢设备使其他回复丢失。
+            var results = await Task.WhenAll(locations.Select(location => Task.Run(() =>
+            {
+                token.ThrowIfCancellationRequested();
+                try
+                {
+                    IPAddress address;
+                    if (!IPAddress.TryParse(location.Item1.Host, out address)) address = location.Item2;
+                    if (address.AddressFamily != AddressFamily.InterNetwork) return null;
+                    object info = CallBuildUpnpNatDeviceInfo(localAddress, location.Item1.ToString());
+                    var device = info == null ? null : CreateUpnpDevice(info);
+                    return device == null ? null : new UpnpServerEntry { Address = address, Device = device };
+                }
+                catch { return null; }
+            }, token)));
+            token.ThrowIfCancellationRequested();
+            return results.Where(x => x != null).ToList();
         }
 
         private static string GetSsdpHeaderValue(string response, string headerName)
@@ -336,9 +422,9 @@ namespace NetInfoCheckerX
             return null;
         }
 
-        private async Task<NatDevice> RunFullScanLogic(IPAddress gatewayIp, IPAddress localAddress)
+        private async Task<NatDevice> RunFullScanLogic(IPAddress gatewayIp, IPAddress localAddress, CancellationToken cancellationToken)
         {
-            var masterCts = new CancellationTokenSource();
+            var masterCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             return await Task.Run(async () =>
             {
                 var foundDevice = new TaskCompletionSource<NatDevice>(
@@ -581,6 +667,7 @@ namespace NetInfoCheckerX
 
         private void ToggleControls(bool isEnabled, Button activeBtn = null, bool exceptButtons = false)
         {
+            _controlsBusy = !isEnabled || exceptButtons;
             foreach (Control c in this.Controls)
             {
                 if (c is DataGridView) continue;
@@ -593,7 +680,56 @@ namespace NetInfoCheckerX
                 }
                 c.Enabled = isEnabled;
             }
-            if (activeBtn != null) activeBtn.Enabled = true;
+            UpdateServerControls();
+        }
+
+        private void UpdateServerControls()
+        {
+            comboNIC.Enabled = btnRefreshNIC.Enabled = !_controlsBusy;
+            comboUPnPServer.Enabled = !_controlsBusy && !_isDiscovering &&
+                comboUPnPServer.Items.OfType<UpnpServerEntry>().Any();
+            btnRefresh.Enabled = !_controlsBusy && !_isDiscovering && comboNIC.SelectedIndex >= 0;
+            btnCreate.Enabled = btnDel.Enabled = btnDelAll.Enabled = !_controlsBusy && !_isDiscovering && _device != null;
+        }
+
+        private void ShowServerPrompt(string message)
+        {
+            dataGridView1.Rows.Clear();
+            dataGridView1.Rows.Add(null, message, null, null, null, null, null);
+        }
+
+        private async void comboUPnPServer_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (_updatingServerSelection) return;
+            await UseSelectedServerAsync();
+        }
+
+        private async Task UseSelectedServerAsync()
+        {
+            _device = (comboUPnPServer.SelectedItem as UpnpServerEntry)?.Device;
+            timer1.Stop();
+            _isConfirmingDelete = _isConfirmingDeleteAll = false;
+            btnDel.Text = "删除映射";
+            ApplyUPnPButtonTheme(btnDel);
+            RestoreDelAllButton();
+            if (_device == null)
+            {
+                ShowServerPrompt("请先选择 UPnP 服务器，再操作映射。");
+                UpdateServerControls();
+                return;
+            }
+            ToggleControls(false);
+            try
+            {
+                await RefreshListInternal();
+                if (IsDisposed || Disposing) return;
+                ResetTimer();
+                timer1.Start();
+            }
+            finally
+            {
+                if (!IsDisposed && !Disposing) ToggleControls(true);
+            }
         }
 
         private async Task RefreshListInternal()
@@ -604,12 +740,13 @@ namespace NetInfoCheckerX
                 var device = await GetNatDevice();
                 if (device == null)
                 {
-                    dataGridView1.Rows.Add(null, "未发现UPnP设备", "请检查路由器", "是否开启UPnP", "或相关服务是否正常", "喵", "");
+                    ShowServerPrompt("请先点击“获取映射”扫描服务器，再选择 UPnP 服务器。");
                     timer1.Stop();
                     return;
                 }
 
                 var mappings = await device.GetAllMappingsAsync();
+                if (!ReferenceEquals(device, _device) || IsDisposed || Disposing) return;
                 var sortedList = mappings.OrderBy(x => x.PrivateIP.ToString())
                                          .ThenBy(x => x.PrivatePort)
                                          .ToList();
@@ -637,6 +774,7 @@ namespace NetInfoCheckerX
             }
             catch (Exception ex)
             {
+                if (IsDisposed || Disposing) return;
                 dataGridView1.Rows.Add(null, "读取异常：", ex.Message, null, "喵", null, "");
             }
         }
@@ -647,23 +785,15 @@ namespace NetInfoCheckerX
 
         private async void btnRefresh_Click(object sender, EventArgs e)
         {
+            if (_controlsBusy || _isDiscovering) return;
             EnsureSelectedNICValid();
 
             try
             {
-                btnRefresh.Enabled = false;
                 timer1.Stop();
-                btnRefresh.Text = "刷新中...";
-                ToggleControls(false);
-
-                await RefreshListInternal();
-
-                btnRefresh.Text = "刷新完毕";
-                ToggleControls(true, exceptButtons: true);
-                ToggleControls(true);
-                btnRefresh.Text = "刷新列表";
-                ResetTimer();
-                timer1.Start();
+                btnRefresh.Text = "获取中...";
+                string preferred = (comboUPnPServer.SelectedItem as UpnpServerEntry)?.Address.ToString();
+                await DiscoverServersAsync(preferred);
             }
             catch (Exception ex)
             {
@@ -671,13 +801,25 @@ namespace NetInfoCheckerX
             }
             finally
             {
-                btnRefresh.Enabled = true;
-                btnRefresh.Text = "刷新列表";
+                if (!IsDisposed && !Disposing)
+                {
+                    btnRefresh.Text = "获取映射";
+                    UpdateServerControls();
+                }
             }
         }
 
         private async void btnCreate_Click(object sender, EventArgs e)
         {
+            var protocols = new List<Protocol>();
+            if (chkTCP.Checked) protocols.Add(Protocol.Tcp);
+            if (chkUDP.Checked) protocols.Add(Protocol.Udp);
+            if (protocols.Count == 0)
+            {
+                MessageBox.Show("请至少选择 TCP 或 UDP 协议。", "请选择协议", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
             // EnsureSelectedNICValid 会重置 comboCilentIP，先保存再恢复
             string savedClientIP = comboCilentIP.Text;
 
@@ -703,23 +845,51 @@ namespace NetInfoCheckerX
                 var device = await GetNatDevice();
                 if (device != null)
                 {
-                    Mapping newMap = new Mapping(
-                        radioTCP.Checked ? Protocol.Tcp : Protocol.Udp,
-                        IPAddress.Parse(savedClientIP),
-                        int.Parse(txtClientPort.Text),
-                        int.Parse(txtPublicPort.Text),
-                        GetLifetimeInSeconds(comboTime.Text),
-                        txtName.Text
-                    );
-                    await device.CreatePortMapAsync(newMap);
-                    btnCreate.Text = "创建完毕";
-                    timer1.Start();
-                    await RefreshListInternal();
+                    int createdCount = 0;
+                    var errors = new List<string>();
+                    foreach (Protocol protocol in protocols)
+                    {
+                        try
+                        {
+                            Mapping newMap = new Mapping(
+                                protocol,
+                                IPAddress.Parse(savedClientIP),
+                                (int)numClientPort.Value,
+                                (int)numPublicPort.Value,
+                                GetLifetimeInSeconds(comboTime.Text),
+                                txtName.Text
+                            );
+                            await device.CreatePortMapAsync(newMap);
+                            createdCount++;
+                        }
+                        catch (Exception ex)
+                        {
+                            errors.Add($"{protocol.ToString().ToUpper()}: {ex.Message}");
+                        }
+                    }
 
-                    _suppressNameUpdate = true;
-                    comboCilentIP.Text = savedClientIP;
-                    _suppressNameUpdate = false;
+                    if (createdCount > 0)
+                    {
+                        btnCreate.Text = errors.Count == 0 ? "创建完毕" : "部分完成";
+                        timer1.Start();
+                        await RefreshListInternal();
+
+                        _suppressNameUpdate = true;
+                        comboCilentIP.Text = savedClientIP;
+                        _suppressNameUpdate = false;
+                    }
+
+                    if (errors.Count > 0)
+                    {
+                        string title = createdCount > 0 ? "部分完成" : "创建失败了";
+                        string message = createdCount > 0
+                            ? $"已成功创建 {createdCount} 个协议映射，以下协议失败：\n{string.Join("\n", errors)}"
+                            : $"所选协议映射均创建失败：\n{string.Join("\n", errors)}";
+                        MessageBox.Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+                    }
                 }
+                else
+                    MessageBox.Show("请先扫描并选择 UPnP 服务器。", "尚未选择服务器", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
@@ -732,6 +902,15 @@ namespace NetInfoCheckerX
                 ToggleControls(true);
                 btnCreate.Text = originalText;
             }
+        }
+
+        private static bool IsSamePortMapping(Mapping left, Mapping right)
+        {
+            return left != null && right != null &&
+                left.Protocol == right.Protocol &&
+                left.PublicPort == right.PublicPort &&
+                left.PrivatePort == right.PrivatePort &&
+                object.Equals(left.PrivateIP, right.PrivateIP);
         }
 
         private async void btnDel_Click(object sender, EventArgs e)
@@ -787,23 +966,47 @@ namespace NetInfoCheckerX
                 var mappings = await device.GetAllMappingsAsync();
                 var sortedList = mappings.OrderBy(x => x.PrivateIP.ToString()).ThenBy(x => x.PrivatePort).ToList();
 
-                int successCount = 0;
+                var selectedMappings = new List<Mapping>();
                 foreach (DataGridViewRow row in dataGridView1.SelectedRows)
                 {
                     if (row.Cells[0].Value != null && int.TryParse(row.Cells[0].Value.ToString(), out int seq))
                     {
                         if (seq > 0 && seq <= sortedList.Count)
-                        {
-                            try
-                            {
-                                await device.DeletePortMapAsync(sortedList[seq - 1]);
-                                successCount++;
-                            }
-                            catch { /* 单条失败不中断 */ }
-                        }
+                            selectedMappings.Add(sortedList[seq - 1]);
                     }
-                    btnDel.Text = $"已删{successCount}条";
                 }
+
+                int attempted = 0;
+                foreach (Mapping mapping in selectedMappings)
+                {
+                    try { await device.DeletePortMapAsync(mapping); }
+                    catch { /* 继续删除其余映射，最终按路由器实际列表核对结果 */ }
+                    btnDel.Text = $"处理中{++attempted}/{selectedMappings.Count}";
+                }
+
+                List<Mapping> remainingMappings;
+                try
+                {
+                    remainingMappings = (await device.GetAllMappingsAsync()).ToList();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("删除请求已发送，但无法核对实际结果：" + ex.Message,
+                        "无法确认删除结果", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    await RefreshListInternal();
+                    return;
+                }
+
+                int successCount = selectedMappings.Count(mapping =>
+                    !remainingMappings.Any(remaining => IsSamePortMapping(mapping, remaining)));
+                int failCount = selectedMappings.Count - successCount;
+                btnDel.Text = $"已删{successCount}条";
+                if (failCount > 0)
+                {
+                    MessageBox.Show($"本次删除映射 {selectedMappings.Count} 条，成功 {successCount} 条，失败 {failCount} 条",
+                        "删除完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+
                 await Task.Delay(1000);
                 await RefreshListInternal();
             }
@@ -862,21 +1065,31 @@ namespace NetInfoCheckerX
                 var device = await GetNatDevice();
                 if (device == null) return;
 
-                var mappings = await device.GetAllMappingsAsync();
+                var mappings = (await device.GetAllMappingsAsync()).ToList();
                 int total = mappings.Count();
-                int success = 0;
-                int fail = 0;
 
                 foreach (var m in mappings)
                 {
-                    try
-                    {
-                        await device.DeletePortMapAsync(m);
-                        success++;
-                    }
-                    catch { fail++; }
+                    try { await device.DeletePortMapAsync(m); }
+                    catch { /* 最后按路由器实际列表核对，不以请求是否抛异常作为删除结果 */ }
                 }
 
+                List<Mapping> remainingMappings;
+                try
+                {
+                    remainingMappings = (await device.GetAllMappingsAsync()).ToList();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("删除请求已发送，但无法核对实际结果：" + ex.Message,
+                        "无法确认删除结果", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    await RefreshListInternal();
+                    return;
+                }
+
+                int success = mappings.Count(mapping =>
+                    !remainingMappings.Any(remaining => IsSamePortMapping(mapping, remaining)));
+                int fail = total - success;
                 MessageBox.Show($"本次删除映射 {total} 条，成功 {success} 条，失败 {fail} 条", "清理完毕", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 await RefreshListInternal();
             }
@@ -904,11 +1117,33 @@ namespace NetInfoCheckerX
 
         private void comboNIC_SelectedIndexChanged(object sender, EventArgs e)
         {
+            if (_updatingIpLists) return;
+            ResetServerDiscovery();
+        }
+
+        private void ResetServerDiscovery()
+        {
+            _discoveryCancellation?.Cancel();
+            _discoveryGeneration++;
+            _isDiscovering = false;
             _device = null;
+            timer1.Stop();
+            _isConfirmingDelete = _isConfirmingDeleteAll = false;
+            _updatingServerSelection = true;
+            comboUPnPServer.Items.Clear();
+            comboUPnPServer.Items.Add("尚未扫描");
+            comboUPnPServer.SelectedIndex = 0;
+            _updatingServerSelection = false;
+            btnRefresh.Text = "获取映射";
+            ShowServerPrompt("请选择网卡，再点击“获取映射”扫描 UPnP 服务器。");
+            UpdateServerControls();
         }
 
         private void UPnP_Load(object sender, EventArgs e)
         {
+            this.MinimumSize = this.Size;
+            this.MouseDown += MyMouseDown;
+            pictureBox1.MouseDown += MyMouseDown;
             ApplyUPnPTheme();
             try
             {
@@ -944,15 +1179,12 @@ namespace NetInfoCheckerX
             comboTime.SelectedIndex = 2;
 
             comboCilentIP.SelectedIndexChanged += (s, ea) => UpdateMappingName();
-            txtClientPort.TextChanged += (s, ea) => UpdateMappingName();
-            txtPublicPort.TextChanged += (s, ea) => UpdateMappingName();
-            radioTCP.CheckedChanged += (s, ea) => UpdateMappingName();
             comboTime.SelectedIndexChanged += (s, ea) => UpdateMappingName();
 
             _suppressNameUpdate = false;
             UpdateMappingName();
 
-            dataGridView1.Rows.Add("-", "请【刷新网卡】后，", "选择欲查看UPnP映射的网卡，", "再点击【获取映射】", "喵", "-", "-");
+            CloudControl.UsedTimesCounter("UPnP");
         }
 
         private void UpdateMappingName()
@@ -960,9 +1192,11 @@ namespace NetInfoCheckerX
             if (_suppressNameUpdate) return;
 
             string ip = comboCilentIP.Text;
-            string intPort = txtClientPort.Text;
-            string extPort = txtPublicPort.Text;
-            string protocol = radioTCP.Checked ? "TCP" : "UDP";
+            string intPort = numClientPort.Value.ToString();
+            string extPort = numPublicPort.Value.ToString();
+            string protocol = chkTCP.Checked
+                ? (chkUDP.Checked ? "TCP_UDP" : "TCP")
+                : (chkUDP.Checked ? "UDP" : "NONE");
             string time = comboTime.Text;
 
             txtName.Text = $"NICX_{ip}_{intPort}_{extPort}_{protocol}_{time}";
@@ -971,25 +1205,16 @@ namespace NetInfoCheckerX
         private void EnsureSelectedNICValid()
         {
             string selectedText = comboNIC.Text;
-            if (string.IsNullOrEmpty(selectedText)) return;
-
-            InitIpLists();
-
-            bool found = false;
-            foreach (var item in comboNIC.Items)
-            {
-                if (item.ToString() == selectedText)
-                {
-                    comboNIC.SelectedItem = item;
-                    found = true;
-                    break;
-                }
-            }
-            if (!found && comboNIC.Items.Count > 0) comboNIC.SelectedIndex = 0;
+            // 日常读写不要重建下拉框，否则会丢失用户指定的服务器。
+            if (!NicHelper.GetUsableIPAddresses(includeIPv6: false).Any(x => x.AddressText == selectedText))
+                InitIpLists();
         }
 
         private void InitIpLists()
         {
+            string previousNic = comboNIC.Text;
+            string previousClient = comboCilentIP.Text;
+            _updatingIpLists = true;
             _suppressNameUpdate = true;
 
             comboNIC.Items.Clear();
@@ -1000,25 +1225,40 @@ namespace NetInfoCheckerX
                 comboCilentIP.Items.Add(nicAddress.AddressText);
             }
             if (comboNIC.Items.Count > 0) { comboNIC.SelectedIndex = 0; comboCilentIP.SelectedIndex = 0; }
+            if (comboNIC.Items.Contains(previousNic)) comboNIC.SelectedItem = previousNic;
+            IPAddress previousClientAddress;
+            if (IPAddress.TryParse(previousClient, out previousClientAddress) &&
+                previousClientAddress.AddressFamily == AddressFamily.InterNetwork &&
+                !previousClientAddress.Equals(IPAddress.Any) && !previousClientAddress.Equals(IPAddress.Broadcast))
+                comboCilentIP.Text = previousClient;
 
             _suppressNameUpdate = false;
+            _updatingIpLists = false;
+            ResetServerDiscovery();
         }
 
         private async void timer1_Tick(object sender, EventArgs e)
         {
+            if (_isDiscovering || _controlsBusy || _device == null) return;
             _refreshCountdown--;
             this.Text = $"UPnP控制台 ✧ NetInfoCheckerX | 自动刷新倒计时: {_refreshCountdown}秒";
 
             if (_refreshCountdown <= 0)
             {
                 timer1.Stop();
-                await RefreshListInternal();
-                ResetTimer();
-                timer1.Start();
+                ToggleControls(false);
+                try
+                {
+                    await RefreshListInternal();
+                    if (IsDisposed || Disposing) return;
+                    ResetTimer();
+                    timer1.Start();
+                }
+                finally { if (!IsDisposed && !Disposing) ToggleControls(true); }
             }
         }
 
-        private void ResetTimer() => _refreshCountdown = 300;
+        private void ResetTimer() => _refreshCountdown = 120;
 
         private int GetLifetimeInSeconds(string s)
         {
@@ -1044,18 +1284,6 @@ namespace NetInfoCheckerX
 
         #endregion
 
-        private void txtClientPort_KeyPress(object sender, KeyPressEventArgs e)
-        {
-            if (!char.IsDigit(e.KeyChar) && !char.IsControl(e.KeyChar))
-                e.Handled = true;
-        }
-
-        private void txtPublicPort_KeyPress(object sender, KeyPressEventArgs e)
-        {
-            if (!char.IsDigit(e.KeyChar) && !char.IsControl(e.KeyChar))
-                e.Handled = true;
-        }
-
         private void txtName_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter)
@@ -1065,7 +1293,7 @@ namespace NetInfoCheckerX
             }
         }
 
-        private void txtPublicPort_KeyDown(object sender, KeyEventArgs e)
+        private void numPublicPort_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter)
             {
@@ -1074,7 +1302,7 @@ namespace NetInfoCheckerX
             }
         }
 
-        private void txtClientPort_KeyDown(object sender, KeyEventArgs e)
+        private void numClientPort_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter)
             {
@@ -1085,9 +1313,97 @@ namespace NetInfoCheckerX
 
         private void UPnP_FormClosing(object sender, FormClosingEventArgs e)
         {
+            _discoveryGeneration++;
+            _discoveryCancellation?.Cancel();
             timer1.Stop();
             _scanSemaphore?.Dispose();
             _scanSemaphore = null;
+        }
+
+        private void lblUPnPServer_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void label2_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void label1_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void lblClientPort_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void comboTime_SelectedIndexChanged(object sender, EventArgs e)
+        {
+
+        }
+
+        private void lblTime_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void lblName_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void txtName_TextChanged(object sender, EventArgs e)
+        {
+
+        }
+
+        private void numPublicPort_ValueChanged(object sender, EventArgs e)
+        {
+            UpdateMappingName();
+        }
+
+        private void chkTCP_CheckedChanged(object sender, EventArgs e)
+        {
+            KeepOneProtocolSelected(chkTCP);
+        }
+
+        private void chkUDP_CheckedChanged(object sender, EventArgs e)
+        {
+            KeepOneProtocolSelected(chkUDP);
+        }
+
+        private void KeepOneProtocolSelected(CheckBox changedCheckBox)
+        {
+            if (!chkTCP.Checked && !chkUDP.Checked)
+            {
+                changedCheckBox.Checked = true;
+                return;
+            }
+
+            UpdateMappingName();
+        }
+
+        private void numClientPort_ValueChanged(object sender, EventArgs e)
+        {
+            UpdateMappingName();
+        }
+
+        private void comboCilentIP_SelectedIndexChanged(object sender, EventArgs e)
+        {
+
+        }
+
+        private void lblClientIP_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void lblPublicPort_Click(object sender, EventArgs e)
+        {
+
         }
     }
 }
