@@ -77,6 +77,7 @@ namespace NetInfoCheckerX
 
         public LibreSpeed()
         {
+            components = new System.ComponentModel.Container();
             InitializeComponent();
             InitializeStatusContextMenu();
             this.FormClosing += LibreSpeed_FormClosing;
@@ -84,7 +85,7 @@ namespace NetInfoCheckerX
 
         private void InitializeStatusContextMenu()
         {
-            _statusContextMenu = new ContextMenuStrip();
+            _statusContextMenu = new ContextMenuStrip(components);
             ToolStripMenuItem copySelected = new ToolStripMenuItem("复制选中内容");
             copySelected.Click += (sender, e) =>
             {
@@ -275,7 +276,7 @@ namespace NetInfoCheckerX
 
             CloudControl.UsedTimesCounter("LibreSpeed");
 
-            _statusTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _statusTimer = new System.Windows.Forms.Timer(components) { Interval = 1000 };
             _statusTimer.Tick += StatusTimer_Tick;
             _statusTimer.Start();
         }
