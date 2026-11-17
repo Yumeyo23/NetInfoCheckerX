@@ -211,6 +211,7 @@ namespace NetInfoCheckerX
         public Trace()
         {
             InitializeComponent();
+            Shown += (sender, args) => ApplyHighDpiOutputFontSafely();
             EnsureWinDivertLifecycleHooks();
             EnsureTraceGeoSessionCache();
             this.MinimumSize = this.Size;
@@ -703,18 +704,41 @@ namespace NetInfoCheckerX
             comboLocalEnd.Items.Add("系统默认 (ICMP兼容模式)");
             if (comboLocalEnd.Items.Count > 0) comboLocalEnd.SelectedIndex = 0;
             // 窗口载入时立即检查 Trace 相关依赖，让用户在开测前了解降级风险。
-            CheckIpSearcherDependencies();
             CheckWinDivertDependencies();
-            ApplyHighDpiOutputFont();
             AppendColorText("✧ 正在检查系统环境，请稍候... ✧\n", Color.White, true);
 
             // 2. 后台初始化 IP 数据库和防火墙状态
-            await Task.Run(() =>
+            string startupPreparationMessage = await Task.Run(() =>
             {
-                InitIp2Region();
-                initialFirewallOn = _lastFwStatus = IsFirewallEnabled();
-                initialRuleExisted = _lastRuleStatus = IsICMPRuleExisted();
+                var messages = new List<string>();
+                string databaseMessage = InitIp2Region();
+                if (!string.IsNullOrWhiteSpace(databaseMessage))
+                    messages.Add(databaseMessage);
+
+                try
+                {
+                    initialFirewallOn = _lastFwStatus = IsFirewallEnabled();
+                    initialRuleExisted = _lastRuleStatus = IsICMPRuleExisted();
+                }
+                catch (Exception ex)
+                {
+                    messages.Add("防火墙状态检查失败：" + ex.Message);
+                }
+
+                return string.Join(Environment.NewLine, messages);
             });
+
+            if (IsDisposed || Disposing)
+            {
+                try { _ip2regionSearcherV4?.Dispose(); } catch { }
+                try { _ip2regionSearcherV6?.Dispose(); } catch { }
+                _ip2regionSearcherV4 = null;
+                _ip2regionSearcherV6 = null;
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(startupPreparationMessage))
+                AppendColorText(startupPreparationMessage, Global.Yumeyo2, true);
 
             // 3. UI 线程：填充网卡列表
             try
@@ -744,38 +768,58 @@ namespace NetInfoCheckerX
             LoadSettings();
             CloudControl.UsedTimesCounter("TracePP");
         }
-        private void InitIp2Region()
+        private string InitIp2Region()
         {
-            try
-            {
-                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                string v4Path = Path.Combine(baseDir, "ip2region.v4.xdb");
-                string v6Path = Path.Combine(baseDir, "ip2region.v6.xdb");
+            var messages = new List<string>();
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            string v4Path = GetIp2RegionDatabasePath(
+                baseDir, "ip2region_v4.xdb", "ip2region.v4.xdb");
+            string v6Path = GetIp2RegionDatabasePath(
+                baseDir, "ip2region_v6.xdb", "ip2region.v6.xdb");
 
-                // 初始化 IPv4 搜索器
-                if (File.Exists(v4Path))
+            if (File.Exists(v4Path))
+            {
+                try
                 {
                     _ip2regionSearcherV4 = new Searcher(CachePolicy.Content, v4Path);
                 }
-                else
+                catch (Exception ex)
                 {
-                    AppendColorText("ip2region.v4.xdb 未找到\n", Global.Yumeyo2, false);
+                    messages.Add(Path.GetFileName(v4Path) + " 初始化失败：" + ex.Message);
                 }
+            }
+            else
+            {
+                messages.Add("ip2region_v4.xdb 未找到");
+            }
 
-                // 新增：初始化 IPv6 搜索器
-                if (File.Exists(v6Path))
+            if (File.Exists(v6Path))
+            {
+                try
                 {
                     _ip2regionSearcherV6 = new Searcher(CachePolicy.Content, v6Path);
                 }
-                else
+                catch (Exception ex)
                 {
-                    AppendColorText("ip2region.v6.xdb 未找到\n", Global.Yumeyo2, false);
+                    messages.Add(Path.GetFileName(v6Path) + " 初始化失败：" + ex.Message);
                 }
             }
-            catch (Exception ex)
+            else
             {
-                AppendColorText("ip2region 初始化失敗：" + ex.Message + "\n", Global.Yumeyo2, false);
+                messages.Add("ip2region_v6.xdb 未找到");
             }
+
+            return string.Join(Environment.NewLine, messages);
+        }
+
+        private static string GetIp2RegionDatabasePath(
+            string baseDir, string currentFileName, string previousFileName)
+        {
+            string currentPath = Path.Combine(baseDir, currentFileName);
+            if (File.Exists(currentPath)) return currentPath;
+
+            string previousPath = Path.Combine(baseDir, previousFileName);
+            return File.Exists(previousPath) ? previousPath : currentPath;
         }
 
         private void ApplyHighDpiOutputFont()
@@ -783,7 +827,8 @@ namespace NetInfoCheckerX
             // 禁用优化时保留设计器中的新宋体，也不加载或注册私有字体。
             if (AppSettings.DisableHighDpiFontOptimization) return;
 
-            float dpi = DeviceDpi;
+            float dpi = 96F;
+            try { dpi = DpiHelper.GetScale(this) * 96F; } catch { }
             try
             {
                 using (Graphics graphics = CreateGraphics())
@@ -817,7 +862,8 @@ namespace NetInfoCheckerX
                         _privateFontLeaseAcquired = true;
                         // RichEdit 可能已在 InitializeComponent 中创建，通知它
                         // 重新检查进程内可用的字体。
-                        SendMessage(richTextBox1.Handle, WmFontChange, 0, 0);
+                        if (richTextBox1.IsHandleCreated && !richTextBox1.IsDisposed)
+                            SendMessage(richTextBox1.Handle, WmFontChange, 0, 0);
                         selectedFont = new Font(family, 9F, FontStyle.Regular,
                             GraphicsUnit.Point);
                         _privateFonts = fontCollection;
@@ -857,12 +903,23 @@ namespace NetInfoCheckerX
             if (selectedFont != null)
             {
                 _traceOutputFont = selectedFont;
-                richTextBox1.Font = selectedFont;
                 ApplyTraceOutputSelectionFont();
                 toolTip1.SetToolTip(richTextBox1,
                     "可使用Ctrl+滚轮缩放字体大小\n当前输出字体: " +
                     selectedFont.FontFamily.Name +
                     (_privateFontLeaseAcquired ? " (程序目录)" : " (系统)"));
+            }
+        }
+
+        private void ApplyHighDpiOutputFontSafely()
+        {
+            try
+            {
+                ApplyHighDpiOutputFont();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Trace+ 高 DPI 字体初始化失败，继续使用默认字体：" + ex.Message);
             }
         }
 
@@ -872,7 +929,16 @@ namespace NetInfoCheckerX
 
             try
             {
-                richTextBox1.SelectionLength = 0;
+                int selectionStart = richTextBox1.SelectionStart;
+                int selectionLength = richTextBox1.SelectionLength;
+                int textLength = richTextBox1.TextLength;
+                richTextBox1.SelectAll();
+                if (textLength > 0)
+                    richTextBox1.SelectionFont = _traceOutputFont;
+
+                selectionStart = Math.Min(selectionStart, textLength);
+                selectionLength = Math.Min(selectionLength, textLength - selectionStart);
+                richTextBox1.Select(selectionStart, selectionLength);
                 richTextBox1.SelectionFont = _traceOutputFont;
             }
             catch { }
@@ -4558,60 +4624,6 @@ namespace NetInfoCheckerX
                 MessageBox.Show("提权失败或已取消：" + error, "提权已取消",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
-        }
-        private void CheckIpSearcherDependencies()
-        {
-            string appPath = AppDomain.CurrentDomain.BaseDirectory;
-
-            // 需要检查的文件清单：文件名 -> 用途说明
-            Dictionary<string, string> requiredFiles = new Dictionary<string, string>
-    {
-        { "IP2Region.Net.dll", "用于 IP2RG 本地数据库核心库" },
-        { "ip2region.v4.xdb", "用于 IP2RG IPv4 本地数据库" },
-        { "ip2region.v6.xdb", "用于 IP2RG IPv6 本地数据库" },
-        { "GeoCN.mmdb", "用于 MaxMind 本地数据库" },
-        { "Microsoft.Bcl.AsyncInterfaces.dll", "用于 IP2RG 本地数据库依赖" },
-        { "Microsoft.Extensions.DependencyInjection.Abstractions.dll", "用于 IP2RG 本地数据库依赖" },
-        { "System.Memory.dll", "用于 IP2RG 本地数据库依赖" },
-        { "System.Numerics.Vectors.dll", "用于 IP2RG 本地数据库依赖" },
-        { "System.Runtime.CompilerServices.Unsafe.dll", "用于 IP2RG 本地数据库依赖" },
-        { "System.Threading.Tasks.Extensions.dll", "用于 IP2RG 本地数据库依赖" }
-    };
-
-            List<string> missingFiles = new List<string>();
-
-            foreach (var item in requiredFiles)
-            {
-                string fullPath = Path.Combine(appPath, item.Key);
-                if (!File.Exists(fullPath))
-                {
-                    missingFiles.Add($"{item.Key}（{item.Value}）");
-                }
-            }
-
-            if (missingFiles.Count > 0)
-            {
-                checkGEO.Checked = false;
-                checkGEO.Enabled = false;
-
-                string msg =
-                    "提示：缺少运行 IP 归属地查询所需的文件。\n\n" +
-                    string.Join("\n", missingFiles.Select(f => "• " + f)) +
-                    "\n\n你可正常进行 Trace 测试，但无法显示每一跳的 IP 归属地。\n" +
-                    "如有需要，请重新解压程序、检查杀毒软件或检查相关数据库。";
-
-                MessageBox.Show(
-                    msg,
-                    "IP2RG 归属地组件缺失",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
-            }
-            else
-            {
-                checkGEO.Enabled = true;
-            }
-
         }
 
         private void CheckWinDivertDependencies()
