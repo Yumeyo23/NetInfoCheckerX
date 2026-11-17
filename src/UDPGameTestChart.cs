@@ -50,7 +50,7 @@ namespace NetInfoCheckerX
             DrawThresholdLines();
             _plot.Refresh();
 
-            ContextMenuStrip menu = new ContextMenuStrip();
+            ContextMenuStrip menu = new ContextMenuStrip(components);
             menu.Items.Add("复制图像", null, (s, e) =>
             {
                 using (Bitmap bitmap = _plot.Plot.Render())
