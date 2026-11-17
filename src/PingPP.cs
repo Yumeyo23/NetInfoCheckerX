@@ -23,8 +23,9 @@ namespace NetInfoCheckerX
         public PingPP()
         {
             InitializeComponent();
+            Shown += (sender, args) => ApplyHighDpiOutputFontSafely();
             this.MinimumSize = this.Size;
-            _limitTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _limitTimer = new System.Windows.Forms.Timer(components) { Interval = 1000 };
             _limitTimer.Tick += LimitTimer_Tick;
         }
 
@@ -656,11 +657,12 @@ namespace NetInfoCheckerX
 
         private void PingPP_Load(object sender, EventArgs e)
         {
-            ApplyHighDpiOutputFont();
+            // Load 阶段先设置输出框字体，避免启动提示和载入设置触发的协议提示使用设计器默认字体。
+            ApplyHighDpiOutputFontSafely();
             CleanupTempFiles();
             AppendColorText("✧ 正在检查系统环境，请稍候 ✧\n", Color.White, true);
             RadioProtocol_CheckedChanged(radioICMP, null);
-            Task.Run(() => PingPPLoadAll());
+            PingPPLoadAll();
             LoadSettings();
             CloudControl.LoadPingServers(comboTarget);
             if (comboFreq.SelectedIndex < 0) comboFreq.SelectedIndex = 0;
@@ -687,7 +689,8 @@ namespace NetInfoCheckerX
             // 禁用优化时保留设计器中的新宋体，也不加载或注册私有字体。
             if (AppSettings.DisableHighDpiFontOptimization) return;
 
-            float dpi = DeviceDpi;
+            float dpi = 96F;
+            try { dpi = DpiHelper.GetScale(this) * 96F; } catch { }
             try
             {
                 using (Graphics graphics = CreateGraphics())
@@ -698,6 +701,13 @@ namespace NetInfoCheckerX
             // 100% 缩放保留设计器中的新宋体；只有高于 100%（96 DPI）
             // 时才应用 Cascadia Mono。
             if (dpi <= 96F) return;
+
+            // Load 与 Shown 都会调用此方法：复用已选字体，避免重复创建和泄漏字体资源。
+            if (_pingOutputFont != null)
+            {
+                ApplyPingOutputSelectionFont();
+                return;
+            }
 
             Font selectedFont = null;
             string fontPath = Path.Combine(Application.StartupPath, "CascadiaMono.ttf");
@@ -717,7 +727,8 @@ namespace NetInfoCheckerX
                     if (family != null && TryAcquirePingPrivateFont(fontPath))
                     {
                         _privateFontLeaseAcquired = true;
-                        SendMessage(richTextBox1.Handle, WmFontChange, 0, 0);
+                        if (richTextBox1.IsHandleCreated && !richTextBox1.IsDisposed)
+                            SendMessage(richTextBox1.Handle, WmFontChange, 0, 0);
                         selectedFont = new Font(family, 9F, FontStyle.Regular,
                             GraphicsUnit.Point);
                         _privateFonts = fontCollection;
@@ -756,12 +767,23 @@ namespace NetInfoCheckerX
             if (selectedFont != null)
             {
                 _pingOutputFont = selectedFont;
-                richTextBox1.Font = selectedFont;
                 ApplyPingOutputSelectionFont();
                 toolTip1.SetToolTip(richTextBox1,
                     "可使用Ctrl+滚轮缩放字体大小\n当前输出字体: " +
                     selectedFont.FontFamily.Name +
                     (_privateFontLeaseAcquired ? " (程序目录)" : " (系统)"));
+            }
+        }
+
+        private void ApplyHighDpiOutputFontSafely()
+        {
+            try
+            {
+                ApplyHighDpiOutputFont();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Ping+ 高 DPI 字体初始化失败，继续使用默认字体：" + ex.Message);
             }
         }
 
@@ -771,7 +793,16 @@ namespace NetInfoCheckerX
 
             try
             {
-                richTextBox1.SelectionLength = 0;
+                int selectionStart = richTextBox1.SelectionStart;
+                int selectionLength = richTextBox1.SelectionLength;
+                int textLength = richTextBox1.TextLength;
+                richTextBox1.SelectAll();
+                if (textLength > 0)
+                    richTextBox1.SelectionFont = _pingOutputFont;
+
+                selectionStart = Math.Min(selectionStart, textLength);
+                selectionLength = Math.Min(selectionLength, textLength - selectionStart);
+                richTextBox1.Select(selectionStart, selectionLength);
                 richTextBox1.SelectionFont = _pingOutputFont;
             }
             catch { }
