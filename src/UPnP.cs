@@ -255,23 +255,16 @@ namespace NetInfoCheckerX
                     return;
                 }
                 IPAddress gateway = GetGatewayIp(selectedIp, selectedIp.ToString());
-                var servers = await DiscoverDevicesOnInterface(selectedIp, 1500, token);
+                // 与旧版一样并行执行 SSDP 和网关常用端口探测；两路均完成后合并，
+                // 不因先找到一台服务器而取消另一路，保证能发现多个服务器。
+                Task<List<UpnpServerEntry>> ssdpTask = DiscoverDevicesOnInterface(selectedIp, 1500, token);
+                Task<NatDevice> commonPortsTask = DiscoverDeviceOnCommonPorts(gateway, selectedIp, token);
+                await Task.WhenAll(ssdpTask, commonPortsTask);
+                var servers = await ssdpTask;
+                var gatewayDevice = await commonPortsTask;
                 token.ThrowIfCancellationRequested();
-
-                // SSDP 收完整个发现窗口后再判断；网关未广播时保留原有直连兜底。
-                if (gateway != null && !servers.Any(x => x.Address.Equals(gateway)))
-                {
-                    foreach (int port in new[] { 1900, 2189, 2869, 5000, 5800, 5431, 80, 8080 })
-                    {
-                        token.ThrowIfCancellationRequested();
-                        if (!await QuickCheckPort(gateway, port, selectedIp)) continue;
-                        var device = await TryGetDeviceOnPort(gateway, port, selectedIp);
-                        token.ThrowIfCancellationRequested();
-                        if (device == null) continue;
-                        servers.Add(new UpnpServerEntry { Address = gateway, Device = device });
-                        break;
-                    }
-                }
+                if (gatewayDevice != null)
+                    servers.Add(new UpnpServerEntry { Address = gateway, Device = gatewayDevice });
                 if (servers.Count == 0 && gateway != null && CheckFullScanConfig())
                 {
                     var device = await RunFullScanLogic(gateway, selectedIp, token);
@@ -341,53 +334,100 @@ namespace NetInfoCheckerX
             var seenLocations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var locations = new List<Tuple<Uri, IPAddress>>();
 
-            using (var client = new UdpClient(AddressFamily.InterNetwork))
+            try
             {
-                client.Client.Bind(new IPEndPoint(localAddress, 0));
-                client.Client.SetSocketOption(
-                    SocketOptionLevel.IP,
-                    SocketOptionName.MulticastInterface,
-                    localAddress.GetAddressBytes());
-
-                foreach (string searchTarget in searchTargets)
+                using (var client = new UdpClient(AddressFamily.InterNetwork))
+                using (token.Register(() => client.Close()))
                 {
-                    token.ThrowIfCancellationRequested();
-                    string request =
-                        "M-SEARCH * HTTP/1.1\r\n" +
-                        "HOST: 239.255.255.250:1900\r\n" +
-                        "MAN: \"ssdp:discover\"\r\n" +
-                        "MX: 1\r\n" +
-                        "ST: " + searchTarget + "\r\n\r\n";
-                    byte[] requestBytes = Encoding.ASCII.GetBytes(request);
-                    await client.SendAsync(requestBytes, requestBytes.Length, multicastEndPoint);
-                }
+                    // Windows 会将某些 ICMP 不可达通知转换成下一次 UDP 接收的
+                    // WSAECONNRESET (10054)。SSDP 无连接，不能据此中止整个发现流程。
+                    try
+                    {
+                        const int sioUdpConnReset = unchecked((int)0x9800000C);
+                        client.Client.IOControl(sioUdpConnReset, new byte[4], null);
+                    }
+                    catch (SocketException) { /* 不支持此选项时由接收循环处理 */ }
+                    catch (NotSupportedException) { }
 
-                DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-                while (DateTime.UtcNow < deadline)
-                {
-                    token.ThrowIfCancellationRequested();
-                    int remainingMs = Math.Max(1, (int)(deadline - DateTime.UtcNow).TotalMilliseconds);
-                    Task<UdpReceiveResult> receiveTask = client.ReceiveAsync();
-                    Task delayTask = Task.Delay(remainingMs, token);
-                    Task completedTask = await Task.WhenAny(receiveTask, delayTask);
+                    client.Client.Bind(new IPEndPoint(localAddress, 0));
+                    client.Client.SetSocketOption(
+                        SocketOptionLevel.IP,
+                        SocketOptionName.MulticastInterface,
+                        localAddress.GetAddressBytes());
 
-                    if (completedTask != receiveTask)
+                    foreach (string searchTarget in searchTargets)
                     {
                         token.ThrowIfCancellationRequested();
-                        break;
+                        string request =
+                            "M-SEARCH * HTTP/1.1\r\n" +
+                            "HOST: 239.255.255.250:1900\r\n" +
+                            "MAN: \"ssdp:discover\"\r\n" +
+                            "MX: 1\r\n" +
+                            "ST: " + searchTarget + "\r\n\r\n";
+                        byte[] requestBytes = Encoding.ASCII.GetBytes(request);
+                        try
+                        {
+                            await client.SendAsync(requestBytes, requestBytes.Length, multicastEndPoint);
+                        }
+                        catch (SocketException ex) when (IsTransientSsdpError(ex))
+                        {
+                            // 一次探测失败仍继续发送其他搜索目标并接收回复。
+                        }
                     }
 
-                    UdpReceiveResult response = await receiveTask;
-                    string responseText = Encoding.UTF8.GetString(response.Buffer);
-                    string location = GetSsdpHeaderValue(responseText, "LOCATION");
-                    if (string.IsNullOrWhiteSpace(location) || !seenLocations.Add(location)) continue;
+                    DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        int remainingMs = Math.Max(1, (int)(deadline - DateTime.UtcNow).TotalMilliseconds);
+                        UdpReceiveResult response;
+                        try
+                        {
+                            Task<UdpReceiveResult> receiveTask = client.ReceiveAsync();
+                            Task delayTask = Task.Delay(remainingMs, token);
+                            Task completedTask = await Task.WhenAny(receiveTask, delayTask);
 
-                    Uri locationUri;
-                    if (!Uri.TryCreate(location, UriKind.Absolute, out locationUri)) continue;
-                    if (locationUri.Scheme != Uri.UriSchemeHttp && locationUri.Scheme != Uri.UriSchemeHttps) continue;
+                            if (completedTask != receiveTask)
+                            {
+                                // 关闭后观察未完成的接收任务，避免留下未观察的套接字异常。
+                                client.Close();
+                                try { await receiveTask; }
+                                catch (SocketException) { }
+                                catch (ObjectDisposedException) { }
+                                token.ThrowIfCancellationRequested();
+                                break;
+                            }
 
-                    locations.Add(Tuple.Create(locationUri, response.RemoteEndPoint.Address));
+                            response = await receiveTask;
+                        }
+                        catch (SocketException ex) when (IsTransientSsdpError(ex))
+                        {
+                            token.ThrowIfCancellationRequested();
+                            await Task.Delay(Math.Min(10, remainingMs), token);
+                            continue;
+                        }
+
+                        string responseText = Encoding.UTF8.GetString(response.Buffer);
+                        string location = GetSsdpHeaderValue(responseText, "LOCATION");
+                        if (string.IsNullOrWhiteSpace(location) || !seenLocations.Add(location)) continue;
+
+                        Uri locationUri;
+                        if (!Uri.TryCreate(location, UriKind.Absolute, out locationUri)) continue;
+                        if (locationUri.Scheme != Uri.UriSchemeHttp && locationUri.Scheme != Uri.UriSchemeHttps) continue;
+
+                        locations.Add(Tuple.Create(locationUri, response.RemoteEndPoint.Address));
+                    }
                 }
+            }
+            catch (SocketException ex)
+            {
+                // SSDP 不可用时仍保留已收到的地址，并允许常用端口及全量扫描兜底。
+                token.ThrowIfCancellationRequested();
+                System.Diagnostics.Debug.WriteLine("UPnP SSDP 搜索失败，继续直连探测：" + ex.Message);
+            }
+            catch (ObjectDisposedException) when (token.IsCancellationRequested)
+            {
+                token.ThrowIfCancellationRequested();
             }
 
             // 解析设备描述不占用 SSDP 接收窗口，避免慢设备使其他回复丢失。
@@ -407,6 +447,28 @@ namespace NetInfoCheckerX
             }, token)));
             token.ThrowIfCancellationRequested();
             return results.Where(x => x != null).ToList();
+        }
+
+        private static bool IsTransientSsdpError(SocketException exception)
+        {
+            return exception.SocketErrorCode == SocketError.ConnectionReset ||
+                exception.SocketErrorCode == SocketError.ConnectionRefused ||
+                exception.SocketErrorCode == SocketError.NetworkReset;
+        }
+
+        private async Task<NatDevice> DiscoverDeviceOnCommonPorts(
+            IPAddress gateway, IPAddress localAddress, CancellationToken token)
+        {
+            if (gateway == null) return null;
+            foreach (int port in new[] { 1900, 2189, 2869, 5000, 5800, 5431, 80, 8080 })
+            {
+                token.ThrowIfCancellationRequested();
+                if (!await QuickCheckPort(gateway, port, localAddress)) continue;
+                var device = await TryGetDeviceOnPort(gateway, port, localAddress);
+                token.ThrowIfCancellationRequested();
+                if (device != null) return device;
+            }
+            return null;
         }
 
         private static string GetSsdpHeaderValue(string response, string headerName)
