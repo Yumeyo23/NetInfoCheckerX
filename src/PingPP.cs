@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Text;
 using System.IO;
 using System.Linq;
 using System.Media;
@@ -23,7 +22,6 @@ namespace NetInfoCheckerX
         public PingPP()
         {
             InitializeComponent();
-            Shown += (sender, args) => ApplyHighDpiOutputFontSafely();
             this.MinimumSize = this.Size;
             _limitTimer = new System.Windows.Forms.Timer(components) { Interval = 1000 };
             _limitTimer.Tick += LimitTimer_Tick;
@@ -63,26 +61,15 @@ namespace NetInfoCheckerX
         private int _remainingSeconds;
         private PingChart _chartForm;
         private bool _chartDisabled;
-        private PrivateFontCollection _privateFonts;
-        private Font _pingOutputFont;
-        private bool _privateFontLeaseAcquired;
-
-        // PrivateFontCollection 只让 GDI+ 看到字体；RichEdit 还需要
-        // 进程私有的 GDI 字体资源，才能按字体名称正确找到它。
-        private const uint FontResourcePrivate = 0x0010;
-        private const int WmFontChange = 0x001D;
-        private const string CascadiaMonoFamilyName = "Cascadia Mono";
-        private static readonly object PingPrivateFontSync = new object();
-        private static string _registeredPingFontPath;
-        private static int _registeredPingFontUsers;
-        private static bool _pingPrivateFontRegistered;
+        private RichOutputFonts _outputFonts;
 
         // 高频输出缓冲
         private readonly List<(string text, Color color, bool newLine)> _outputBuffer = new List<(string text, Color color, bool newLine)>();
         private readonly Stopwatch _flushWatch = Stopwatch.StartNew();
         private bool _useBufferedOutput;
         private bool _suppressOutput;
-        private bool _timeoutOnlyOutput;
+        private const int MinTickForOutputFilter = 8;
+        private int? _outputThresholdMs;
         private bool _whiteTextOnly;
         private const int FlushIntervalMs = 100;
         private int _flushIntervalMs = 100;
@@ -103,13 +90,6 @@ namespace NetInfoCheckerX
         private static extern int timeEndPeriod(uint uPeriod);
         [DllImport("user32.dll")]
         private static extern int SendMessage(IntPtr hWnd, int msg, int wParam, int lParam);
-        [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern int AddFontResourceEx(string fileName, uint flags,
-            IntPtr reserved);
-        [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool RemoveFontResourceEx(string fileName, uint flags,
-            IntPtr reserved);
         private const int WM_SETREDRAW = 0x000B;
         private string IniPath => Path.Combine(Application.StartupPath, "NetInfoCheckerX.ini");
         private const string IniSection = "PingPP";
@@ -364,9 +344,9 @@ namespace NetInfoCheckerX
 
                         string remoteIp = ((IPEndPoint)receiveEP).Address.ToString();
 
-                        Color rowColor = GetRttColor(rtt);
-                        if (!_timeoutOnlyOutput)
+                        if (ShouldOutputSuccessfulPing(rtt))
                         {
+                            Color rowColor = GetRttColor(rtt);
                             AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
                             AppendColorText($"UDP成功: {remoteIp} ={FormatRtt(rtt)}ms", rowColor, true);
                         }
@@ -513,9 +493,9 @@ namespace NetInfoCheckerX
                     string actualIp = ((IPEndPoint)socket.LocalEndPoint).Address.ToString();
                     PrintTestSettings(actualIp);
 
-                    Color rowColor = GetRttColor(rtt);
-                    if (!_timeoutOnlyOutput)
+                    if (ShouldOutputSuccessfulPing(rtt))
                     {
+                        Color rowColor = GetRttColor(rtt);
                         AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
 
                         string displayTarget = ipAddr.AddressFamily == AddressFamily.InterNetworkV6
@@ -657,8 +637,7 @@ namespace NetInfoCheckerX
 
         private void PingPP_Load(object sender, EventArgs e)
         {
-            // Load 阶段先设置输出框字体，避免启动提示和载入设置触发的协议提示使用设计器默认字体。
-            ApplyHighDpiOutputFontSafely();
+            _outputFonts = new RichOutputFonts(richTextBox1, this, toolTip1);
             CleanupTempFiles();
             AppendColorText("✧ 正在检查系统环境，请稍候 ✧\n", Color.White, true);
             RadioProtocol_CheckedChanged(radioICMP, null);
@@ -681,212 +660,6 @@ namespace NetInfoCheckerX
             else
             {
                 _chartDisabled = true;
-            }
-        }
-
-        private void ApplyHighDpiOutputFont()
-        {
-            // 禁用优化时保留设计器中的新宋体，也不加载或注册私有字体。
-            if (AppSettings.DisableHighDpiFontOptimization) return;
-
-            float dpi = 96F;
-            try { dpi = DpiHelper.GetScale(this) * 96F; } catch { }
-            try
-            {
-                using (Graphics graphics = CreateGraphics())
-                    dpi = Math.Max(dpi, graphics.DpiX);
-            }
-            catch { }
-
-            // 100% 缩放保留设计器中的新宋体；只有高于 100%（96 DPI）
-            // 时才应用 Cascadia Mono。
-            if (dpi <= 96F) return;
-
-            // Load 与 Shown 都会调用此方法：复用已选字体，避免重复创建和泄漏字体资源。
-            if (_pingOutputFont != null)
-            {
-                ApplyPingOutputSelectionFont();
-                return;
-            }
-
-            Font selectedFont = null;
-            string fontPath = Path.Combine(Application.StartupPath, "CascadiaMono.ttf");
-
-            // 优先使用程序旁的 TTF，并且只注册到当前进程。
-            if (File.Exists(fontPath))
-            {
-                PrivateFontCollection fontCollection = null;
-                try
-                {
-                    fontCollection = new PrivateFontCollection();
-                    fontCollection.AddFontFile(fontPath);
-                    FontFamily family = fontCollection.Families.FirstOrDefault(item =>
-                        string.Equals(item.Name, CascadiaMonoFamilyName,
-                            StringComparison.OrdinalIgnoreCase));
-
-                    if (family != null && TryAcquirePingPrivateFont(fontPath))
-                    {
-                        _privateFontLeaseAcquired = true;
-                        if (richTextBox1.IsHandleCreated && !richTextBox1.IsDisposed)
-                            SendMessage(richTextBox1.Handle, WmFontChange, 0, 0);
-                        selectedFont = new Font(family, 9F, FontStyle.Regular,
-                            GraphicsUnit.Point);
-                        _privateFonts = fontCollection;
-                        fontCollection = null;
-                        Debug.WriteLine("Ping+ 输出字体：进程私有 CascadiaMono.ttf");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine("Ping+ 加载私有字体失败：" + ex.Message);
-                    if (_privateFontLeaseAcquired)
-                    {
-                        ReleasePingPrivateFont();
-                        _privateFontLeaseAcquired = false;
-                    }
-                }
-                finally
-                {
-                    fontCollection?.Dispose();
-                }
-            }
-
-            // 本地 TTF 不可用时，仅在系统确实安装了该字体族时回退；
-            // 否则 new Font 会静默替换成默认字体。
-            if (selectedFont == null && IsFontFamilyInstalled(CascadiaMonoFamilyName))
-            {
-                try
-                {
-                    selectedFont = new Font(CascadiaMonoFamilyName, 9F,
-                        FontStyle.Regular, GraphicsUnit.Point);
-                    Debug.WriteLine("Ping+ 输出字体：系统 Cascadia Mono");
-                }
-                catch { }
-            }
-
-            if (selectedFont != null)
-            {
-                _pingOutputFont = selectedFont;
-                ApplyPingOutputSelectionFont();
-                toolTip1.SetToolTip(richTextBox1,
-                    "可使用Ctrl+滚轮缩放字体大小\n当前输出字体: " +
-                    selectedFont.FontFamily.Name +
-                    (_privateFontLeaseAcquired ? " (程序目录)" : " (系统)"));
-            }
-        }
-
-        private void ApplyHighDpiOutputFontSafely()
-        {
-            try
-            {
-                ApplyHighDpiOutputFont();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine("Ping+ 高 DPI 字体初始化失败，继续使用默认字体：" + ex.Message);
-            }
-        }
-
-        private void ApplyPingOutputSelectionFont()
-        {
-            if (_pingOutputFont == null || richTextBox1.IsDisposed) return;
-
-            try
-            {
-                int selectionStart = richTextBox1.SelectionStart;
-                int selectionLength = richTextBox1.SelectionLength;
-                int textLength = richTextBox1.TextLength;
-                richTextBox1.SelectAll();
-                if (textLength > 0)
-                    richTextBox1.SelectionFont = _pingOutputFont;
-
-                selectionStart = Math.Min(selectionStart, textLength);
-                selectionLength = Math.Min(selectionLength, textLength - selectionStart);
-                richTextBox1.Select(selectionStart, selectionLength);
-                richTextBox1.SelectionFont = _pingOutputFont;
-            }
-            catch { }
-        }
-
-        private static bool IsFontFamilyInstalled(string familyName)
-        {
-            try
-            {
-                using (var installedFonts = new InstalledFontCollection())
-                {
-                    return installedFonts.Families.Any(item =>
-                        string.Equals(item.Name, familyName,
-                            StringComparison.OrdinalIgnoreCase));
-                }
-            }
-            catch { return false; }
-        }
-
-        private static bool TryAcquirePingPrivateFont(string fontPath)
-        {
-            string fullPath;
-            try { fullPath = Path.GetFullPath(fontPath); }
-            catch { return false; }
-
-            lock (PingPrivateFontSync)
-            {
-                if (_pingPrivateFontRegistered)
-                {
-                    if (!string.Equals(_registeredPingFontPath, fullPath,
-                        StringComparison.OrdinalIgnoreCase)) return false;
-
-                    _registeredPingFontUsers++;
-                    return true;
-                }
-
-                if (AddFontResourceEx(fullPath, FontResourcePrivate, IntPtr.Zero) <= 0)
-                    return false;
-
-                _registeredPingFontPath = fullPath;
-                _registeredPingFontUsers = 1;
-                _pingPrivateFontRegistered = true;
-                return true;
-            }
-        }
-
-        private static void ReleasePingPrivateFont()
-        {
-            lock (PingPrivateFontSync)
-            {
-                if (!_pingPrivateFontRegistered || _registeredPingFontUsers <= 0)
-                    return;
-
-                _registeredPingFontUsers--;
-                if (_registeredPingFontUsers != 0) return;
-
-                if (RemoveFontResourceEx(_registeredPingFontPath,
-                    FontResourcePrivate, IntPtr.Zero))
-                {
-                    _registeredPingFontPath = null;
-                    _pingPrivateFontRegistered = false;
-                }
-            }
-        }
-
-        private void ReleasePingOutputFont()
-        {
-            // 先让 RichEdit 不再引用私有字体，再释放 GDI+/GDI 资源。
-            try
-            {
-                if (!richTextBox1.IsDisposed && _pingOutputFont != null)
-                    richTextBox1.Font = this.Font;
-            }
-            catch { }
-
-            try { _pingOutputFont?.Dispose(); } catch { }
-            _pingOutputFont = null;
-            try { _privateFonts?.Dispose(); } catch { }
-            _privateFonts = null;
-
-            if (_privateFontLeaseAcquired)
-            {
-                ReleasePingPrivateFont();
-                _privateFontLeaseAcquired = false;
             }
         }
 
@@ -1003,7 +776,6 @@ namespace NetInfoCheckerX
             _limitTimer?.Stop();
             if (_activeTests <= 1) CleanupTempFiles();
             try { _chartForm?.Shutdown(); _chartForm?.Dispose(); } catch { }
-            ReleasePingOutputFont();
         }
 
         private async void btnStart_Click(object sender, EventArgs e)
@@ -1077,7 +849,7 @@ namespace NetInfoCheckerX
                         {
                             comboTarget.Items.Add(ipStr);
                         }
-                        richTextBox1.AppendText($" -> {ipStr}\n");
+                        AppendColorText($" -> {ipStr}", Color.Yellow, true);
                     }
                     comboTarget.DroppedDown = true;
                     if (comboTarget.Items.Count == 2)
@@ -1138,6 +910,9 @@ namespace NetInfoCheckerX
             CleanupTempFiles();
             ResetStats();
             richTextBox1.Clear();
+            int freq = GetPingFrequency();
+            _outputThresholdMs = AppSettings.PingTimeoutOutputOnly && freq >= MinTickForOutputFilter
+                ? (int?)AppSettings.PingOutputThresholdMs : null;
             _cts = new CancellationTokenSource();
             isRunning = true;
             _activeTests++;
@@ -1273,8 +1048,6 @@ namespace NetInfoCheckerX
 
             try
             {
-                int freq = GetPingFrequency();
-                _timeoutOnlyOutput = AppSettings.PingTimeoutOutputOnly && freq >= 8;
                 long intervalTicks = (long)(Stopwatch.Frequency / (double)freq);
                 _useBufferedOutput = freq >= 4;
                 _whiteTextOnly = freq > 8;
@@ -1483,9 +1256,9 @@ namespace NetInfoCheckerX
                             UpdateDelay(rtt);
                             PrintTestSettings("系统默认 (ICMP兼容模式)");
 
-                            Color rowColor = GetRttColor(rtt);
-                            if (!_timeoutOnlyOutput)
+                            if (ShouldOutputSuccessfulPing(rtt))
                             {
+                                Color rowColor = GetRttColor(rtt);
                                 AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
                                 string ttlInfo = "";
                                 if (reply.Address.AddressFamily == AddressFamily.InterNetwork)
@@ -1652,9 +1425,9 @@ namespace NetInfoCheckerX
                             string actualIp = ((IPEndPoint)raw.LocalEndPoint).Address.ToString();
                             PrintTestSettings(actualIp);
                             string limitInfo = ttl > 0 ? $"TTL={ttl}" : "";
-                            Color rowColor = GetRttColor(rtt);
-                            if (!_timeoutOnlyOutput)
+                            if (ShouldOutputSuccessfulPing(rtt))
                             {
+                                Color rowColor = GetRttColor(rtt);
                                 AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
                                 AppendColorText($"ICMP成功: {replyAddress} ={FormatRtt(rtt)}ms {limitInfo}", rowColor, true);
                             }
@@ -1804,9 +1577,9 @@ namespace NetInfoCheckerX
                         {
                             successCount++;
                             UpdateDelay(rtt);
-                            Color rowColor = GetRttColor(rtt);
-                            if (!_timeoutOnlyOutput)
+                            if (ShouldOutputSuccessfulPing(rtt))
                             {
+                                Color rowColor = GetRttColor(rtt);
                                 AppendColorText($"[{timeStr}]({currentTotal}) ", GetTimestampColor(), false);
                                 AppendColorText($"ICMPv6成功: {targetIp} ={FormatRtt(rtt)}ms", rowColor, true);
                             }
@@ -2240,14 +2013,7 @@ namespace NetInfoCheckerX
                 _outputBuffer.Add((text, actualColor, addNewLine));
                 return;
             }
-            richTextBox1.SelectionStart = richTextBox1.Text.Length;
-            richTextBox1.SelectionLength = 0;
-            if (_pingOutputFont != null)
-            {
-                try { richTextBox1.SelectionFont = _pingOutputFont; } catch { }
-            }
-            richTextBox1.SelectionColor = actualColor;
-            richTextBox1.AppendText(addNewLine ? text + Environment.NewLine : text);
+            _outputFonts.Append(text, actualColor, addNewLine);
             richTextBox1.ScrollToCaret();
         }
 
@@ -2267,14 +2033,7 @@ namespace NetInfoCheckerX
                     sb.Append(text);
                     if (newLine) sb.AppendLine();
                 }
-                richTextBox1.SelectionStart = richTextBox1.Text.Length;
-                richTextBox1.SelectionLength = 0;
-                if (_pingOutputFont != null)
-                {
-                    try { richTextBox1.SelectionFont = _pingOutputFont; } catch { }
-                }
-                richTextBox1.SelectionColor = Color.White;
-                richTextBox1.AppendText(sb.ToString());
+                _outputFonts.Append(sb.ToString(), Color.White, false);
             }
             else
             {
@@ -2282,14 +2041,7 @@ namespace NetInfoCheckerX
                 for (int i = 0; i < count; i++)
                 {
                     var (text, color, newLine) = _outputBuffer[i];
-                    richTextBox1.SelectionStart = richTextBox1.Text.Length;
-                    richTextBox1.SelectionLength = 0;
-                    if (_pingOutputFont != null)
-                    {
-                        try { richTextBox1.SelectionFont = _pingOutputFont; } catch { }
-                    }
-                    richTextBox1.SelectionColor = color;
-                    richTextBox1.AppendText(newLine ? text + Environment.NewLine : text);
+                    _outputFonts.Append(text, color, newLine);
                 }
             }
             _outputBuffer.Clear();
@@ -2416,14 +2168,14 @@ namespace NetInfoCheckerX
                 AppendColorText(labels[i], colors[i], false);
                 if (i < labels.Length - 1) AppendColorText("|", Color.Gray, false);
             }
-            richTextBox1.AppendText("\n");
+            AppendColorText("\n", Color.White);
 
             for (int i = 0; i < arrows.Length; i++)
             {
                 AppendColorText(arrows[i], colors[i], false);
                 if (i < arrows.Length - 1) AppendColorText(" ", Color.Black, false);
             }
-            richTextBox1.AppendText("\n");
+            AppendColorText("\n", Color.White);
 
             AppendColorText("    ===========================================================", Global.Yumeyo2, true);
         }
@@ -2505,8 +2257,8 @@ namespace NetInfoCheckerX
                 activeSettingHints.Add("禁用折线图");
             if (AppSettings.DisablePingPerformanceCheck)
                 activeSettingHints.Add("禁用性能损耗检测");
-            if (AppSettings.PingTimeoutOutputOnly)
-                activeSettingHints.Add("只输出超时");
+            if (_outputThresholdMs.HasValue)
+                activeSettingHints.Add($"成功结果仅显示延迟 > {_outputThresholdMs.Value}ms（超时和错误仍显示）");
 
             if (activeSettingHints.Count > 0)
             {
@@ -2575,6 +2327,11 @@ namespace NetInfoCheckerX
 
             int secBucket = (int)(DateTime.Now - _sessionStartTime).TotalSeconds;
             return (secBucket % 2 == 0) ? Global.Yumeyo2 : ColorTranslator.FromHtml("#ffa5cf");
+        }
+
+        private bool ShouldOutputSuccessfulPing(double rtt)
+        {
+            return !_outputThresholdMs.HasValue || rtt > _outputThresholdMs.Value;
         }
 
         private string FormatRtt(double rtt)
