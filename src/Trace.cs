@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Text;
 using System.IO;
 using System.Linq;
 using System.Media;
@@ -26,20 +25,7 @@ namespace NetInfoCheckerX
     {
         private CancellationTokenSource cts; // 取消令牌
         private bool isRunning = false;      // 运行状态标识
-        private PrivateFontCollection _privateFonts;
-        private Font _traceOutputFont;
-        private bool _privateFontLeaseAcquired;
-
-        // PrivateFontCollection 只让 GDI+ 看到字体，RichTextBox 底层的
-        // RichEdit 仍会按字体名称向 GDI 查找。因此还需要把 TTF
-        // 注册为“仅当前进程可见”的 GDI 字体资源。
-        private const uint FontResourcePrivate = 0x0010;
-        private const int WmFontChange = 0x001D;
-        private const string CascadiaMonoFamilyName = "Cascadia Mono";
-        private static readonly object TracePrivateFontSync = new object();
-        private static string _registeredTraceFontPath;
-        private static int _registeredTraceFontUsers;
-        private static bool _tracePrivateFontRegistered;
+        private RichOutputFonts _outputFonts;
 
         // 防火墙逻辑变量
         private bool isManualChanged = false;     // 标记本次运行是否手动改过状态
@@ -94,15 +80,6 @@ namespace NetInfoCheckerX
         private const int WM_SETREDRAW = 0x000B;
         private const int EM_GETFIRSTVISIBLELINE = 0x00CE;
         private const int EM_LINESCROLL = 0x00B6;
-
-        [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern int AddFontResourceEx(string fileName, uint flags,
-            IntPtr reserved);
-
-        [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool RemoveFontResourceEx(string fileName, uint flags,
-            IntPtr reserved);
 
         // WinDivert 2.x 原生接口。项目固定为 x64，运行目录需同时包含
         // WinDivert.dll 与 WinDivert64.sys。
@@ -211,7 +188,6 @@ namespace NetInfoCheckerX
         public Trace()
         {
             InitializeComponent();
-            Shown += (sender, args) => ApplyHighDpiOutputFontSafely();
             EnsureWinDivertLifecycleHooks();
             EnsureTraceGeoSessionCache();
             this.MinimumSize = this.Size;
@@ -697,6 +673,7 @@ namespace NetInfoCheckerX
 
         private async void Trace_Load(object sender, EventArgs e)
         {
+            _outputFonts = new RichOutputFonts(richTextBox1, this, toolTip1);
             // 1. 先做那些”秒开”的基础 UI 初始化
             comboLocalEnd.Items.Clear();
             comboLocalEnd.Items.Add("0.0.0.0 (Any)");
@@ -822,209 +799,6 @@ namespace NetInfoCheckerX
             return File.Exists(previousPath) ? previousPath : currentPath;
         }
 
-        private void ApplyHighDpiOutputFont()
-        {
-            // 禁用优化时保留设计器中的新宋体，也不加载或注册私有字体。
-            if (AppSettings.DisableHighDpiFontOptimization) return;
-
-            float dpi = 96F;
-            try { dpi = DpiHelper.GetScale(this) * 96F; } catch { }
-            try
-            {
-                using (Graphics graphics = CreateGraphics())
-                    dpi = Math.Max(dpi, graphics.DpiX);
-            }
-            catch { }
-
-            Font selectedFont = null;
-            string fontPath = Path.Combine(Application.StartupPath, "CascadiaMono.ttf");
-            bool hasLocalFont = File.Exists(fontPath);
-
-            // 100% 缩放（96 DPI）保留设计器中的新宋体；只有缩放
-            // 高于 100% 时才尝试应用 Cascadia Mono。
-            if (dpi <= 96F) return;
-
-            // 优先使用主程序旁的 TTF。AddFontResourceEx(FR_PRIVATE) 只在
-            // 本进程内注册，不会安装到 Windows 字体目录。
-            if (hasLocalFont)
-            {
-                PrivateFontCollection fontCollection = null;
-                try
-                {
-                    fontCollection = new PrivateFontCollection();
-                    fontCollection.AddFontFile(fontPath);
-                    FontFamily family = fontCollection.Families.FirstOrDefault(item =>
-                        string.Equals(item.Name, CascadiaMonoFamilyName,
-                            StringComparison.OrdinalIgnoreCase));
-
-                    if (family != null && TryAcquireTracePrivateFont(fontPath))
-                    {
-                        _privateFontLeaseAcquired = true;
-                        // RichEdit 可能已在 InitializeComponent 中创建，通知它
-                        // 重新检查进程内可用的字体。
-                        if (richTextBox1.IsHandleCreated && !richTextBox1.IsDisposed)
-                            SendMessage(richTextBox1.Handle, WmFontChange, 0, 0);
-                        selectedFont = new Font(family, 9F, FontStyle.Regular,
-                            GraphicsUnit.Point);
-                        _privateFonts = fontCollection;
-                        fontCollection = null;
-                        Debug.WriteLine("Trace 输出字体：进程私有 CascadiaMono.ttf");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine("Trace 加载私有字体失败：" + ex.Message);
-                    if (_privateFontLeaseAcquired)
-                    {
-                        ReleaseTracePrivateFont();
-                        _privateFontLeaseAcquired = false;
-                    }
-                }
-                finally
-                {
-                    fontCollection?.Dispose();
-                }
-            }
-
-            // 本地 TTF 不可用时，才尝试已安装的系统字体。必须先
-            // 精确确认字体族存在，因为 new Font("不存在的名称")
-            // 不会报错，而是会静默回退到默认字体。
-            if (selectedFont == null && IsFontFamilyInstalled(CascadiaMonoFamilyName))
-            {
-                try
-                {
-                    selectedFont = new Font(CascadiaMonoFamilyName, 9F,
-                        FontStyle.Regular, GraphicsUnit.Point);
-                    Debug.WriteLine("Trace 输出字体：系统 Cascadia Mono");
-                }
-                catch { }
-            }
-
-            if (selectedFont != null)
-            {
-                _traceOutputFont = selectedFont;
-                ApplyTraceOutputSelectionFont();
-                toolTip1.SetToolTip(richTextBox1,
-                    "可使用Ctrl+滚轮缩放字体大小\n当前输出字体: " +
-                    selectedFont.FontFamily.Name +
-                    (_privateFontLeaseAcquired ? " (程序目录)" : " (系统)"));
-            }
-        }
-
-        private void ApplyHighDpiOutputFontSafely()
-        {
-            try
-            {
-                ApplyHighDpiOutputFont();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine("Trace+ 高 DPI 字体初始化失败，继续使用默认字体：" + ex.Message);
-            }
-        }
-
-        private void ApplyTraceOutputSelectionFont()
-        {
-            if (_traceOutputFont == null || richTextBox1.IsDisposed) return;
-
-            try
-            {
-                int selectionStart = richTextBox1.SelectionStart;
-                int selectionLength = richTextBox1.SelectionLength;
-                int textLength = richTextBox1.TextLength;
-                richTextBox1.SelectAll();
-                if (textLength > 0)
-                    richTextBox1.SelectionFont = _traceOutputFont;
-
-                selectionStart = Math.Min(selectionStart, textLength);
-                selectionLength = Math.Min(selectionLength, textLength - selectionStart);
-                richTextBox1.Select(selectionStart, selectionLength);
-                richTextBox1.SelectionFont = _traceOutputFont;
-            }
-            catch { }
-        }
-
-        private static bool IsFontFamilyInstalled(string familyName)
-        {
-            try
-            {
-                using (var installedFonts = new InstalledFontCollection())
-                {
-                    return installedFonts.Families.Any(item =>
-                        string.Equals(item.Name, familyName,
-                            StringComparison.OrdinalIgnoreCase));
-                }
-            }
-            catch { return false; }
-        }
-
-        private static bool TryAcquireTracePrivateFont(string fontPath)
-        {
-            string fullPath;
-            try { fullPath = Path.GetFullPath(fontPath); }
-            catch { return false; }
-
-            lock (TracePrivateFontSync)
-            {
-                if (_tracePrivateFontRegistered)
-                {
-                    if (!string.Equals(_registeredTraceFontPath, fullPath,
-                        StringComparison.OrdinalIgnoreCase)) return false;
-
-                    _registeredTraceFontUsers++;
-                    return true;
-                }
-
-                if (AddFontResourceEx(fullPath, FontResourcePrivate, IntPtr.Zero) <= 0)
-                    return false;
-
-                _registeredTraceFontPath = fullPath;
-                _registeredTraceFontUsers = 1;
-                _tracePrivateFontRegistered = true;
-                return true;
-            }
-        }
-
-        private static void ReleaseTracePrivateFont()
-        {
-            lock (TracePrivateFontSync)
-            {
-                if (!_tracePrivateFontRegistered || _registeredTraceFontUsers <= 0)
-                    return;
-
-                _registeredTraceFontUsers--;
-                if (_registeredTraceFontUsers != 0) return;
-
-                if (RemoveFontResourceEx(_registeredTraceFontPath,
-                    FontResourcePrivate, IntPtr.Zero))
-                {
-                    _registeredTraceFontPath = null;
-                    _tracePrivateFontRegistered = false;
-                }
-            }
-        }
-
-        private void ReleaseTraceOutputFont()
-        {
-            // 先让 RichEdit 不再引用私有字体，再释放 GDI+/GDI 资源。
-            try
-            {
-                if (!richTextBox1.IsDisposed && _traceOutputFont != null)
-                    richTextBox1.Font = this.Font;
-            }
-            catch { }
-
-            try { _traceOutputFont?.Dispose(); } catch { }
-            _traceOutputFont = null;
-            try { _privateFonts?.Dispose(); } catch { }
-            _privateFonts = null;
-
-            if (_privateFontLeaseAcquired)
-            {
-                ReleaseTracePrivateFont();
-                _privateFontLeaseAcquired = false;
-            }
-        }
         /// <summary>
         /// 使用 ip2region 查询并返回格式化结果（Country/Province/City/Isp）
         /// 优化：不显示 "0" / "-" / "Reserved" 字段；若是内网/保留地址，返回中文友好提示。
@@ -1112,24 +886,10 @@ namespace NetInfoCheckerX
             return IanaReservedIP.Check(ipAddr.ToString());
         }
         private void AppendColorText(string text, Color color, bool addNewLine = false,
-            Font fontOverride = null)
+            bool detail = false)
         {
             if (this.IsDisposed || richTextBox1.IsDisposed) return;
-            richTextBox1.SelectionStart = richTextBox1.Text.Length;
-            richTextBox1.SelectionLength = 0;
-
-            // RichEdit 会在异步 await、选区替换或 Clear() 后丢失当前
-            // 字符格式。每次写入都显式指定字体，避免运行中途
-            // 回退到设计器的微软雅黑。归属地等小字号可通过
-            // fontOverride 保留它们自己的字号。
-            Font outputFont = fontOverride ?? _traceOutputFont;
-            if (outputFont != null)
-            {
-                try { richTextBox1.SelectionFont = outputFont; } catch { }
-            }
-
-            richTextBox1.SelectionColor = color;
-            richTextBox1.AppendText(addNewLine ? text + Environment.NewLine : text);
+            _outputFonts.Append(text, color, addNewLine, detail);
             richTextBox1.ScrollToCaret();
         }
 
@@ -1959,7 +1719,7 @@ namespace NetInfoCheckerX
                                     if (pos >= 0)
                                     {
                                         richTextBox1.Select(pos, oldGeo.Length);
-                                        richTextBox1.SelectedText = enriched;
+                                        _outputFonts.WriteSelection(enriched, Global.Yumeyo2, detail: true);
                                         _hopGeoOriginal[hop] = enriched;
                                     }
                                 }
@@ -2015,7 +1775,7 @@ namespace NetInfoCheckerX
                         if (pos >= 0)
                         {
                             richTextBox1.Select(pos, oldGeo.Length);
-                            richTextBox1.SelectedText = enriched;
+                            _outputFonts.WriteSelection(enriched, Global.Yumeyo2, detail: true);
                             _hopGeoOriginal[hop] = enriched;
                         }
                     }
@@ -4332,15 +4092,11 @@ namespace NetInfoCheckerX
                     string combined = result.GeoInfo;
                     if (string.IsNullOrEmpty(combined))
                         combined = GetLocalGeoInfo(result.ReplyAddress.ToString());
-                    var defaultFont2 = richTextBox1.Font;
-                    using (var smallFont2 = new Font(defaultFont2.FontFamily, Math.Max(defaultFont2.Size - 1.5f, 7f)))
-                    {
-                        AppendColorText("             -> " + combined + "\n",
-                            Global.Yumeyo2, false, smallFont2);
-                        _hopGeoOriginal[result.TTL] = combined;
-                        if (result.ReplyAddress != null)
-                            _ipToHop[result.ReplyAddress.ToString()] = result.TTL;
-                    }
+                    AppendColorText("             -> " + combined + "\n",
+                        Global.Yumeyo2, detail: true);
+                    _hopGeoOriginal[result.TTL] = combined;
+                    if (result.ReplyAddress != null)
+                        _ipToHop[result.ReplyAddress.ToString()] = result.TTL;
                 }
             }
             else
@@ -4399,38 +4155,32 @@ namespace NetInfoCheckerX
 
                 AppendColorText("\n", Color.White, false);
 
-                // 归属地用更小字号
-                var defaultFont = richTextBox1.Font;
-                using (var smallFont = new Font(defaultFont.FontFamily, Math.Max(defaultFont.Size - 1.5f, 7f)))
+                if (geoChecked && s.GeoInfo != null)
                 {
-                    if (geoChecked && s.GeoInfo != null)
-                    {
-                        AppendColorText("             -> " + s.GeoInfo,
-                            Global.Yumeyo2, false, smallFont);
-                        AppendColorText("\n", Color.White, false);
-                    }
+                    AppendColorText("             -> " + s.GeoInfo,
+                        Global.Yumeyo2, detail: true);
+                    AppendColorText("\n", Color.White, false);
+                }
 
-                    // 同一跳的其他 IP（-> 箭头与主 IP 对齐）
-                    var altIPs = s.AllIPs.Where(ip => !ip.Equals(s.ReplyAddress)).ToList();
-                    foreach (var altIp in altIPs)
+                // 同一跳的其他 IP（-> 箭头与主 IP 对齐）
+                var altIPs = s.AllIPs.Where(ip => !ip.Equals(s.ReplyAddress)).ToList();
+                foreach (var altIp in altIPs)
+                {
+                    string altIpStr = altIp.ToString();
+                    s.FirstSeenRound.TryGetValue(altIpStr, out int firstRnd);
+                    s.IpAppearCount.TryGetValue(altIpStr, out int appearCnt);
+                    string roundTag = "";
+                    if (appearCnt > 1 && firstRnd > 0)
+                        roundTag = $" ({firstRnd}/{appearCnt})";
+                    bool isTargetAlt = altIpStr == targetIp;
+                    AppendColorText("      " + altIpStr.PadRight(ipWidth), isTargetAlt ? Color.LightGreen : Color.Yellow, false);
+                    if (roundTag.Length > 0)
+                        AppendColorText(roundTag, Color.Gray, false);
+                    if (geoChecked && s.IpGeoCache.TryGetValue(altIpStr, out var altGeo))
                     {
-                        string altIpStr = altIp.ToString();
-                        s.FirstSeenRound.TryGetValue(altIpStr, out int firstRnd);
-                        s.IpAppearCount.TryGetValue(altIpStr, out int appearCnt);
-                        string roundTag = "";
-                        if (appearCnt > 1 && firstRnd > 0)
-                            roundTag = $" ({firstRnd}/{appearCnt})";
-                        bool isTargetAlt = altIpStr == targetIp;
-                        AppendColorText("      " + altIpStr.PadRight(ipWidth), isTargetAlt ? Color.LightGreen : Color.Yellow, false);
-                        if (roundTag.Length > 0)
-                            AppendColorText(roundTag, Color.Gray, false);
-                        if (geoChecked && s.IpGeoCache.TryGetValue(altIp.ToString(), out var altGeo))
-                        {
-                            AppendColorText(" -> " + altGeo,
-                                Global.Yumeyo2, false, smallFont);
-                        }
-                        AppendColorText("\n", Color.White, false);
+                        AppendColorText(" -> " + altGeo, Global.Yumeyo2, detail: true);
                     }
+                    AppendColorText("\n", Color.White, false);
                 }
             }
 
@@ -4544,7 +4294,6 @@ namespace NetInfoCheckerX
                 flashTimer = null;
                 _ip2regionSearcherV4?.Dispose();
                 _ip2regionSearcherV6?.Dispose();
-                ReleaseTraceOutputFont();
                 _ip2regionSearcherV4 = null;
                 _ip2regionSearcherV6 = null;
             }
